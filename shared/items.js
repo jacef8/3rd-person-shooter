@@ -139,7 +139,7 @@ export const ARMORS = {
 /** Field perks: permanent, bought with commendations at any Contact. */
 export const FIELD_PERKS = {
   camoMk2:   { name: 'Camo battery Mk2', level: 6, field: 4, desc: 'Optical camo drains half as much tech.' },
-  sensorMk2: { name: 'Sensor Mk2',       level: 6, field: 4, desc: 'Sensor grenades cover 26 m instead of 18 m.' },
+  sensorMk2: { name: 'Sensor Mk2',       level: 6, field: 4, desc: 'Sensor grenades cover 85 ft instead of 60 ft.' },
   pouch:     { name: 'Secure pouch',     level: 4, field: 5, desc: 'Keep up to 3 intel when you die.' },
 };
 
@@ -168,8 +168,8 @@ export const UPGRADES = {
   ] },
   alarm: { name: 'Perimeter Alarm', desc: 'Alerts you (anywhere on the map) when an enemy gets near your home, and shows them.', tiers: [
     { label: 'None', radius: 0 },
-    { label: '25 m alarm', radius: 25, home: 2, cost: { salvage: 50, tech: 30 } },
-    { label: '50 m alarm', radius: 50, home: 5, cost: { salvage: 120, tech: 60 } },
+    { label: '80 ft alarm', radius: 25, home: 2, cost: { salvage: 50, tech: 30 } },
+    { label: '165 ft alarm', radius: 50, home: 5, cost: { salvage: 120, tech: 60 } },
   ] },
   generator: { name: 'Generator', desc: 'Produces parts and tech into your stash every hour, even offline. (Raiders can take it.)', tiers: [
     { label: 'None', rate: 0 },

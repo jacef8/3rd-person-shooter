@@ -24,6 +24,8 @@ import {
 } from '../shared/items.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, investedCost, placementProblem } from '../shared/building.js';
 import { CLAIM, HOME_XP, homeLevel, homePerks } from '../shared/claims.js';
+import { EXTRACT } from '../shared/extraction.js';
+import { distText, feet } from '../shared/units.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -577,7 +579,7 @@ function tickHacks(now) {
       p.comms += comms;
       award(p, XP.supplyDrop, 'Supply drop secured', true);
       feed(`${p.name} secured a supply drop`);
-      broadcast({ t: 'events', drops: dropList() });
+      sendEvents();
       send(p.ws, { t: 'hack', done: true, text: `+${res.salvage} salvage, +${res.parts} parts, +${res.tech} tech, +${comms} commendation. Get it home!` });
     } else if (h.kind === 'crate') {
       const o = objectives.get(h.id);
@@ -949,7 +951,7 @@ function scheduleDrop(now) {
   const id = uid('d');
   drops.set(id, { id, x: sp.x + 1.5, z: sp.z + 1.5, landsAt: now + SUPPLY_FALL_MS, expires: now + SUPPLY_FALL_MS + 15 * 60_000 });
   feed('📦 Supply drop inbound — marked on the map');
-  broadcast({ t: 'events', drops: dropList(), announce: true });
+  sendEvents({ announce: true });
 }
 
 // ---------------------------------------------------------------- building (DayZ-style)
@@ -1157,7 +1159,8 @@ function refreshContainerViewers(kind, id) {
 function interact(p) {
   if (p.hack) return cancelHack(p, 'Cancelled');
   const it = nearestInteractable(p);
-  if (!it) return;
+  // Nothing else here: at a landing zone, E calls the extraction helicopter.
+  if (!it) { if (map.landingZones.some((l) => Math.hypot(l.x - p.x, l.z - p.z) < EXTRACT.callRange)) callExtraction(p); return; }
   if (it.kind === 'terminal') return startHack(p, 'terminal', it.ref.id);
   if (it.kind === 'drop') return startHack(p, 'drop', it.ref.id);
   if (it.kind === 'crate') return startHack(p, 'crate', it.ref.id);
@@ -1484,7 +1487,9 @@ function deployOptions(p) {
 function placeAt(p, x, z) {
   const fixed = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3), terrain.height(x, z));
   p.x = fixed.x; p.z = fixed.z;
-  send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true });
+  // Number each teleport: movement the client sent before it saw this one is stale and ignored.
+  p.tp = (p.tp || 0) + 1;
+  send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true, tp: p.tp });
 }
 function handleDeploy(p, msg) {
   if (!p.dead && !p.deploying) return;
@@ -1554,6 +1559,73 @@ function discoverContacts(p) {
   }
 }
 
+// ---------------------------------------------------------------- helicopter extraction
+const EXTRACT_HOLD_MS = Number(process.env.EXTRACT_HOLD_MS || EXTRACT.holdMs);
+const extractions = new Map();   // id -> { id, x, z, site, owner, ownerName, arrivesAt }
+function extractList() { return [...extractions.values()].map((e) => ({ id: e.id, x: e.x, z: e.z, site: e.site, by: e.ownerName, arrivesAt: e.arrivesAt })); }
+function sendEvents(extra = {}) { broadcast({ t: 'events', drops: dropList(), extracts: extractList(), ...extra }); }
+/** The Contact or landing zone the player is standing at, if any. */
+function extractSite(p) {
+  let best = null, bd = EXTRACT.callRange;
+  for (const c of map.contacts) { const d = Math.hypot(c.x - p.x, c.z - p.z); if (d < bd) { bd = d; best = { x: c.x, z: c.z, name: c.name.replace(/ Contact$/, '') }; } }
+  for (const l of map.landingZones) { const d = Math.hypot(l.x - p.x, l.z - p.z); if (d < bd) { bd = d; best = { x: l.x, z: l.z, name: l.name }; } }
+  return best;
+}
+function homeSpot(c) { return c.kind === 'flag' ? { x: c.x, z: c.z + 1.6 } : { x: c.x, z: c.z + 1.2 }; }
+function callExtraction(p) {
+  if (p.dead) return;
+  const now = Date.now();
+  const site = extractSite(p);
+  if (!site) return toast(p, `Call extraction within ${feet(EXTRACT.callRange)} of a Contact or landing zone`);
+  if (!claimOf(p)) return toast(p, 'You need a stash house for the helicopter to fly you to — plant a claim marker first');
+  for (const e of extractions.values()) {
+    if (e.owner === p.token || (Math.hypot(e.x - site.x, e.z - site.z) < EXTRACT.radius * 2 && tokenInSquadWith(p, e.owner))) return toast(p, `Extraction already inbound — ${Math.ceil((e.arrivesAt - now) / 1000)}s. Hold the zone.`);
+    if (Math.hypot(e.x - site.x, e.z - site.z) < EXTRACT.radius * 2) return toast(p, `${e.ownerName} already has a flare up here`);
+  }
+  if ((p.extractReadyAt || 0) > now) return toast(p, `Pilot unavailable — try again in ${Math.ceil((p.extractReadyAt - now) / 1000)}s`);
+  const id = uid('x');
+  extractions.set(id, { id, x: site.x, z: site.z, site: site.name, owner: p.token, ownerName: p.name, arrivesAt: now + EXTRACT_HOLD_MS });
+  toast(p, `🔴 Flare up at ${site.name}. Helicopter in ${Math.round(EXTRACT_HOLD_MS / 1000)}s — stay within ${feet(EXTRACT.radius)} of the flare. Squadmates in the zone ride along.`);
+  for (const o of players.values()) {
+    if (o === p || o.dead) continue;
+    const d = Math.hypot(o.x - site.x, o.z - site.z);
+    if (sameSquad(o, p)) toast(o, `${p.name} called extraction at ${site.name} (${distText(d)} away)`);
+    else if (d < EXTRACT.alertRange) { toast(o, `🔴 Extraction flare at ${site.name}, ${distText(d)} away — someone is flying loot out`); send(o.ws, { t: 'alert', x: site.x, z: site.z, text: 'Extraction flare' }); }
+  }
+  sendEvents();
+}
+function tickExtractions(now) {
+  for (const e of [...extractions.values()]) {
+    const caller = onlineByToken(e.owner);
+    const inZone = (o) => o && !o.dead && Math.hypot(o.x - e.x, o.z - e.z) <= EXTRACT.radius;
+    if (!inZone(caller)) {
+      extractions.delete(e.id);
+      if (caller) { caller.extractReadyAt = now + EXTRACT.cooldownMs; toast(caller, caller.dead ? 'Extraction aborted — you went down' : 'Extraction aborted — you left the pickup zone'); }
+      sendEvents();
+      continue;
+    }
+    if (now < e.arrivesAt) continue;
+    extractions.delete(e.id);
+    const riders = [...players.values()].filter((o) => inZone(o) && (o === caller || sameSquad(o, caller)));
+    for (const o of riders) {
+      const c = claimOf(o);
+      if (!c) { toast(o, 'No stash house to fly to — you stay here'); continue; }
+      const at = homeSpot(c);
+      if (o.hack) cancelHack(o, 'Boarding the helicopter');
+      o.openContainer = null;
+      send(o.ws, { t: 'container', closed: true });
+      placeAt(o, at.x, at.z);
+      o.protectedUntil = now + 5000;
+      o.extractReadyAt = now + EXTRACT.cooldownMs;
+      award(o, EXTRACT.xp, 'Extracted');
+      send(o.ws, { t: 'extracted', from: e.site });
+      dirty(o);
+    }
+    feed(`🚁 ${e.ownerName}${riders.length > 1 ? ` and ${riders.length - 1} squadmate${riders.length > 2 ? 's' : ''}` : ''} extracted from ${e.site}`);
+    sendEvents({ pickup: { x: e.x, z: e.z } });
+  }
+}
+
 // ---------------------------------------------------------------- connection handling
 function handleJoin(ws, msg) {
   const name = String(msg.name || 'Agent').replace(/[^\w \-]/g, '').slice(0, 16) || 'Agent';
@@ -1587,7 +1659,7 @@ function handleJoin(ws, msg) {
     x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, doorBase: DOOR_HP,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
-  send(ws, { t: 'events', drops: dropList() });
+  send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
   // Contracts whose targets were finished while offline pay out now.
   for (const ct of [...p.contracts]) {
     if (ct.ready) completeContract(p, ct);
@@ -1605,6 +1677,7 @@ function handleState(p, msg) {
   p.lastMove = now;
   const tx = Number(msg.x), tz = Number(msg.z);
   if (!Number.isFinite(tx) || !Number.isFinite(tz)) return;
+  if ((msg.tp || 0) !== (p.tp || 0)) return;   // sent before the latest teleport
   let dx = tx - p.x, dz = tz - p.z;
   const maxStep = SPRINT_SPEED * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
@@ -1719,6 +1792,7 @@ wss.on('connection', (ws) => {
         return;
       }
       case 'travel': return handleTravel(p, msg);
+      case 'extract': return callExtraction(p);
       case 'gunsmith': return gunsmithAction(p, msg);
       case 'upgrade': return upgradeAction(p, msg);
       case 'acceptContract': return !p.dead && acceptContract(p, msg);
@@ -1784,12 +1858,13 @@ const loop = setInterval(() => {
   const dt = 1 / TICK_HZ;
   updateBots(dt, now);
   tickHacks(now);
+  if (tick % 5 === 0) tickExtractions(now);
   for (const c of [...charges.values()]) if (c.detAt <= now) explode(c, now);
   if (tick % 10 === 0) tickSensors(now);
   if (tick % TICK_HZ === 0) {
     manageAmbientBots();
     scheduleDrop(now);
-    for (const [id, d] of drops) if (d.expires < now) { drops.delete(id); broadcast({ t: 'events', drops: dropList() }); }
+    for (const [id, d] of drops) if (d.expires < now) { drops.delete(id); sendEvents(); }
     for (const p of players.values()) {
       if (!camoActive(p)) continue;
       p.camoDrain = (p.camoDrain || 0) + (hasField(p, 'camoMk2') ? 0.25 : 0.5);
@@ -1829,4 +1904,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 refillLoot(Date.now());
-server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${WORLD_SIZE / 1000} km world at 1:1, ${map.towns.length} towns, ${map.real.structures ? `${map.real.structures} real buildings, ` : ''}${map.real.roads ? `${map.real.roads} real roads, ` : ''}${map.houses.length} stash houses, ${map.contacts.length} contacts)`));
+server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${(WORLD_SIZE / 1609.344).toFixed(1)} × ${(WORLD_SIZE / 1609.344).toFixed(1)} mi world at 1:1, ${map.towns.length} towns, ${map.real.structures ? `${map.real.structures} real buildings, ` : ''}${map.real.roads ? `${map.real.roads} real roads, ` : ''}${map.houses.length} stash houses, ${map.contacts.length} contacts)`));

@@ -44,8 +44,8 @@ fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 7, size: 30000, hou
 function conn(name, token) {
   const ws = new WebSocket(`ws://localhost:${PORT}`);
   const c = { ws, msgs: [] };
-  ws.on('message', (raw) => { const m = JSON.parse(raw); c.msgs.push(m); if (m.t === 'you') c.you = m; if (m.t === 'snap') c.snap = m; if (m.t === 'container') c.container = m; });
-  c.send = (m) => ws.send(JSON.stringify(m));
+  ws.on('message', (raw) => { const m = JSON.parse(raw); c.msgs.push(m); if (m.t === 'correct' && m.force) c.tpn = m.tp; if (m.t === 'you') c.you = m; if (m.t === 'snap') c.snap = m; if (m.t === 'container') c.container = m; });
+  c.send = (m) => ws.send(JSON.stringify(m.t === 'state' ? { tp: c.tpn || 0, ...m } : m));
   c.got = (fn, ms) => until(() => c.msgs.find(fn), ms);
   c.tp = async (x, z) => { c.send({ t: 'dev', x, z }); await sleep(200); };
   return new Promise((r) => ws.on('open', () => { c.send({ t: 'join', name, token }); r(c); }));

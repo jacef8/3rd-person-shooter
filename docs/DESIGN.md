@@ -10,13 +10,13 @@ attachments you chose in the gunsmith, and both are unlocked by level.
 ## The world: Bristol, Florida at real 1:1 scale
 
 The map is the real area around **Bristol, Florida** (Liberty County) at **real scale**: one game
-metre is one real metre. It is 30 × 30 km, centred 5 km east and 1.5 km north of Bristol so it takes
+metre is one real metre. It is 18.6 × 18.6 miles (30 km), centred 3.1 miles east and 0.9 miles north of Bristol so it takes
 in the real places around it. Positions come from real latitude/longitude (Wikipedia/GNIS) and are
-converted in `shared/geography.js`. Real distances hold: Bristol to Blountstown is 6.6 km, Bristol to Hosford 17 km.
+converted in `shared/geography.js`. Real distances hold: Bristol to Blountstown is 4.1 miles, Bristol to Hosford 11 miles.
 
 - **Towns:** Bristol, Blountstown (Calhoun), Hosford, Telogia, Estiffanulga, Lake Mystic, sized by
   population. Small towns are mostly single-storey houses in yards. Waterfront towns are nudged just onto dry ground.
-- **The Apalachicola River:** a real ~140 m wide channel with a floodplain swamp up to ~2 km wide,
+- **The Apalachicola River:** a real ~460 ft wide channel with a floodplain swamp up to ~1.2 miles wide,
   too deep to wade. The **SR 20 bridge** between Blountstown and Bristol is the only dry crossing,
   so it's the map's big chokepoint.
 - **Highways:** SR 20, SR 12, SR 65, SR 71, SR 69 and SR 267 on their real routes.
@@ -29,7 +29,7 @@ converted in `shared/geography.js`. Real distances hold: Bristol to Blountstown 
 - **Real buildings and roads** (optional): `tools/import-real-data.mjs` fetches FEMA/ORNL USA
   Structures footprints and OpenStreetMap roads. With them, every real structure is a map object and the procedural
   stand-ins (town blocks, farms, roadside homesteads) are left out. See the README.
-- Outside this 30 km square, the earlier layout's towns (Chattahoochee, Quincy, Marianna,
+- Outside this 18.6-mile square, the earlier layout's towns (Chattahoochee, Quincy, Marianna,
   Wewahitchka…), the Chipola, Ochlockonee, Lake Seminole and Lake Talquin are still defined in
   `geography.js`. A bigger `WORLD_SIZE` would bring them in, but it would also need more of the real data.
 
@@ -119,7 +119,19 @@ standing near it. Owners get an alert whenever someone starts breaking in.
   10 s of spawn protection, which ends early if you fire. With the Infirmary upgrade, deploying at
   home gives you a light vest and 2 medkits.
 - **Fast travel** only goes *out* from your stash house (to a discovered Contact, or to a
-  squadmate). Getting loot home is always on foot, which is where the risk is.
+  squadmate).
+- **Getting loot home: helicopter extraction** (The Division's Dark Zone extraction). At any
+  Contact or landing zone, fire a flare: a red smoke column goes up and everyone within half a mile
+  is alerted. Hold within **80 ft** of the flare for **90 seconds**. The helicopter then flies you, every squadmate in the
+  zone, and everything you're all carrying straight to your stash houses (+30 XP each). Leave the zone or go
+  down and the pilot aborts. After any pickup or abort the pilot needs **5 minutes**. Walking
+  home is still free and quiet; extraction is fast but loud. Tuning lives in `shared/extraction.js`.
+
+## Units
+
+The simulation runs in metres (one game metre is one real metre). Everything the player reads is
+in US customary units: feet under a quarter mile, miles above (`shared/units.js`). The map has a
+feet/miles scale bar.
 
 ## Why leave the house
 
@@ -231,9 +243,19 @@ they're within 9 m or a tag or sensor has exposed them, so it can't be beaten by
 - Per-weapon XP and challenges to unlock specific parts (as in Future Soldier), in place of or
   alongside player level.
 - Offline raid protection: should doors get tougher while the owner is offline?
-- Vehicles: at real scale it's 17 km from Bristol to Hosford, about 40 minutes on foot. Trucks, bikes or boats on the Apalachicola are the obvious next step, along with the loot extraction question.
+- Vehicles: at real scale it's 11 miles from Bristol to Hosford, about 40 minutes on foot. Extraction covers the trip home; trucks, bikes or boats on the Apalachicola would cover the trip out.
 - Rivers, bridges and boats; climbable watchtowers and multi-storey builds.
 - Base decay or upkeep, so abandoned bases eventually fall apart.
 - More gadgets: UAV drone, cross-com sync shot (squad fires together on tagged targets for a bonus),
   intel jammer.
 - Clans/factions above squads, with a shared clan stronghold.
+
+## Parked work (to pick back up)
+
+- **Real 3D buildings:** importing the real FEMA/ORNL building footprints and OpenStreetMap roads
+  (`tools/import-real-data.mjs`, generator support already in place) and real elevation. On hold
+  by request.
+- **Environment streaming for phones:** phones still generate the whole 18.6-mile map on load and
+  build its overview map. Next: have the server send only the area around the player, stream it
+  in tiles as you move, keep a coarse low-detail map for the map screen, and cap what phones keep
+  in memory.

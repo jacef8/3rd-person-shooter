@@ -45,7 +45,7 @@ export const HOME_LEVEL_TEXT = [
   'Steel door and perimeter alarm unlocked',
   'Generator and workbench unlocked',
   'Blast door unlocked',
-  '50 m alarm unlocked',
+  '165 ft alarm unlocked',
   '60-slot storage and 30/h generator unlocked',
   'Vault door and -50% workbench unlocked',
   '+12% door strength',

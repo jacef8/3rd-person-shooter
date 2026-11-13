@@ -1,6 +1,6 @@
 # Deadzone (working title)
 
-A prototype **third-person shooter** set in one **persistent, always-PvP 30 × 30 km open world**
+A prototype **third-person shooter** set in one **persistent, always-PvP 18.6 × 18.6 mile open world**
 laid out on the real area around **Bristol, Florida** at **real 1:1 scale**: Bristol, Blountstown,
 Hosford, Telogia, Estiffanulga and Lake Mystic, the Apalachicola River, the real highways and the SR 20
 bridge, the Torreya bluffs and the Apalachicola National Forest. Real buildings and roads can be
@@ -36,6 +36,12 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   You deploy by picking your stash house on the map; after a death you redeploy at home, at a
   discovered Contact, or at a landing zone. Fast travel only goes out from home. See
   [docs/DESIGN.md](docs/DESIGN.md).
+- **Helicopter extraction** gets loot home without the long walk. At any Contact (its panel) or
+  landing zone (press E on the yellow helipad), fire a red flare and hold within 80 ft of it for 90
+  seconds. The helicopter then flies you, any squadmates in the zone and everything you carry to your stash
+  houses. Everyone within half a mile is alerted and can try to stop you. Leaving the zone or going down aborts it,
+  and the pilot then needs 5 minutes before the next call.
+- **Units:** distances, ranges and radii are shown in feet and miles.
 - **Building:** chop trees (hatchet) and mine rocks (pickaxe) for wood and stone, then place
   frames and upgrade them into wooden or stone walls, gates, barricades and stash crates, anywhere
   in the wild. Raid other bases with hatchets, pickaxes, gate hacks or breach charges.
@@ -57,9 +63,11 @@ npm start            # http://localhost:8080
 Open the URL in several browser tabs (or on several machines on your network) to play against
 each other. Options are environment variables: `PORT`, `SEED` (map), `WORLD_SIZE` (metres, default 30000; smaller maps crop the same 1:1 layout around Bristol),
 `BOTS` (roaming rogues kept around each player, default 5), `SUPPLY_EVERY_MS` (supply drop
-interval), `DATA_FILE` (where the world is saved; default `data/world.json`).
+interval), `EXTRACT_HOLD_MS` (how long to hold an extraction, default 90000), `DATA_FILE` (where the world is saved; default `data/world.json`).
 
-## Real buildings and roads
+## Real buildings and roads (parked for now)
+
+This is on hold; the game currently uses the procedural stand-in buildings. The importer is kept for later.
 
 `tools/import-real-data.mjs` downloads the real building footprints and roads for the map area
 into `data/real/`. The server loads them at start-up and sends them to every client, so each real

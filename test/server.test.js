@@ -49,12 +49,13 @@ function client(name, token) {
   ws.on('message', (raw) => {
     const m = JSON.parse(raw);
     c.msgs.push(m);
+    if (m.t === 'correct' && m.force) c.tpn = m.tp;
     if (m.t === 'you') c.you = m;
     if (m.t === 'welcome') c.welcome = m;
     if (m.t === 'container') c.container = m;
     if (m.t === 'snap') c.snap = m;
   });
-  c.send = (m) => ws.send(JSON.stringify(m));
+  c.send = (m) => ws.send(JSON.stringify(m.t === 'state' ? { tp: c.tpn || 0, ...m } : m));
   return new Promise((resolve) => ws.on('open', () => { c.send({ t: 'join', name, token }); resolve(c); }));
 }
 
@@ -187,8 +188,8 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   const conn = (name, token) => {
     const ws = new WebSocket(`ws://localhost:${PORT + 1}`);
     const c = { ws, msgs: [], you: null };
-    ws.on('message', (raw) => { const m = JSON.parse(raw); c.msgs.push(m); if (m.t === 'you') c.you = m; if (m.t === 'welcome') c.welcome = m; if (m.t === 'snap') c.snap = m; });
-    c.send = (m) => ws.send(JSON.stringify(m));
+    ws.on('message', (raw) => { const m = JSON.parse(raw); c.msgs.push(m); if (m.t === 'correct' && m.force) c.tpn = m.tp; if (m.t === 'you') c.you = m; if (m.t === 'welcome') c.welcome = m; if (m.t === 'snap') c.snap = m; });
+    c.send = (m) => ws.send(JSON.stringify(m.t === 'state' ? { tp: c.tpn || 0, ...m } : m));
     c.got = (fn, ms = 5000) => until(() => c.msgs.find(fn), ms);
     return new Promise((r) => ws.on('open', () => { c.send({ t: 'join', name, token }); r(c); }));
   };

@@ -66,6 +66,7 @@ export function buildMapBase(map, px = 1400) {
  * Draw the map with live markers. `view` = { cx, cz, zoom } (zoom 1 = whole map).
  * markers: [{ x, z, kind, label, color, size, highlight }]
  */
+const detail = { key: null, canvas: null };
 export function drawMap(canvas, map, base, view, markers) {
   const g = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
@@ -83,6 +84,23 @@ export function drawMap(canvas, map, base, view, markers) {
   // Zoomed in past the base image's detail (the map is 30 km across): draw roads and buildings live.
   if (k > base.width / map.size * 1.5) {
     const minX = view.cx - W / 2 / k, maxX = view.cx + W / 2 / k, minZ = view.cz - H / 2 / k, maxZ = view.cz + H / 2 / k;
+    // Sharper terrain for just the area on screen (cached until the view changes).
+    const key = `${Math.round(view.cx)},${Math.round(view.cz)},${k.toFixed(4)},${W},${H}`;
+    if (detail.key !== key) {
+      const cw = Math.ceil(W / 5), ch = Math.ceil(H / 5);
+      const c = detail.canvas || (detail.canvas = document.createElement('canvas'));
+      c.width = cw; c.height = ch;
+      const dg = c.getContext('2d'), img = dg.createImageData(cw, ch);
+      for (let i = 0; i < cw; i++) for (let j = 0; j < ch; j++) {
+        const col = mapGroundColor(map, minX + ((i + 0.5) / cw) * (maxX - minX), minZ + ((j + 0.5) / ch) * (maxZ - minZ), map.terrain.exact);
+        const o = (j * cw + i) * 4;
+        img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
+      }
+      dg.putImageData(img, 0, 0);
+      detail.key = key;
+    }
+    g.imageSmoothingEnabled = true;
+    g.drawImage(detail.canvas, 0, 0, W, H);
     g.strokeStyle = COL.road; g.lineCap = 'round';
     for (const r of map.roadGrid ? map.roadGrid.rect(minX, minZ, maxX, maxZ) : []) { g.lineWidth = Math.max(1, (r.width || 12) * k); g.beginPath(); g.moveTo(sx(r.x1), sz(r.z1)); g.lineTo(sx(r.x2), sz(r.z2)); g.stroke(); }
     for (const b of map.grid.rect(minX, minZ, maxX, maxZ, [], true)) {
@@ -116,5 +134,15 @@ export function drawMap(canvas, map, base, view, markers) {
       g.fillStyle = m.highlight ? '#ffc53d' : '#eee'; g.fillText(m.label, x, y - s - 5);
     }
   }
+  // Scale bar in feet / miles.
+  const STEPS = [[100, 'ft'], [250, 'ft'], [500, 'ft'], [1000, 'ft'], [0.25, 'mi'], [0.5, 'mi'], [1, 'mi'], [2, 'mi'], [5, 'mi']];
+  const toM = ([v, u]) => (u === 'ft' ? v / 3.28084 : v * 1609.344);
+  const step = STEPS.find((st) => toM(st) * k >= 70) || STEPS[STEPS.length - 1];
+  const bw = toM(step) * k, bx = 16, by = H - 18;
+  g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(bx - 6, by - 20, bw + 12, 28);
+  g.strokeStyle = '#eee'; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(bx, by - 5); g.lineTo(bx, by); g.lineTo(bx + bw, by); g.lineTo(bx + bw, by - 5); g.stroke();
+  g.fillStyle = '#eee'; g.font = 'bold 11px Segoe UI, sans-serif'; g.textAlign = 'center';
+  g.fillText(`${step[0]} ${step[1]}`, bx + bw / 2, by - 7);
   return { toWorld: (px, py) => ({ x: view.cx + (px - W / 2) / k, z: view.cz + (py - H / 2) / k }), k };
 }

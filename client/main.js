@@ -13,6 +13,8 @@ import { buildMapBase, drawMap, mapGroundColor } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, placementProblem } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
+import { EXTRACT } from '/shared/extraction.js';
+import { distText, feet } from '/shared/units.js';
 
 const $ = (id) => document.getElementById(id);
 /** Terrain height under a point (0 before the world exists). */
@@ -49,7 +51,7 @@ resize();
 const state = {
   exposed: new Map(), sensors: [], pings: [], alerts: [], squad: { id: null, members: [], leaderId: null }, invite: null,
   hack: null, aimTargetId: null, houseState: new Map(), termState: new Map(),
-  contracts: [], drops: [], objectives: [], contactMeshes: [],
+  contracts: [], drops: [], extracts: [], objectives: [], contactMeshes: [],
   ws: null, id: null, map: null, houseId: null, me: null,
   x: 0, z: 0, yaw: 0, pitch: 0, crouch: false, aiming: false, sprint: false,
   keys: new Set(), mouseDown: false, firedThisPress: false, lastShot: 0,
@@ -83,6 +85,7 @@ function initWorld(m) {
   state.view = createWorldView(scene, map, { viewRange: MOBILE ? 230 : 320, mobile: MOBILE });
   state.view.setOwnHouse(m.houseId);
   state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000);
+  buildLandingPads();
   // Contacts: friendly NPCs standing in each town square.
   for (const c of map.contacts) {
     const g = makeCharacter('contact', c.name);
@@ -157,6 +160,86 @@ function syncDrops() {
     dropVis.set(d.id, g);
   }
   for (const [id, g] of dropVis) if (!seen.has(id)) { scene.remove(g); dropVis.delete(id); }
+}
+
+// ---- helicopter extraction: red flare smoke at the pickup, then a helicopter that comes down to it
+const extractVis = new Map();   // id -> group
+const heliMat = new THREE.MeshStandardMaterial({ color: 0x2f3a2c, roughness: 0.7 });
+function makeHelicopter() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.4, 6.5), heliMat); body.position.y = 1.4;
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.7, 6), heliMat); tail.position.set(0, 2, -6);
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.8, 1.2), heliMat); fin.position.set(0, 2.8, -8.6);
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.2, 1.4), new THREE.MeshStandardMaterial({ color: 0x8fb7c9, metalness: 0.5, roughness: 0.2 })); glass.position.set(0, 1.9, 3.1);
+  const rotor = new THREE.Mesh(new THREE.BoxGeometry(14, 0.12, 0.5), new THREE.MeshStandardMaterial({ color: 0x1a1a1a }));
+  rotor.position.y = 3.05;
+  const rotor2 = rotor.clone(); rotor2.rotation.y = Math.PI / 2;
+  const skids = [-1.1, 1.1].map((x) => { const k = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 5.5), heliMat); k.position.set(x, 0, 0); return k; });
+  g.add(body, tail, fin, glass, rotor, rotor2, ...skids);
+  g.userData.rotors = [rotor, rotor2];
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+function syncExtracts(pickup) {
+  const seen = new Set(state.extracts.map((e) => e.id));
+  for (const e of state.extracts) {
+    if (extractVis.has(e.id)) continue;
+    const g = new THREE.Group();
+    const smoke = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 0.4, 40, 10, 1, true), new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.35, depthWrite: false }));
+    smoke.position.y = 20;
+    const flare = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff4040 }));
+    flare.position.y = 0.3;
+    const zone = new THREE.Mesh(new THREE.RingGeometry(EXTRACT.radius - 0.4, EXTRACT.radius, 64), new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
+    zone.rotation.x = -Math.PI / 2; zone.position.y = 0.25;
+    const heli = makeHelicopter();
+    heli.visible = false;
+    g.add(smoke, flare, zone, heli);
+    g.userData = { e, smoke, flare, heli };
+    g.position.set(e.x, ground(e.x, e.z), e.z);
+    scene.add(g);
+    extractVis.set(e.id, g);
+  }
+  for (const [id, g] of extractVis) {
+    if (seen.has(id)) continue;
+    // A finished pickup: the helicopter lifts off and flies away before it disappears.
+    if (pickup && Math.hypot(pickup.x - g.userData.e.x, pickup.z - g.userData.e.z) < 1) { g.userData.leaving = performance.now(); g.userData.heli.visible = true; g.userData.smoke.visible = g.userData.flare.visible = false; g.children[2].visible = false; continue; }
+    scene.remove(g); extractVis.delete(id);
+  }
+}
+function animateExtracts() {
+  const now = Date.now();
+  for (const [id, g] of extractVis) {
+    const { e, smoke, flare, heli } = g.userData;
+    for (const r of heli.userData.rotors) r.rotation.y += 0.6;
+    if (g.userData.leaving) {
+      const t = (performance.now() - g.userData.leaving) / 1000;
+      heli.position.set(0, 2 + t * t * 4, t * t * 6);
+      if (t > 8) { scene.remove(g); extractVis.delete(id); }
+      continue;
+    }
+    smoke.material.opacity = 0.25 + 0.12 * Math.sin(now / 200);
+    flare.scale.setScalar(0.8 + 0.4 * Math.random());
+    // The helicopter appears 15 seconds out and comes down to hover over the flare.
+    const left = (e.arrivesAt - now) / 1000;
+    heli.visible = left < 15;
+    if (heli.visible) { const f = Math.max(0, left) / 15; heli.position.set(-f * 120, 4 + f * 70, -f * 60); heli.rotation.y = Math.atan2(1, 0.5); }
+  }
+}
+// Helipad markings at every landing zone, so you can find where to call a pickup.
+const lzVis = [];
+function buildLandingPads() {
+  const padMat = new THREE.MeshBasicMaterial({ color: 0xffd23d, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false });
+  for (const lz of state.map.landingZones) {
+    const g = new THREE.Group();
+    const ring = new THREE.Mesh(new THREE.RingGeometry(5.4, 6, 40), padMat); ring.rotation.x = -Math.PI / 2;
+    const h1 = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 4), padMat), h2 = h1.clone(), h3 = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.6), padMat);
+    for (const m of [h1, h2, h3]) m.rotation.x = -Math.PI / 2;
+    h1.position.x = -1.2; h2.position.x = 1.2;
+    g.add(ring, h1, h2, h3);
+    g.position.set(lz.x, ground(lz.x, lz.z) + 0.15, lz.z);
+    scene.add(g);
+    lzVis.push(g);
+  }
 }
 
 function syncObjectives(list) {
@@ -401,6 +484,7 @@ function drawMinimap() {
   };
   for (const ct of state.contracts) edge(ct.x, ct.z, '#ffc53d', 7);
   for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
+  for (const e of state.extracts) edge(e.x, e.z, '#ff2a2a', 8);
   const hp0 = homePos();
   if (hp0) edge(hp0.x, hp0.z, '#4fbf6a', 7);
   g.translate(R, R);
@@ -500,7 +584,7 @@ function handle(m) {
     }
     case 'correct':
       state.x = m.x; state.z = m.z;
-      if (m.force) { selfMesh.position.set(m.x, ground(m.x, m.z), m.z); state.view?.update(m.x, m.z); }
+      if (m.force) { state.tp = m.tp || 0; selfMesh.position.set(m.x, ground(m.x, m.z), m.z); state.view?.update(m.x, m.z); }
       break;
     case 'shot': {
       // Suppressed fire from other players only shows up close.
@@ -581,12 +665,17 @@ function handle(m) {
       break;
     case 'events':
       state.drops = m.drops;
+      state.extracts = m.extracts || [];
       syncDrops();
+      syncExtracts(m.pickup);
       if (m.announce) toast('📦 Supply drop inbound — salvage, parts, tech and a commendation. Check the map (M).');
       break;
     case 'contracts':
       state.contracts = m.list;
       renderTracker();
+      break;
+    case 'extracted':
+      toast(`🚁 Flown home from ${m.from} with everything you were carrying.`);
       break;
     case 'contact':
       state.contact = m;
@@ -641,7 +730,7 @@ function statLine(item) {
   if (item.kind === 'package') return 'Contract crate — deliver to any Contact';
   if (item.kind === 'weapon') {
     const s = weaponStats(item);
-    return `${Math.round(s.damage)}${s.pellets > 1 ? `×${s.pellets}` : ''} dmg · ${Math.round(s.rpm)} rpm · ${s.mag} mag · ${Math.round(s.range)} m`;
+    return `${Math.round(s.damage)}${s.pellets > 1 ? `×${s.pellets}` : ''} dmg · ${Math.round(s.rpm)} rpm · ${s.mag} mag · ${feet(s.range)}`;
   }
   if (item.kind === 'armor') { const a = armorStats(item); return `Armor ${a.armor}${a.mobility ? ` · ${Math.round(a.mobility * 100)}% speed` : ''}`; }
   if (item.kind === 'medkit') return 'Restores 60 health and 40 armor';
@@ -773,8 +862,8 @@ function homePanel(c) {
   const next = homePerks(Math.min(MAX_HOME_LEVEL, h.level + 1));
   wrap.innerHTML = `<h2>${h.name} — home level ${h.level}</h2>
     <div class="bar homexp"><div class="fill xpfill" style="width:${pct}%"></div><span>${h.level >= MAX_HOME_LEVEL ? 'Max level' : `${h.xp - lo} / ${hi - lo} home XP`}</span></div>
-    <div class="st" style="margin:6px 0">Now: +${h.perks.storage} slots · door ×${h.perks.doorMul.toFixed(2)} · ${h.perks.radius} m claim · ${h.perks.buildCap} structures.
-    ${h.level < MAX_HOME_LEVEL ? `<br>Level ${h.level + 1}: ${HOME_LEVEL_TEXT[h.level]} · +${next.storage} slots · ${next.radius} m claim.` : ''}
+    <div class="st" style="margin:6px 0">Now: +${h.perks.storage} slots · door ×${h.perks.doorMul.toFixed(2)} · ${feet(h.perks.radius)} claim · ${h.perks.buildCap} structures.
+    ${h.level < MAX_HOME_LEVEL ? `<br>Level ${h.level + 1}: ${HOME_LEVEL_TEXT[h.level]} · +${next.storage} slots · ${feet(next.radius)} claim.` : ''}
     <br><small style="color:#888">Home XP: install upgrades, build inside your claim radius, upload intel here, and just hold it over time.</small></div>`;
   const ab = btn('Abandon this stash house', () => { if (confirm('Abandon your stash house? Anything left inside can be taken by anyone.')) send({ t: 'abandon' }); });
   wrap.append(ab);
@@ -825,10 +914,10 @@ function renderContact() {
   const offers = $('ctOffers'); offers.innerHTML = '';
   for (const o of c.offers) {
     const def = CONTRACT_TYPES[o.type];
-    const d = Math.round(Math.hypot(o.x - state.x, o.z - state.z));
+    const d = distText(Math.hypot(o.x - state.x, o.z - state.z));
     const row = document.createElement('div');
     row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${def.name} <small style="color:#888">${d} m away</small></div><div class="st">${def.desc}</div><div class="at">Reward: ${Object.entries(def.reward).map(([k, v]) => `${v} ${k === 'comms' ? '★' : k}`).join(' · ')} · ${def.xp} XP</div></div>`;
+    row.innerHTML = `<div class="meta"><div class="nm">${def.name} <small style="color:#888">${d} away</small></div><div class="st">${def.desc}</div><div class="at">Reward: ${Object.entries(def.reward).map(([k, v]) => `${v} ${k === 'comms' ? '★' : k}`).join(' · ')} · ${def.xp} XP</div></div>`;
     const b = btn('Accept', () => send({ t: 'acceptContract', contactId: c.id, id: o.id }));
     b.disabled = state.contracts.length >= 2;
     row.append(b);
@@ -839,12 +928,22 @@ function renderContact() {
   for (const ct of state.contracts) {
     const row = document.createElement('div');
     row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${CONTRACT_TYPES[ct.type].name}</div><div class="st">${Math.round(Math.hypot(ct.x - state.x, ct.z - state.z))} m · expires in ${Math.max(0, Math.round((ct.expires - Date.now()) / 60000))} min</div></div>`;
+    row.innerHTML = `<div class="meta"><div class="nm">${CONTRACT_TYPES[ct.type].name}</div><div class="st">${distText(Math.hypot(ct.x - state.x, ct.z - state.z))} · expires in ${Math.max(0, Math.round((ct.expires - Date.now()) / 60000))} min</div></div>`;
     row.append(btn('Abandon', () => send({ t: 'abandonContract', id: ct.id })));
     active.append(row);
   }
   // Quartermaster: field gear bought with commendations (earned only from contracts and events).
   const qm = $('ctShop'); qm.innerHTML = '';
+  {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">🚁 Helicopter extraction</div><div class="st">Fire a flare and hold within ${feet(EXTRACT.radius)} of it for ${EXTRACT.holdMs / 1000} seconds. The helicopter flies you, any squadmates in the zone and everything you carry to your stash house. Everyone within ${distText(EXTRACT.alertRange)} sees the flare.</div></div>`;
+    const b = btn('Call it', () => { send({ t: 'extract' }); closeContact(); });
+    b.disabled = !me.claim;
+    if (!me.claim) b.title = 'Claim a stash house first';
+    row.append(b);
+    qm.append(row);
+  }
   {
     const row = document.createElement('div');
     row.className = 'item';
@@ -878,7 +977,7 @@ function renderContact() {
 /** Active contracts shown under the kill feed. */
 function renderTracker() {
   const el = $('tracker');
-  el.innerHTML = state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${Math.round(Math.hypot(c.x - state.x, c.z - state.z))} m</span></div>`).join('');
+  el.innerHTML = state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('');
 }
 setInterval(() => { if (state.map) renderTracker(); }, 1000);
 
@@ -890,7 +989,7 @@ function openMapScreen(mode, opts = null) {
   state.deployOpts = opts || state.deployOpts;
   $('mapscreen').hidden = false;
   document.exitPointerLock?.();
-  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 8; }
+  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 6; }
   else { mapView.cx = 0; mapView.cz = 0; mapView.zoom = 1; }
   renderMapScreen();
 }
@@ -941,7 +1040,7 @@ function renderMapScreen() {
     first: 'Pick where to start. Then find a place to call home and plant your claim marker in it: a town house or apartment room, a limestone cave, rock outcrop, hollow cypress, river fish camp, an abandoned RV, bus, box truck or houseboat — or plant it as a claim flag on open ground.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
-    view: 'Gold ◆ contracts · red ● supply drops · blue ✦ Contacts (dim = undiscovered) · green = home & squad.',
+    view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares · blue ✦ Contacts (dim = undiscovered) · green = home & squad. Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
@@ -966,6 +1065,7 @@ function drawMapCanvas() {
   for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: '#cfcfcf', size: 4, label: state.mapMode === 'redeploy' ? lz.name : '' });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
+  for (const e of state.extracts) markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#ff2a2a', size: 8, label: `🚁 Extraction (${e.by})` });
   for (const m of state.squad.members) if (m.id !== state.id) markers.push({ x: m.x, z: m.z, color: '#7dff9a', size: 5, label: m.name });
   for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
   const hpos = homePos();
@@ -1058,7 +1158,7 @@ function renderStatBars(item, preview) {
   const n = $('gsNumbers');
   const fmt = (x, y, f, suffix = '') => (Math.abs(f(x) - f(y)) > 0.0001 ? `${f(x)}${suffix} → <b>${f(y)}${suffix}</b>` : `${f(x)}${suffix}`);
   n.innerHTML = `Damage ${fmt(cur, nxt, (s) => Math.round(s.damage * s.pellets))} · RPM ${fmt(cur, nxt, (s) => Math.round(s.rpm))} · Mag ${fmt(cur, nxt, (s) => s.mag)}
-    · Range ${fmt(cur, nxt, (s) => Math.round(s.range), 'm')} · Reload ${fmt(cur, nxt, (s) => (s.reloadMs / 1000).toFixed(1), 's')} · Zoom ${fmt(cur, nxt, (s) => s.zoom.toFixed(1), 'x')}${nxt.suppressed ? ' · <b>Suppressed</b>' : ''}`;
+    · Range ${fmt(cur, nxt, (s) => Math.round(s.range * 3.28084 / 5) * 5, ' ft')} · Reload ${fmt(cur, nxt, (s) => (s.reloadMs / 1000).toFixed(1), 's')} · Zoom ${fmt(cur, nxt, (s) => s.zoom.toFixed(1), 'x')}${nxt.suppressed ? ' · <b>Suppressed</b>' : ''}`;
 }
 
 function setPreviewModel(item) {
@@ -1375,6 +1475,7 @@ function nearestInteractable() {
   for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; consider(Math.hypot(t.x - state.x, t.z - state.z), ready ? 'Hack terminal (stand still 5s) — intel + tech' : 'Terminal rebooting'); }
   for (const c of state.map.contacts) if (Math.abs(c.x - state.x) < 5 && Math.abs(c.z - state.z) < 5) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.8, `Talk to ${c.name} — contracts & field gear`);
   for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
+  if (!best && state.me?.claim && !state.extracts.length) for (const lz of state.map.landingZones) if (Math.hypot(lz.x - state.x, lz.z - state.z) < EXTRACT.callRange) best = `Call extraction — fire a flare, hold ${feet(EXTRACT.radius)} for ${EXTRACT.holdMs / 1000}s, fly home with your loot`;
   for (const o of state.objectives) consider(Math.hypot(o.x - state.x, o.z - state.z) - 0.5, 'Recover contract crate (3s)');
   const me = state.me;
   const has = (t) => me?.inv.pack.some((i) => i.kind === 'tool' && i.tool === t);
@@ -1458,20 +1559,21 @@ function drawMarkers() {
       const c = state.players.get(id)?.data || state.bots.get(id)?.data;
       if (!c || c.dead) continue;
       const d = Math.hypot(c.x - state.x, c.z - state.z);
-      marker(`x${id}`, e.kind === 'mark' ? 'tag' : 'sensed', e.kind === 'mark' ? `◆ ${Math.round(d)}m` : '●', new THREE.Vector3(c.x, ground(c.x, c.z) + (c.crouch ? 1.2 : 1.8) + 0.5, c.z));
+      marker(`x${id}`, e.kind === 'mark' ? 'tag' : 'sensed', e.kind === 'mark' ? `◆ ${distText(d)}` : '●', new THREE.Vector3(c.x, ground(c.x, c.z) + (c.crouch ? 1.2 : 1.8) + 0.5, c.z));
     }
     for (const [id, r] of state.players) {
       if (!r.data.sq || r.data.dead) continue;
       marker(`s${id}`, 'squad', `▼ ${r.data.name}`, new THREE.Vector3(r.data.x, ground(r.data.x, r.data.z) + 2.6, r.data.z));
     }
     state.pings = state.pings.filter((p) => p.until > now);
-    state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${Math.round(Math.hypot(p.x - state.x, p.z - state.z))}m`, new THREE.Vector3(p.x, ground(p.x, p.z) + 1.5, p.z)));
-    for (const ct of state.contracts) marker(`c${ct.id}`, 'objective', `◆ ${CONTRACT_TYPES[ct.type].name} · ${Math.round(Math.hypot(ct.x - state.x, ct.z - state.z))}m`, new THREE.Vector3(ct.x, ground(ct.x, ct.z) + 2.5, ct.z));
-    for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${Math.round(Math.hypot(d.x - state.x, d.z - state.z))}m`, new THREE.Vector3(d.x, ground(d.x, d.z) + 3, d.z));
+    state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${distText(Math.hypot(p.x - state.x, p.z - state.z))}`, new THREE.Vector3(p.x, ground(p.x, p.z) + 1.5, p.z)));
+    for (const ct of state.contracts) marker(`c${ct.id}`, 'objective', `◆ ${CONTRACT_TYPES[ct.type].name} · ${distText(Math.hypot(ct.x - state.x, ct.z - state.z))}`, new THREE.Vector3(ct.x, ground(ct.x, ct.z) + 2.5, ct.z));
+    for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${distText(Math.hypot(d.x - state.x, d.z - state.z))}`, new THREE.Vector3(d.x, ground(d.x, d.z) + 3, d.z));
+    for (const e of state.extracts) marker(`e${e.id}`, 'alert', `🚁 ${distText(Math.hypot(e.x - state.x, e.z - state.z))}`, new THREE.Vector3(e.x, ground(e.x, e.z) + 4, e.z));
     const hh = homePos();
     if (hh) {
       const dh = Math.hypot(hh.x - state.x, hh.z - state.z);
-      if (dh > 40) marker('home', 'squad', `⌂ Home ${Math.round(dh)}m`, new THREE.Vector3(hh.x, ground(hh.x, hh.z) + 4, hh.z));
+      if (dh > 40) marker('home', 'squad', `⌂ Home ${distText(dh)}`, new THREE.Vector3(hh.x, ground(hh.x, hh.z) + 4, hh.z));
     }
     state.alerts = state.alerts.filter((a) => a.until > now);
     state.alerts.forEach((a, i) => marker(`a${i}`, 'alert', '⚠', new THREE.Vector3(a.x, ground(a.x, a.z) + 2, a.z)));
@@ -1489,6 +1591,16 @@ function drawMarkers() {
     hb.querySelector('i').style.width = `${f * 100}%`;
     hb.querySelector('span').textContent = state.hack.kind === 'terminal' ? 'HACKING TERMINAL — hold still' : 'BYPASSING LOCK — hold still';
   } else hb.hidden = true;
+  // Extraction countdown for anyone near a flare.
+  const xb = $('extractbar');
+  const ex = state.extracts.find((e) => Math.hypot(e.x - state.x, e.z - state.z) < EXTRACT.radius * 3);
+  if (ex && state.me && !state.me.dead) {
+    const left = Math.max(0, Math.ceil((ex.arrivesAt - Date.now()) / 1000));
+    const inside = Math.hypot(ex.x - state.x, ex.z - state.z) <= EXTRACT.radius;
+    xb.hidden = false;
+    xb.classList.toggle('out', !inside);
+    xb.innerHTML = `🚁 <b>EXTRACTION · ${ex.site}</b> — ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}<br><small>${ex.by === state.myName ? (inside ? `Hold the zone (${feet(EXTRACT.radius)})` : 'GET BACK IN THE ZONE or the pilot aborts') : inside ? `${ex.by}'s pickup — squadmates in the zone ride along` : `${ex.by}'s pickup zone`}</small>`;
+  } else xb.hidden = true;
 }
 
 function updateGadgetBar() {
@@ -1944,7 +2056,7 @@ function frame(now) {
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', x: state.x, z: state.z, yaw: state.yaw, pitch: state.pitch, crouch: state.crouch, aim: state.aiming, sprint: state.sprint });
+    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: state.yaw, pitch: state.pitch, crouch: state.crouch, aim: state.aiming, sprint: state.sprint });
   }
 
   // Recoil recovers smoothly.
@@ -1993,6 +2105,8 @@ function frame(now) {
     const left = g.userData.drop.landsAt - Date.now();
     g.userData.crate.position.y = left > 0 ? 0.5 + Math.min(60, left / 1000) : 0.5;
   }
+  animateExtracts();
+  for (const g of lzVis) g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
   const gy0 = ground(state.x, state.z);
   sun.position.set(state.x + 40, gy0 + 80, state.z + 25);
   sun.target.position.set(state.x, gy0, state.z);
