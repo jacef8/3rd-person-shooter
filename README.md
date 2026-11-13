@@ -42,6 +42,9 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   houses. Everyone within half a mile is alerted and can try to stop you. Leaving the zone or going down aborts it,
   and the pilot then needs 5 minutes before the next call.
 - **Units:** distances, ranges and radii are shown in feet and miles.
+- **Enterable buildings:** town buildings, houses, warehouses, farmhouses, barns and ranger stations
+  have doorways, a ceiling and loot inside. Bigger ones have an interior wall, so you can fight room
+  to room. Only the ground floor is open for now; upper storeys are solid.
 - **Building:** chop trees (hatchet) and mine rocks (pickaxe) for wood and stone, then place
   frames and upgrade them into wooden or stone walls, gates, barricades and stash crates, anywhere
   in the wild. Raid other bases with hatchets, pickaxes, gate hacks or breach charges.

@@ -127,6 +127,15 @@ standing near it. Owners get an alert whenever someone starts breaking in.
   down and the pilot aborts. After any pickup or abort the pilot needs **5 minutes**. Walking
   home is still free and quiet; extraction is fast but loud. Tuning lives in `shared/extraction.js`.
 
+## Buildings
+
+Every ordinary building is a walk-in shell, not a solid block: walls with doorways (one in small
+buildings, two on opposite sides in bigger ones), a ceiling, and an interior wall with a gap in
+buildings 46 ft (14 m) or longer. Loot sits inside: one spot per ~1,300 sq ft (120 m²) of floor,
+up to three per building, from the building's zone table (town, industrial, farm, park). Only the
+ground floor is open; upper storeys are solid for now, because stairs and multi-level movement
+come with the move to Unreal. Roadside homesteads in the countryside are still solid scenery.
+
 ## Units
 
 The simulation runs in metres (one game metre is one real metre). Everything the player reads is

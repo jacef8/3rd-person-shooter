@@ -163,7 +163,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const half = size / 2;
   const terrain = createTerrain(seed, size);
   const geo = terrain.geo;
-  const boxes = [], houses = [], lootSpawns = [], terminals = [], contacts = [], towns = [], roads = [], campSites = [], landingZones = [];
+  const boxes = [], buildings = [], houses = [], lootSpawns = [], terminals = [], contacts = [], towns = [], roads = [], campSites = [], landingZones = [];
   const realStructs = Array.isArray(real.structures) && real.structures.length > 0;
   const grid = new SpatialGrid(half + 4, 32);
   const reserved = new SpatialGrid(half + 4, 64);   // areas kept clear: towns, homes, farms, vehicles
@@ -181,6 +181,86 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     const lo = Math.min(...hs), hi = Math.max(...hs);
     return box(minX, minZ, maxX, maxZ, h + (hi - lo) + 0.4, type, { y0: lo - 0.4, ...extra });
   };
+  /**
+   * A building you can walk into: walls with doorways, a ceiling with any upper storeys solid above
+   * it, an interior wall with a gap in the bigger ones, and loot spots inside. `base` is the floor
+   * height (a town's flattened ground); leave it null to sit the building on the terrain.
+   */
+  const STOREY = 3.4, WALL = 0.3, DOOR_W = 1.6, DOOR_H = 2.4;
+  function shell(minX, minZ, maxX, maxZ, h, type, zone, base = null) {
+    const w = maxX - minX, d = maxZ - minZ;
+    let y0 = base, storey = STOREY, total = h;
+    if (base === null) {
+      const hs = [terrain.exact(minX, minZ), terrain.exact(maxX, minZ), terrain.exact(minX, maxZ), terrain.exact(maxX, maxZ), terrain.exact((minX + maxX) / 2, (minZ + maxZ) / 2)];
+      const lo = Math.min(...hs), hi = Math.max(...hs);
+      y0 = lo - 0.4; storey = STOREY + (hi - lo) + 0.4; total = h + (hi - lo) + 0.4;
+    }
+    if (w < 5 || d < 5) return box(minX, minZ, maxX, maxZ, total, type, { y0 });
+    const oneStorey = total < storey + 1;
+    const wallH = oneStorey ? total - 0.3 : storey;
+    const part = { y0, shell: 1 };
+    const floorAt = (x, z) => (base === null ? terrain.exact(x, z) : base);
+    // Doorways: small buildings get one, bigger ones a pair on opposite sides so you can run through.
+    const sides = ['n', 's', 'w', 'e'];
+    const doors = new Set();
+    const rec = { minX, minZ, maxX, maxZ, type, floor: y0, doors: [] };
+    buildings.push(rec);
+    if (Math.max(w, d) < 10) doors.add(sides[Math.floor(rand() * 4)]);
+    else if (rand() < 0.5) { doors.add('n'); doors.add('s'); } else { doors.add('w'); doors.add('e'); }
+    const wallRun = (side) => {
+      const horiz = side === 'n' || side === 's';
+      const len = horiz ? w : d, a0 = horiz ? minX : minZ;
+      const fixed0 = side === 'n' ? minZ : side === 's' ? maxZ - WALL : side === 'w' ? minX : maxX - WALL;
+      const seg = (a, b, y, hh) => {
+        if (b - a < 0.05) return;
+        if (horiz) box(a, fixed0, b, fixed0 + WALL, hh, type, { ...part, y0: y });
+        else box(fixed0, a, fixed0 + WALL, b, hh, type, { ...part, y0: y });
+      };
+      if (!doors.has(side)) return seg(a0, a0 + len, y0, wallH);
+      // Keep doorways that face the interior wall's end clear of it.
+      const facesPartition = Math.max(w, d) >= 14 && horiz === (w >= d);
+      const frac = facesPartition ? (rand() < 0.5 ? 0.18 + rand() * 0.2 : 0.62 + rand() * 0.2) : 0.3 + rand() * 0.4;
+      const c = a0 + len * frac, da = c - DOOR_W / 2, db = c + DOOR_W / 2;
+      seg(a0, da, y0, wallH);
+      seg(db, a0 + len, y0, wallH);
+      // Lintel over the doorway.
+      const doorFloor = horiz ? floorAt(c, fixed0) : floorAt(fixed0, c);
+      // Door centre and the outward direction (for tests and, later, AI pathing).
+      const out = side === 'n' ? [0, -1] : side === 's' ? [0, 1] : side === 'w' ? [-1, 0] : [1, 0];
+      rec.doors.push(horiz ? { x: c, z: fixed0 + WALL / 2, out } : { x: fixed0 + WALL / 2, z: c, out });
+      const top = Math.max(doorFloor + DOOR_H, y0 + 0.1);
+      if (y0 + wallH - top > 0.05) seg(da, db, top, y0 + wallH - top);
+    };
+    for (const sd of sides) wallRun(sd);
+    // Interior wall across the long axis, with a doorway in it.
+    const alongX = w >= d;
+    let mid = null;
+    if (Math.max(w, d) >= 14) {
+      mid = alongX ? (minX + maxX) / 2 : (minZ + maxZ) / 2;
+      const a0 = (alongX ? minZ : minX) + WALL, a1 = (alongX ? maxZ : maxX) - WALL;
+      const g0 = a0 + 1 + rand() * (a1 - a0 - 2 - DOOR_W), g1 = g0 + DOOR_W;
+      for (const [a, b] of [[a0, g0], [g1, a1]]) {
+        if (alongX) box(mid - WALL / 2, a, mid + WALL / 2, b, wallH, type, part);
+        else box(a, mid - WALL / 2, b, mid + WALL / 2, wallH, type, part);
+      }
+    }
+    // Ceiling (one storey) or the solid upper floors.
+    if (oneStorey) box(minX, minZ, maxX, maxZ, 0.3, type, { y0: y0 + wallH, shell: 1 });
+    else box(minX, minZ, maxX, maxZ, total - storey, type, { y0: y0 + storey, shell: 1 });
+    // Loot inside: one spot per ~120 m² of floor, up to 3, kept off the walls.
+    const n = Math.max(1, Math.min(3, Math.floor((w * d) / 120)));
+    for (let k = 0; k < n; k++) {
+      let x = minX + 1.6 + rand() * (w - 3.2), z = minZ + 1.6 + rand() * (d - 3.2);
+      if (mid !== null) {
+        // Alternate sides of the interior wall and keep clear of it.
+        const half = k % 2 ? 1 : -1, span = (alongX ? w : d) / 2 - 3.2;
+        const v = mid + half * (1.6 + rand() * Math.max(0, span));
+        if (alongX) x = v; else z = v;
+      }
+      lootSpawns.push({ x, z, zone, indoor: true });
+    }
+    return null;
+  }
   const inBounds = (minX, minZ, maxX, maxZ) => minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30;
   const inRect = (x, z, pad = 0) => reserved.near(x, z, pad + 1).some((r) => x > r.minX - pad && x < r.maxX + pad && z > r.minZ - pad && z < r.maxZ + pad);
   const freeRect = (minX, minZ, maxX, maxZ, pad = 0) => inBounds(minX, minZ, maxX, maxZ) &&
@@ -337,13 +417,14 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
           }
           for (let k = 0; k < 2; k++) lootSpawns.push({ x: x0 + 2 + rand() * (BLOCK - 4), z: z0 + 2 + rand() * (BLOCK - 4), zone: 'town' });
         } else if (kind === 'industrial') {
-          if (rand() < 0.5) { tb(x0 + 1, z0 + 1, x1 - 1, cz - 1.5, 7 + rand() * 3, 'warehouse'); tb(x0 + 1, cz + 4, x1 - 1, z1 - 1, 7 + rand() * 3, 'warehouse'); lootSpawns.push({ x: cx, z: cz + 1.2, zone: 'industrial' }, { x: x0 + 4, z: cz + 1.2, zone: 'industrial' }); }
-          else { tb(x0 + 1, z0 + 1, cx - 1.5, z1 - 1, 7 + rand() * 3, 'warehouse'); tb(cx + 4, z0 + 1, x1 - 1, z1 - 1, 7 + rand() * 3, 'warehouse'); lootSpawns.push({ x: cx + 1.2, z: cz, zone: 'industrial' }, { x: cx + 1.2, z: z0 + 4, zone: 'industrial' }); }
+          if (rand() < 0.5) { shell(x0 + 1, z0 + 1, x1 - 1, cz - 1.5, 7 + rand() * 3, 'warehouse', 'industrial', y0); shell(x0 + 1, cz + 4, x1 - 1, z1 - 1, 7 + rand() * 3, 'warehouse', 'industrial', y0); lootSpawns.push({ x: cx, z: cz + 1.2, zone: 'industrial' }); }
+          else { shell(x0 + 1, z0 + 1, cx - 1.5, z1 - 1, 7 + rand() * 3, 'warehouse', 'industrial', y0); shell(cx + 4, z0 + 1, x1 - 1, z1 - 1, 7 + rand() * 3, 'warehouse', 'industrial', y0); lootSpawns.push({ x: cx + 1.2, z: cz, zone: 'industrial' }); }
         } else {
           if ((i + j) % 3 === 0) {
             const tx = x0 + 6;
-            tb(tx - 0.4, z1 - 1, tx + 0.4, z1 - 0.65, 1.5, 'terminal', { terminalId: terminals.length });
-            terminals.push({ id: terminals.length, x: tx, z: z1 - 0.65, townId: t.id });
+            // On the sidewalk, clear of the building's doorways.
+            tb(tx - 0.4, z1 + 0.6, tx + 0.4, z1 + 0.95, 1.5, 'terminal', { terminalId: terminals.length });
+            terminals.push({ id: terminals.length, x: tx, z: z1 + 0.95, townId: t.id });
           }
           const split = rand();
           if (realStructs) { lootSpawns.push({ x: cx, z: cz, zone: 'town' }); continue; }   // the real buildings go here
@@ -353,16 +434,17 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
             for (const [lx, lz] of lots) {
               if (rand() < 0.3) continue;
               const w = 8 + rand() * 4, d = 7 + rand() * 4;
-              tb(lx + 1, lz + 1, lx + 1 + Math.min(w, BLOCK / 2 - 4), lz + 1 + Math.min(d, BLOCK / 2 - 4), 3.6 + rand() * 1.6, 'building');
+              shell(lx + 1, lz + 1, lx + 1 + Math.min(w, BLOCK / 2 - 4), lz + 1 + Math.min(d, BLOCK / 2 - 4), 3.6 + rand() * 1.6, 'building', 'town', y0);
             }
             if (rand() < 0.6) tb(cx - 0.3, cz - 0.3, cx + 0.3, cz + 0.3, 9 + rand() * 5, 'tree');
             lootSpawns.push({ x: cx, z: cz, zone: 'town' });
             continue;
           }
           const tall = () => (t.city ? 9 : 5) + rand() * (t.city ? 16 : 7);
-          if (split < 0.33) tb(x0 + 1, z0 + 1, x1 - 1, z1 - 1, tall());
-          else if (split < 0.66) { tb(x0 + 1, z0 + 1, cx - 2, z1 - 1, tall()); tb(cx + 2, z0 + 1, x1 - 1, z1 - 1, tall()); lootSpawns.push({ x: cx, z: cz, zone: 'town' }); }
-          else { tb(x0 + 1, z0 + 1, x1 - 1, cz - 2, tall()); tb(x0 + 1, cz + 2, cx - 2, z1 - 1, tall()); tb(cx + 2, cz + 2, x1 - 1, z1 - 1, tall()); lootSpawns.push({ x: cx - 4, z: cz, zone: 'town' }); }
+          const sh = (a, b, c, d) => shell(a, b, c, d, tall(), 'building', 'town', y0);
+          if (split < 0.33) sh(x0 + 1, z0 + 1, x1 - 1, z1 - 1);
+          else if (split < 0.66) { sh(x0 + 1, z0 + 1, cx - 2, z1 - 1); sh(cx + 2, z0 + 1, x1 - 1, z1 - 1); lootSpawns.push({ x: cx, z: cz, zone: 'town' }); }
+          else { sh(x0 + 1, z0 + 1, x1 - 1, cz - 2); sh(x0 + 1, cz + 2, cx - 2, z1 - 1); sh(cx + 2, cz + 2, x1 - 1, z1 - 1); lootSpawns.push({ x: cx - 4, z: cz, zone: 'town' }); }
         }
       }
     }
@@ -391,7 +473,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       for (let k = 0; k < 40 && (waterDist(x, z) < 30 || inRect(x, z, 20) || terrain.exact(x, z) < 1); k++) { x += 25; z += 10; }
       if (!freeRect(x - 15, z - 15, x + 15, z + 15, 5)) continue;
       reserve({ minX: x - 15, minZ: z - 15, maxX: x + 15, maxZ: z + 15 });
-      ground(x - 6, z - 5, x + 6, z + 5, 4, 'farmhouse');
+      shell(x - 6, z - 5, x + 6, z + 5, 4, 'farmhouse', 'park');
       lootSpawns.push({ x: x + 9, z, zone: 'park' }, { x: x - 9, z: z + 7, zone: 'park' }, { x, z: z + 9, zone: 'park' });
     } else if (lm.kind === 'dam') {
       box(lm.x - 95, lm.z - 14, lm.x + 95, lm.z + 6, 18, 'dam', { y0: -8 });
@@ -498,8 +580,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
         const g = span4(fx, fz, 20, terrain.exact);
         if (g.lo < 1.5 || g.hi - g.lo > 4 || !freeRect(fx - 20, fz - 16, fx + 20, fz + 16, 20)) continue;
         reserve({ minX: fx - 20, minZ: fz - 16, maxX: fx + 20, maxZ: fz + 16 });
-        ground(fx - 18, fz - 12, fx - 8, fz - 4, 6, 'farmhouse');
-        ground(fx + 2, fz - 14, fx + 16, fz - 2, 8, 'barn');
+        shell(fx - 18, fz - 12, fx - 8, fz - 4, 6, 'farmhouse', 'farm');
+        shell(fx + 2, fz - 14, fx + 16, fz - 2, 8, 'barn', 'farm');
         ground(fx - 18, fz + 10, fx + 2, fz + 10.5, 1.1, 'cover');
         ground(fx + 8, fz + 4, fx + 8.5, fz + 14, 1.1, 'cover');
         lootSpawns.push({ x: fx - 4, z: fz - 8, zone: 'farm' }, { x: fx + 9, z: fz + 1, zone: 'farm' });
@@ -552,7 +634,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   box(-half - 2, -half, -half, half, 300, 'border', { y0: -50 });
   box(half, -half, half + 2, half, 300, 'border', { y0: -50 });
 
-  const free = (p, r = 1.0) => terrain.exact(p.x, p.z) > 0.3 && !grid.near(p.x, p.z, r + 1, [], true).some((b) => circleOverlapsBox(p.x, p.z, r, b) && b.type !== 'caveroof' && b.type !== 'canopy');
+  const free = (p, r = 1.0) => { const gh = terrain.exact(p.x, p.z); return gh > 0.3 && !grid.near(p.x, p.z, r + 1, [], true).some((b) => circleOverlapsBox(p.x, p.z, r, b) && b.type !== 'caveroof' && b.type !== 'canopy' && !(b.y0 > gh + 2)); };
   for (const p of [...landingZones, ...campSites]) for (let k = 0; k < 10 && !free(p, 3); k++) { p.x += 7; p.z += 3; }
   const spawns = lootSpawns.filter((p) => free(p));
   // Loot spots and camps are kept clear of the lazy trees too.
@@ -624,7 +706,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
   ];
   return {
-    seed, size, half, boxes, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
+    seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },
     roadsNear: (x, z, r) => roadGrid.near(x, z, r),

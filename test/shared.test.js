@@ -25,6 +25,34 @@ test('open world: real Bristol area at 1:1, deterministic, towns, stash houses, 
   assert.notEqual(mapChecksum(generateMap(43)), mapChecksum(a), 'different seeds give different worlds');
 });
 
+test('buildings can be walked into through their doorways, and have loot inside', () => {
+  const m = generateMap(1337);
+  assert.ok(m.buildings.length > 500, `${m.buildings.length} enterable buildings`);
+  let doors = 0, walkedIn = 0;
+  for (const b of m.buildings) {
+    assert.ok(b.doors.length >= 1, 'every building has a doorway');
+    for (const d of b.doors) {
+      doors++;
+      const solids = m.grid.near(d.x, d.z, 12);
+      const p = moveWithCollision(d.x + d.out[0] * 3, d.z + d.out[1] * 3, -d.out[0] * 6, -d.out[1] * 6, PLAYER_RADIUS, solids, m.terrain);
+      if (p.x > b.minX && p.x < b.maxX && p.z > b.minZ && p.z < b.maxZ) walkedIn++;
+    }
+  }
+  assert.ok(walkedIn / doors > 0.99, `walked in through ${walkedIn}/${doors} doorways`);
+  // Walls are solid where there's no door: walking at a doorless wall stops outside.
+  const b = m.buildings.find((x) => x.doors.length === 2 && x.doors[0].out[0] === 0 && x.maxX - x.minX > 12);
+  const p = moveWithCollision(b.maxX + 2, (b.minZ + b.maxZ) / 2, -6, 0, PLAYER_RADIUS, m.grid.near(b.maxX, (b.minZ + b.maxZ) / 2, 10), m.terrain);
+  assert.ok(p.x > b.maxX, 'side wall blocks');
+  // Loot spots inside buildings.
+  const inside = m.lootSpawns.filter((l) => l.indoor);
+  assert.ok(inside.length > 1000, `${inside.length} indoor loot spots`);
+  for (const l of inside.slice(0, 200)) assert.ok(m.buildings.some((q) => l.x > q.minX && l.x < q.maxX && l.z > q.minZ && l.z < q.maxZ));
+  // A shot from inside hits the ceiling, not the sky.
+  const room = m.buildings[0], cx = (room.minX + room.maxX) / 2, cz = (room.minZ + room.maxZ) / 2;
+  const up = rayAgainstBoxes(cx, room.floor + 1.5, cz, 0, 1, 0, m.grid.near(cx, cz, 2), 100);
+  assert.ok(up.t < 4, 'ceiling overhead');
+});
+
 test('countryside trees and rocks are generated lazily and identically in any order', () => {
   const ids = (m, x, z) => m.grid.near(x, z, 60).filter((b) => b.nature).map((b) => `${b.id}:${b.minX.toFixed(3)}:${b.y0.toFixed(3)}`).sort().join();
   const m1 = generateMap(5), m2 = generateMap(5);
