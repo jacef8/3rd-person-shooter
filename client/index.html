@@ -26,7 +26,7 @@
     <div class="controls kbonly">
       <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
       <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory · <b>P</b> squad &amp; leaderboard · <b>M</b> map<br />
-      <b>F</b> tag · <b>G</b> sensor grenade · <b>V</b> optical camo · <b>T</b> rally (leader) · <b>B</b> squad ping<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
+      <b>F</b> tag · <b>G</b> sensor grenade · <b>V</b> optical camo · <b>T</b> rally (leader) · <b>B</b> squad ping · <b>X</b> build mode<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
     </div>
   </div>
 
@@ -54,12 +54,14 @@
     <div id="markers"></div>
     <div id="hackbar" hidden><span></span><div><i></i></div></div>
     <div id="gadgets"></div>
+    <div id="buildbar" hidden></div>
     <div id="resources"></div>
   </div>
 
   <div id="inventory" class="panel" hidden>
     <div class="cols">
       <section>
+        <div class="gsentry"><button class="ghost" id="openSquadBtn">Squad &amp; leaderboard</button><button class="ghost" id="openMapBtn">Map</button></div>
         <h2>Equipped</h2>
         <div id="equipped"></div>
         <h2>Backpack <small id="packcount"></small></h2>

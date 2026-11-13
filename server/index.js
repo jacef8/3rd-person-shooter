@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
-  generateMap, mapChecksum, moveWithCollision, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
+  generateMap, mapChecksum, moveWithCollision, HOME_KINDS, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
 } from '../shared/world.js';
 import {
@@ -22,6 +22,7 @@ import {
   levelFromXp, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
+import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, investedCost, placementProblem } from '../shared/building.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -37,9 +38,9 @@ const PACK_SIZE = 12;
 const DOOR_HP = Number(process.env.DOOR_HP || 1500);
 const LOOT_RESPAWN_MS = 5 * 60_000;
 const BAG_LIFETIME_MS = 30 * 60_000;
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const SQUAD_MAX = 4;
-const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage'];   // carried; all drop on death, all stealable
+const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone'];   // carried; all drop on death, all stealable
 const CAMO_REVEAL_DIST = 9;
 const MARK_MS = 8000;
 const SENSOR = { radius: 18, radiusMk2: 26, duration: 10_000, throwRange: 30, cooldown: 12_000 };
@@ -53,12 +54,14 @@ const SUPPLY_FALL_MS = Number(process.env.SUPPLY_FALL_MS || 60_000);
 
 const map = generateMap(SEED, WORLD_SIZE);
 const grid = map.grid;
+const terrain = map.terrain;
+const gy = (c) => terrain.height(c.x, c.z);   // ground height under a character
 const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
-const freshHouse = () => ({ owner: null, ownerName: null, doorHp: DOOR_HP, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} });
+const freshHouse = () => ({ owner: null, ownerName: null, doorHp: DOOR_HP, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, wood: 0, stone: 0, upg: {} });
 function freshDb() {
-  return { characters: {}, houses: Object.fromEntries(map.houses.map((h) => [h.id, freshHouse()])), bags: [] };
+  return { characters: {}, houses: Object.fromEntries(map.houses.map((h) => [h.id, freshHouse()])), bags: [], structures: [] };
 }
 function loadDb() {
   try {
@@ -75,6 +78,7 @@ for (const h of map.houses) {
   db.houses[h.id] = { ...freshHouse(), ...(db.houses[h.id] || {}) };
   db.houses[h.id].upg = { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0, ...db.houses[h.id].upg };
 }
+db.structures ??= [];
 
 function saveDb() {
   for (const p of players.values()) persistCharacter(p);
@@ -113,17 +117,52 @@ function doorsNear(x, z, r, out) {
   for (const h of map.houses) if (Math.abs(h.x - x) < r + 8 && Math.abs(h.z - z) < r + 8) { const d = doorBox(h.id); if (d) out.push(d); }
   return out;
 }
-function solidsNear(x, z, r) { return doorsNear(x, z, r, grid.near(x, z, r)); }
+function solidsNear(x, z, r) { return structSolids(x, z, r, doorsNear(x, z, r, grid.near(x, z, r))); }
 function solidsAlongRay(ox, oz, dx, dz, dist) {
   const out = grid.ray(ox, oz, dx, dz, dist);
-  return doorsNear(ox + dx * dist / 2, oz + dz * dist / 2, dist / 2 + 2, out);
+  const mx = ox + dx * dist / 2, mz = oz + dz * dist / 2;
+  return structSolids(mx, mz, dist / 2 + 4, doorsNear(mx, mz, dist / 2 + 2, out));
 }
+/** Clear line between two points: no boxes, structures, doors or terrain in the way. */
 function lineOfSight(ax, ay, az, bx, by, bz) {
   const dx = bx - ax, dy = by - ay, dz = bz - az;
   const d = Math.hypot(dx, dy, dz);
   const ux = dx / d, uy = dy / d, uz = dz / d;
-  return rayAgainstBoxes(ax, ay, az, ux, uy, uz, solidsAlongRay(ax, az, ux, uz, d), d).t >= d - 0.05;
+  if (rayAgainstBoxes(ax, ay, az, ux, uy, uz, solidsAlongRay(ax, az, ux, uz, d), d).t < d - 0.05) return false;
+  return terrain.ray(ax, ay, az, ux, uy, uz, d - 0.3) === Infinity;
 }
+
+// ---------------------------------------------------------------- player-built structures
+const structs = new Map();
+const structCells = new Map();
+const sKey = (x, z) => Math.floor((x + map.half) / 32) * 65536 + Math.floor((z + map.half) / 32);
+function indexStruct(s, add) {
+  const k = sKey(s.x, s.z);
+  if (add) { if (!structCells.has(k)) structCells.set(k, new Set()); structCells.get(k).add(s.id); structs.set(s.id, s); }
+  else { structCells.get(k)?.delete(s.id); structs.delete(s.id); }
+}
+for (const s of db.structures) indexStruct(s, true);
+function structsNear(x, z, r) {
+  const out = [];
+  const c0 = Math.floor((x - r - 3 + map.half) / 32), c1 = Math.floor((x + r + 3 + map.half) / 32);
+  const d0 = Math.floor((z - r - 3 + map.half) / 32), d1 = Math.floor((z + r + 3 + map.half) / 32);
+  for (let i = c0; i <= c1; i++) for (let j = d0; j <= d1; j++) {
+    const set = structCells.get(i * 65536 + j);
+    if (set) for (const id of set) { const s = structs.get(id); if (Math.abs(s.x - x) < r + 3 && Math.abs(s.z - z) < r + 3) out.push(s); }
+  }
+  return out;
+}
+const stageDef = (s) => PIECES[s.type].stages[s.stage];
+function structBox(s) { return { ...pieceBox(s.type, s.x, s.z, s.rot, s.y0), type: 'struct', structId: s.id }; }
+/** Frames are walk-through scaffolding; open gates let you pass; charges aren't solid. */
+function structIsSolid(s) { return stageDef(s).material !== 'frame' && !PIECES[s.type].explosive && !(PIECES[s.type].door && s.open); }
+function structSolids(x, z, r, out = []) {
+  for (const s of structsNear(x, z, r)) if (structIsSolid(s)) out.push(structBox(s));
+  return out;
+}
+function canManage(p, s) { return s.owner === p.token || tokenInSquadWith(p, s.owner); }
+function hasTool(p, tool) { return p.inv.pack.some((i) => i.kind === 'tool' && i.tool === tool); }
+function boxDist(b, x, z) { return Math.hypot(Math.max(b.minX - x, 0, x - b.maxX), Math.max(b.minZ - z, 0, z - b.maxZ)); }
 const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
 
 // ---------------------------------------------------------------- characters
@@ -134,9 +173,12 @@ function starterLoadout() {
   const inv = starterKit();
   return { inv, ammo: 90, parts: 0, tech: 0, intel: 0, salvage: 0, mags: { [inv.secondary.id]: weaponStats(inv.secondary).mag }, active: 'secondary' };
 }
+const makeTool = (tool) => ({ id: uid('t'), kind: 'tool', tool, name: TOOLS[tool].name });
 function newCharacter(name) {
+  const kit = starterLoadout();
+  kit.inv.pack.push(makeTool('hammer'), makeTool('hatchet'));
   return {
-    name, x: 0, z: 0, yaw: 0, hp: 100, armor: 0, ...starterLoadout(), parts: 60, tech: 20, dead: false, kills: 0, xp: 0,
+    name, x: 0, z: 0, yaw: 0, hp: 100, armor: 0, ...kit, parts: 60, tech: 20, wood: 20, dead: false, kills: 0, xp: 0,
     comms: 0, field: [], discovered: [], contracts: [], needsDeploy: true,
   };
 }
@@ -184,7 +226,7 @@ function privateState(p) {
   return {
     t: 'you', hp: p.hp, maxHp: maxHp(p), armor: p.armor, maxArmor: maxArmor(p), ammo: p.ammo,
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
-    xp: p.xp, level: level(p), parts: p.parts, tech: p.tech, intel: p.intel, salvage: p.salvage, comms: p.comms,
+    xp: p.xp, level: level(p), ...Object.fromEntries(RESOURCES.map((r) => [r, p[r] || 0])), comms: p.comms,
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
     reloading: p.reloadUntil > Date.now(), houseId: p.houseId,
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
@@ -307,8 +349,8 @@ function markTarget(p, msg) {
   if (now - (p.lastMark || 0) < 700) return;
   const t = findCharacter(msg.id);
   if (!t || t.dead || sameSquad(p, t)) return;
-  const eye = p.crouch ? CROUCH_EYE : STAND_EYE;
-  if (Math.hypot(t.x - p.x, t.z - p.z) > 120 || !lineOfSight(p.x, eye, p.z, t.x, t.crouch ? 0.9 : 1.3, t.z)) return;
+  const eye = gy(p) + (p.crouch ? CROUCH_EYE : STAND_EYE);
+  if (Math.hypot(t.x - p.x, t.z - p.z) > 120 || !lineOfSight(p.x, eye, p.z, t.x, gy(t) + (t.crouch ? 0.9 : 1.3), t.z)) return;
   p.lastMark = now;
   const key = squadKey(p);
   expose(t, key, MARK_MS);
@@ -346,9 +388,20 @@ function tickSensors(now) {
 }
 
 /** Timed, interruptible channel: terminals, door bypass, supply drops, contract crates. */
-function startHack(p, kind, id) {
+function startHack(p, kind, id, extra = {}) {
   const now = Date.now();
   let src;
+  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack') {
+    const ms = kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
+    p.hack = { kind, id, start: now, until: now + ms, x: p.x, z: p.z, ...extra };
+    send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
+    if (kind === 'raid' || kind === 'gatehack') {
+      const st = structs.get(id);
+      const owner = st && onlineByToken(st.owner);
+      if (owner && (!st.raidAlert || now - st.raidAlert > 20_000)) { st.raidAlert = now; toast(owner, `⚠ ${p.name} is breaking into your base!`); send(owner.ws, { t: 'alert', x: st.x, z: st.z, text: 'Base under attack' }); }
+    }
+    return;
+  }
   if (kind === 'terminal') {
     if ((terminalReadyAt.get(id) || 0) > now) return toast(p, `Terminal rebooting — ${Math.ceil((terminalReadyAt.get(id) - now) / 1000)}s`);
     src = map.terminals[id];
@@ -383,7 +436,42 @@ function tickHacks(now) {
     if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
     if (now < h.until) continue;
     p.hack = null;
-    if (h.kind === 'terminal') {
+    if (h.kind === 'harvest') {
+      const hv = harvested.get(h.id) || { uses: 0, regrowAt: 0 };
+      if (hv.uses >= BUILD.harvest.uses && hv.regrowAt <= now) hv.uses = 0;
+      hv.uses++;
+      if (hv.uses >= BUILD.harvest.uses) hv.regrowAt = now + BUILD.harvest.regrowMs;
+      harvested.set(h.id, hv);
+      const n = BUILD.harvest[h.res];
+      p[h.res] += n;
+      send(p.ws, { t: 'hack', done: true, text: `+${n} ${h.res}` });
+    } else if (h.kind === 'upgrade') {
+      const st = structs.get(h.id);
+      if (!st) continue;
+      const next = PIECES[st.type].stages[st.stage + 1];
+      if (!next || !payCarried(p, next.cost)) { send(p.ws, { t: 'hack', done: true, text: 'Missing materials' }); continue; }
+      const frac = st.hp / stageDef(st).hp;
+      st.stage++;
+      st.hp = Math.max(next.hp * frac, next.hp * 0.5);
+      if (st.stage === 1 && stageDef(st).material !== 'frame') st.hp = next.hp;
+      award(p, 15, `Built ${next.name}`);
+      send(p.ws, { t: 'hack', done: true, text: `${next.name} complete` });
+      if (PIECES[st.type].container) refreshContainerViewers('crate', st.id);
+    } else if (h.kind === 'raid') {
+      const st = structs.get(h.id);
+      if (!st) continue;
+      const r = BUILD.raid[h.tool];
+      if (!r.vs.split(',').includes(stageDef(st).material)) { send(p.ws, { t: 'hack', done: true, text: `A ${h.tool} won't break ${stageDef(st).material}` }); continue; }
+      damageStruct(st, r.dmg, p);
+      send(p.ws, { t: 'hack', done: true, text: structs.has(st.id) ? `${stageDef(st).name}: ${Math.max(0, Math.round(st.hp))} HP left` : 'Broken through!' });
+    } else if (h.kind === 'gatehack') {
+      const st = structs.get(h.id);
+      if (!st || p.tech < GADGETS.doorHack.cost) continue;
+      p.tech -= GADGETS.doorHack.cost;
+      st.open = true;
+      award(p, XP.hackDoor, 'Gate lock bypassed', true);
+      send(p.ws, { t: 'hack', done: true, text: 'Gate unlocked' });
+    } else if (h.kind === 'terminal') {
       terminalReadyAt.set(h.id, now + TERMINAL_COOLDOWN_MS);
       p.intel += TERMINAL_REWARD.intel;
       p.tech += TERMINAL_REWARD.tech;
@@ -494,16 +582,24 @@ function killBot(b, attacker, headshotKill) {
 function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
   const world = rayAgainstBoxes(ox, oy, oz, dx, dy, dz, grid.ray(ox, oz, dx, dz, range), range);
   let best = world.t, target = null, kind = world.box ? 'world' : null, headshot = false;
+  const ground = terrain.ray(ox, oy, oz, dx, dy, dz, Math.min(best, range));
+  if (ground < best) { best = ground; kind = 'world'; }
+  for (const s of structsNear(ox + dx * range / 2, oz + dz * range / 2, range / 2 + 3)) {
+    if (!structIsSolid(s)) continue;
+    const b = structBox(s);
+    const t = rayBox(ox, oy, oz, dx, dy, dz, b.minX, b.y0, b.minZ, b.maxX, b.y0 + b.h, b.maxZ);
+    if (t < best) { best = t; target = s; kind = 'struct'; }
+  }
   for (const h of map.houses) {
     if (Math.abs(h.x - ox) > range + 8 || Math.abs(h.z - oz) > range + 8) continue;
     const d = doorBox(h.id);
     if (!d) continue;
-    const t = rayBox(ox, oy, oz, dx, dy, dz, d.minX, 0, d.minZ, d.maxX, d.h, d.maxZ);
+    const t = rayBox(ox, oy, oz, dx, dy, dz, d.minX, d.y0, d.minZ, d.maxX, d.y0 + d.h, d.maxZ);
     if (t < best) { best = t; target = h.id; kind = 'door'; }
   }
   const check = (c, k) => {
     if (c.dead || c.id === shooterId || Math.abs(c.x - ox) > best + 1 || Math.abs(c.z - oz) > best + 1) return;
-    const b = characterBounds(c.x, c.z, c.crouch);
+    const b = characterBounds(c.x, c.z, c.crouch, gy(c));
     const t = rayBox(ox, oy, oz, dx, dy, dz, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
     if (t < best) { best = t; target = c; kind = k; headshot = oy + dy * t > b.maxY - 0.3; }
   };
@@ -515,7 +611,7 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
 function fire(shooter, dir, isBot = false, botAccuracy = 1) {
   const s = isBot ? shooter.weapon : stats(shooter);
   const eye = shooter.crouch ? CROUCH_EYE : STAND_EYE;
-  const ox = shooter.x, oy = eye, oz = shooter.z;
+  const ox = shooter.x, oy = gy(shooter) + eye, oz = shooter.z;
   const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
   const base = [dir[0] / len, dir[1] / len, dir[2] / len];
   const moving = !isBot && shooter.speed > 0.5;
@@ -536,6 +632,10 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
     if (hit.headshot) dmg *= 1.5;
     if (!isBot && (shooter.buffUntil || 0) > Date.now()) dmg *= 1.2;
     if (hit.kind === 'player' && !isBot && sameSquad(shooter, hit.target)) continue;
+    if (hit.kind === 'struct') {
+      damageStruct(hit.target, dmg * (BUILD.bulletMul[stageDef(hit.target).material] ?? 0.1), isBot ? null : shooter);
+      continue;
+    }
     if (hit.kind === 'door') {
       const h = db.houses[hit.target];
       h.doorHp = Math.max(0, h.doorHp - dmg);
@@ -566,7 +666,7 @@ function spawnBot(x, z, kind = 'ambient', extra = {}) {
   const arche = kind === 'hvt' ? 'dmr' : BOT_WEAPONS[botSerial % BOT_WEAPONS.length];
   const w = weaponStats(makeWeapon(arche));
   const hp = kind === 'hvt' ? 500 : 140;
-  const p = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3));
+  const p = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3), terrain.height(x, z));
   const b = {
     id: uid('b'), name: kind === 'hvt' ? 'Rogue Lieutenant' : 'Rogue', isBot: true, kind, serial: botSerial++,
     x: p.x, z: p.z, homeX: p.x, homeZ: p.z, yaw: 0, hp, maxHp: hp, dead: false,
@@ -611,14 +711,14 @@ function updateBots(dt, now) {
       if (d >= bestD) continue;
       if (camoActive(p) && d > 6) continue;
       if ((p.protectedUntil || 0) > now) continue;
-      if (lineOfSight(b.x, STAND_EYE, b.z, p.x, p.crouch ? 0.9 : 1.3, p.z)) { best = p; bestD = d; }
+      if (lineOfSight(b.x, gy(b) + STAND_EYE, b.z, p.x, gy(p) + (p.crouch ? 0.9 : 1.3), p.z)) { best = p; bestD = d; }
     }
     let mx = 0, mz = 0;
     if (best) {
       b.yaw = Math.atan2(best.x - b.x, best.z - b.z);
       if (bestD > 14) { mx = Math.sin(b.yaw); mz = Math.cos(b.yaw); }
       if (now >= b.nextShot) {
-        const dir = [best.x - b.x, (best.crouch ? 0.8 : 1.2) - STAND_EYE, best.z - b.z];
+        const dir = [best.x - b.x, gy(best) + (best.crouch ? 0.8 : 1.2) - gy(b) - STAND_EYE, best.z - b.z];
         fire(b, dir, true, Math.max(0.35, 1.2 - bestD / 30));
         b.burst = (b.burst + 1) % 5;
         b.nextShot = now + (b.burst === 0 ? 1400 : 60_000 / b.weapon.rpm * 1.3);
@@ -631,7 +731,7 @@ function updateBots(dt, now) {
       b.yaw = Math.atan2(b.wander.x - b.x, b.wander.z - b.z);
       mx = Math.sin(b.yaw) * 0.45; mz = Math.cos(b.yaw) * 0.45;
     }
-    const np = moveWithCollision(b.x, b.z, mx * 3.2 * dt, mz * 3.2 * dt, PLAYER_RADIUS, solidsNear(b.x, b.z, 3));
+    const np = moveWithCollision(b.x, b.z, mx * 3.2 * dt, mz * 3.2 * dt, PLAYER_RADIUS, solidsNear(b.x, b.z, 3), terrain);
     if (Math.hypot(np.x - b.x, np.z - b.z) < 0.001 && (mx || mz)) b.wander = null;
     b.x = np.x; b.z = np.z;
   }
@@ -665,7 +765,7 @@ function makeContract(type, contact) {
   else if (type === 'recovery') {
     // Placed beside (not on) a loot spot so the two don't overlap.
     const s = nearestBy(map.lootSpawns.filter((l) => l.zone !== 'town'), contact.x, contact.z, 300, 1100);
-    const spot = resolveCircle(s.x + 2.5, s.z, 0.8, solidsNear(s.x + 2.5, s.z, 3));
+    const spot = resolveCircle(s.x + 2.5, s.z, 0.8, solidsNear(s.x + 2.5, s.z, 3), terrain.height(s.x + 2.5, s.z));
     Object.assign(c, { x: spot.x, z: spot.z });
   }
   else { const s = nearestBy(map.campSites, contact.x, contact.z, 250, 1200); Object.assign(c, { x: s.x, z: s.z }); }
@@ -770,6 +870,130 @@ function scheduleDrop(now) {
   broadcast({ t: 'events', drops: dropList(), announce: true });
 }
 
+// ---------------------------------------------------------------- building (DayZ-style)
+const harvested = new Map();   // world box id -> { uses, regrowAt }
+const charges = new Map();     // id -> { id, x, z, y, detAt, owner, ownerName }
+const buildWorld = {
+  terrain, towns: map.towns, contacts: map.contacts, landingZones: map.landingZones,
+  solidsNear: (x, z, r) => { const out = solidsNear(x, z, r); for (const s of structsNear(x, z, r)) if (!structIsSolid(s) && !PIECES[s.type].explosive) out.push(structBox(s)); return out; },
+};
+function payCarried(p, cost) {
+  for (const [k, v] of Object.entries(cost)) if ((p[k] || 0) < v) return false;
+  for (const [k, v] of Object.entries(cost)) p[k] -= v;
+  return true;
+}
+const costText = (c) => Object.entries(c).map(([k, v]) => `${v} ${k}`).join(', ');
+
+function handleBuild(p, msg) {
+  const def = PIECES[msg.piece];
+  if (!def) return;
+  const x = Number(msg.x), z = Number(msg.z), rot = msg.rot ? 1 : 0;
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+  if (def.explosive) {
+    const idx = p.inv.pack.findIndex((i) => i.kind === 'charge');
+    if (idx < 0) return toast(p, 'You need a breach charge — craft one at your stash (level 7)');
+    if (Math.hypot(x - p.x, z - p.z) > 3) return toast(p, 'Too far away');
+    const nearStruct = structsNear(x, z, 3).some((s2) => boxDist(structBox(s2), x, z) < 1.6);
+    const nearDoor = map.houses.some((h) => boxDist(h.door, x, z) < 1.6);
+    if (!nearStruct && !nearDoor) return toast(p, 'Place it against a wall, gate or stash house door');
+    p.inv.pack.splice(idx, 1);
+    const id = uid('x');
+    charges.set(id, { id, x, z, y: terrain.height(x, z), detAt: Date.now() + BUILD.charge.fuseMs, owner: p.token, ownerName: p.name });
+    toast(p, 'Charge armed — 8 seconds. Get clear!');
+    dirty(p);
+    return;
+  }
+  if (!hasTool(p, 'hammer')) return toast(p, 'You need a hammer to build');
+  const mine = [...structs.values()].filter((o) => o.owner === p.token).length;
+  if (mine >= BUILD.maxPerPlayer) return toast(p, `Build limit reached (${BUILD.maxPerPlayer})`);
+  const problem = placementProblem(buildWorld, msg.piece, x, z, rot, p);
+  if (problem) return toast(p, problem);
+  const stage0 = def.stages[0];
+  if (!payCarried(p, stage0.cost)) return toast(p, `Needs ${costText(stage0.cost)} (carried)`);
+  const b = pieceBox(msg.piece, x, z, rot);
+  const y0 = Math.min(...[[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].map(([a, c]) => terrain.height(a, c))) - 0.15;
+  const st = { id: 's' + crypto.randomBytes(5).toString('hex'), type: msg.piece, x, z, rot, y0, stage: 0, hp: stage0.hp, owner: p.token, ownerName: p.name, open: false };
+  if (def.container) Object.assign(st, { items: [], ...Object.fromEntries(RESOURCES.map((r) => [r, 0])) });
+  db.structures.push(st);
+  indexStruct(st, true);
+  award(p, 10, `Built ${stage0.name}`);
+  dirty(p);
+}
+
+function damageStruct(st, dmg, by) {
+  if (!structs.has(st.id)) return;
+  st.hp -= dmg;
+  const owner = onlineByToken(st.owner);
+  if (owner && by !== owner && (!st.alertedAt || Date.now() - st.alertedAt > 20_000)) { st.alertedAt = Date.now(); toast(owner, `⚠ Your ${stageDef(st).name.toLowerCase()} is under attack${by ? ` by ${by.name}` : ''}!`); }
+  if (st.hp > 0) return;
+  removeStruct(st, true);
+  if (by && !by.isBot && st.owner !== by.token) award(by, 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
+}
+function removeStruct(st, destroyed) {
+  indexStruct(st, false);
+  db.structures = db.structures.filter((o) => o !== st);
+  if (PIECES[st.type].container) {
+    dropBag(st.x, st.z, st.items, st, destroyed ? 'Wrecked crate' : 'Crate contents');
+    for (const p of players.values()) if (p.openContainer?.kind === 'crate' && p.openContainer.id === st.id) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
+  }
+}
+function dismantle(p, msg) {
+  const st = structs.get(msg.id);
+  if (!st || !canManage(p, st) || boxDist(structBox(st), p.x, p.z) > 4) return;
+  if (!hasTool(p, 'hammer') && !PIECES[st.type].explosive) return toast(p, 'You need a hammer to dismantle');
+  const refund = investedCost(st.type, st.stage);
+  for (const [k, v] of Object.entries(refund)) p[k] += Math.floor(v / 2);
+  removeStruct(st, false);
+  toast(p, `Dismantled — refunded ${costText(Object.fromEntries(Object.entries(refund).map(([k, v]) => [k, Math.floor(v / 2)])))}`);
+  dirty(p);
+}
+
+function explode(c, now) {
+  charges.delete(c.id);
+  const k = BUILD.charge;
+  const by = onlineByToken(c.owner);
+  const msg = JSON.stringify({ t: 'boom', x: c.x, y: c.y + 0.5, z: c.z });
+  for (const p of players.values()) if (p.ws.readyState === 1 && Math.abs(p.x - c.x) < INTEREST && Math.abs(p.z - c.z) < INTEREST) p.ws.send(msg);
+  for (const st of structsNear(c.x, c.z, k.radius + 3)) {
+    const d = boxDist(structBox(st), c.x, c.z);
+    if (d <= k.radius) damageStruct(st, k.damage * (1 - d / (k.radius * 1.5)), by);
+  }
+  for (const h of map.houses) {
+    const d = boxDist(h.door, c.x, c.z);
+    if (d > k.radius) continue;
+    const hs = db.houses[h.id];
+    if (hs.doorHp <= 0) continue;
+    hs.doorHp = Math.max(0, hs.doorHp - k.damage * (1 - d / (k.radius * 1.5)));
+    hs.lastDamaged = now;
+    if (hs.doorHp === 0) { feed(`${c.ownerName} blew open ${hs.ownerName || 'an unclaimed'}'s ${HOME_KINDS[h.kind].name.toLowerCase()}`); notifyOwner(h.id, `⚠ Your stash door was blown open by ${c.ownerName}!`); if (by && hs.owner !== by.token) award(by, XP.breach, 'Stash house breached', true); }
+  }
+  for (const t of [...players.values(), ...bots.values()]) {
+    if (t.dead) continue;
+    const d = Math.hypot(t.x - c.x, t.z - c.z);
+    if (d < k.playerRadius) applyDamage(t, k.playerDamage * (1 - d / k.playerRadius), by, !!t.isBot);
+  }
+}
+
+function craft(p, msg) {
+  const def = CRAFTS[msg.item];
+  if (!def) return;
+  const store = craftStore(p);
+  if (!store) return toast(p, 'Craft at your stash house or one of your crates');
+  if (level(p) < def.level) return toast(p, `${def.name} needs level ${def.level}`);
+  if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+  if (!spend(p, def.cost, store)) return toast(p, `Needs ${costText(def.cost)}`);
+  p.inv.pack.push(msg.item === 'charge' ? { id: uid('c'), kind: 'charge', name: 'Breach Charge' } : makeTool(msg.item));
+  toast(p, `Crafted ${def.name}`);
+  dirty(p);
+  if (p.openContainer) refreshContainerViewers(p.openContainer.kind, p.openContainer.id);
+}
+function craftStore(p) {
+  if (atOwnStash(p)) return db.houses[p.houseId];
+  const oc = p.openContainer;
+  if (oc?.kind === 'crate') { const st = structs.get(oc.id); if (st && st.owner === p.token && nearContainer(p, 'crate', st.id)) return st; }
+  return null;
+}
+
 // ---------------------------------------------------------------- interaction
 function nearestInteractable(p) {
   let best = null, bestD = INTERACT_RANGE;
@@ -786,6 +1010,14 @@ function nearestInteractable(p) {
   for (const c of map.contacts) if (Math.abs(c.x - p.x) < 5 && Math.abs(c.z - p.z) < 5) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.8, { kind: 'contact', ref: c });
   for (const d of drops.values()) consider(Math.hypot(d.x - p.x, d.z - p.z) - 0.6, { kind: 'drop', ref: d });
   for (const o of objectives.values()) if (o.owner === p.token) consider(Math.hypot(o.x - p.x, o.z - p.z) - 0.5, { kind: 'crate', ref: o });
+  for (const st of structsNear(p.x, p.z, 4)) if (!PIECES[st.type].explosive) consider(boxDist(structBox(st), p.x, p.z) + 0.3, { kind: 'struct', ref: st });
+  if (!best) {
+    // Trees and rocks you can gather from (only when nothing else is in reach).
+    for (const b of grid.near(p.x, p.z, 2.5)) {
+      const res = b.type === 'tree' || b.type === 'pine' ? 'wood' : b.type === 'rock' || b.type === 'boulder' ? 'stone' : null;
+      if (res) consider(boxDist(b, p.x, p.z) + 0.6, { kind: 'harvest', ref: b, res });
+    }
+  }
   return best;
 }
 function containerView(p, kind, id) {
@@ -794,13 +1026,20 @@ function containerView(p, kind, id) {
     const mine = h.owner === p.token;
     const squad = !mine && !!h.owner && tokenInSquadWith(p, h.owner);
     const title = mine ? 'Your stash' : `${h.ownerName || 'Unclaimed'}'s stash${squad ? ' (squad)' : ''}`;
-    return { t: 'container', kind, id, title, items: h.items, ammo: 0, parts: h.parts, tech: h.tech, intel: h.intel, salvage: h.salvage, canPut: mine || squad, cap: stashCap(id), gunsmith: mine, bank: mine, upg: mine ? h.upg : null };
+    return { t: 'container', kind, id, title, items: h.items, ...Object.fromEntries(RESOURCES.map((r) => [r, h[r] || 0])), ammo: 0, canPut: mine || squad, cap: stashCap(id), gunsmith: mine, bank: mine, craft: mine, upg: mine ? h.upg : null };
+  }
+  if (kind === 'crate') {
+    const st = structs.get(id);
+    if (!st) return { t: 'container', closed: true };
+    const mine = canManage(p, st);
+    return { t: 'container', kind, id, title: `${st.ownerName}'s ${stageDef(st).name.toLowerCase()}${mine ? '' : ' (not yours)'}`, items: st.items, ...Object.fromEntries(RESOURCES.map((r) => [r, st[r] || 0])), canPut: mine, cap: stageDef(st).slots, craft: st.owner === p.token, upgradable: mine && !!PIECES.crate.stages[st.stage + 1] };
   }
   const bag = db.bags.find((b) => b.id === id);
-  return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ammo: bag.ammo, parts: bag.parts || 0, tech: bag.tech || 0, intel: bag.intel || 0, salvage: bag.salvage || 0, canPut: false, cap: 0 } : { t: 'container', closed: true };
+  return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ...Object.fromEntries(RESOURCES.map((r) => [r, bag[r] || 0])), canPut: false, cap: 0 } : { t: 'container', closed: true };
 }
 function nearContainer(p, kind, id) {
   if (kind === 'stash') { const h = map.houses[id]; return h && Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6; }
+  if (kind === 'crate') { const st = structs.get(id); return st && boxDist(structBox(st), p.x, p.z) < INTERACT_RANGE + 0.6; }
   const bag = db.bags.find((b) => b.id === id);
   return bag && Math.hypot(bag.x - p.x, bag.z - p.z) < INTERACT_RANGE + 0.6;
 }
@@ -815,6 +1054,14 @@ function interact(p) {
   if (it.kind === 'terminal') return startHack(p, 'terminal', it.ref.id);
   if (it.kind === 'drop') return startHack(p, 'drop', it.ref.id);
   if (it.kind === 'crate') return startHack(p, 'crate', it.ref.id);
+  if (it.kind === 'harvest') {
+    const tool = it.res === 'wood' ? 'hatchet' : 'pickaxe';
+    if (!hasTool(p, tool)) return toast(p, `You need a ${tool} to gather ${it.res}`);
+    const hv = harvested.get(it.ref.id);
+    if (hv && hv.uses >= BUILD.harvest.uses && hv.regrowAt > Date.now()) return toast(p, 'Nothing left here — it regrows in a while');
+    return startHack(p, 'harvest', it.ref.id, { res: it.res });
+  }
+  if (it.kind === 'struct') return structInteract(p, it.ref);
   if (it.kind === 'contact') {
     // Deliver any recovered crates first, then open the contact board.
     for (const pkg of p.inv.pack.filter((i) => i.kind === 'package')) {
@@ -859,10 +1106,40 @@ function interact(p) {
   }
 }
 
+function structInteract(p, st) {
+  const def = PIECES[st.type];
+  const stage = stageDef(st);
+  if (canManage(p, st)) {
+    if (def.container && st.stage >= 0 && !(msg_upgradeIntent(p))) {
+      p.openContainer = { kind: 'crate', id: st.id };
+      return send(p.ws, containerView(p, 'crate', st.id));
+    }
+    if (def.door && st.stage > 0 && !msg_upgradeIntent(p)) {
+      if (st.open && [...players.values(), ...bots.values()].some((c) => !c.dead && boxDist(structBox(st), c.x, c.z) < 0.5)) return toast(p, 'Gateway blocked');
+      st.open = !st.open;
+      return;
+    }
+    const next = def.stages[st.stage + 1];
+    if (!next) return toast(p, `${stage.name} is fully built`);
+    if (!hasTool(p, 'hammer')) return toast(p, 'You need a hammer to upgrade');
+    for (const [k, v] of Object.entries(next.cost)) if ((p[k] || 0) < v) return toast(p, `${next.name} needs ${costText(next.cost)} (carried)`);
+    return startHack(p, 'upgrade', st.id);
+  }
+  // Someone else's structure.
+  if (def.container) { p.openContainer = { kind: 'crate', id: st.id }; return send(p.ws, containerView(p, 'crate', st.id)); }
+  if (stage.material === 'frame') return toast(p, `${st.ownerName}'s ${stage.name.toLowerCase()}`);
+  if (def.door && !st.open && level(p) >= GADGETS.doorHack.level && p.tech >= GADGETS.doorHack.cost && !hasTool(p, 'hatchet') && !hasTool(p, 'pickaxe')) return startHack(p, 'gatehack', st.id);
+  const tool = stage.material === 'stone' ? 'pickaxe' : hasTool(p, 'hatchet') ? 'hatchet' : hasTool(p, 'pickaxe') ? 'pickaxe' : null;
+  if (!tool || !hasTool(p, tool)) return toast(p, stage.material === 'stone' ? 'Stone — break it with a pickaxe or a breach charge' : 'Chop it down with a hatchet, or use a breach charge');
+  return startHack(p, 'raid', st.id, { tool });
+}
+// In build mode, interacting with your own crate/gate upgrades it instead of opening it.
+function msg_upgradeIntent(p) { return !!p.buildIntent; }
+
 function containerAction(p, msg) {
   const { kind, id } = p.openContainer || {};
   if (!kind || !nearContainer(p, kind, id)) { p.openContainer = null; return send(p.ws, { t: 'container', closed: true }); }
-  const store = kind === 'stash' ? db.houses[id] : db.bags.find((b) => b.id === id);
+  const store = kind === 'stash' ? db.houses[id] : kind === 'crate' ? structs.get(id) : db.bags.find((b) => b.id === id);
   if (!store) return;
   if (msg.action === 'take') {
     if (RESOURCES.includes(msg.res)) { p[msg.res] += store[msg.res] || 0; store[msg.res] = 0; }
@@ -873,11 +1150,12 @@ function containerAction(p, msg) {
       store.items.splice(idx, 1);
     }
   } else if (msg.action === 'put') {
-    if (kind !== 'stash') return;
-    const h = db.houses[id];
-    if (!(h.owner === p.token || (h.owner && tokenInSquadWith(p, h.owner)))) return;
+    if (kind === 'bag') return;
+    if (kind === 'stash') { const h = db.houses[id]; if (!(h.owner === p.token || (h.owner && tokenInSquadWith(p, h.owner)))) return; }
+    if (kind === 'crate' && !canManage(p, store)) return;
     if (RESOURCES.includes(msg.res)) { store[msg.res] = (store[msg.res] || 0) + p[msg.res]; p[msg.res] = 0; dirty(p); return refreshContainerViewers(kind, id); }
-    if (store.items.length >= stashCap(id)) return toast(p, 'Stash full — upgrade storage');
+    const cap = kind === 'stash' ? stashCap(id) : stageDef(store).slots;
+    if (store.items.length >= cap) return toast(p, kind === 'stash' ? 'Stash full — upgrade storage' : 'Crate full — reinforce it for more room');
     const idx = p.inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0 || p.inv.pack[idx].kind === 'package') return;
     store.items.push(p.inv.pack.splice(idx, 1)[0]);
@@ -908,9 +1186,9 @@ function findOwnedWeapon(p, itemId) {
   if (p.houseId !== null) return db.houses[p.houseId].items.find((i) => i.id === itemId) || null;
   return null;
 }
-/** Pay a cost from carried resources first, then the stash you're standing at. Commendations are personal. */
-function spend(p, cost) {
-  const stash = db.houses[p.houseId];
+/** Pay a cost from carried resources first, then the stash/crate you're at. Commendations are personal. */
+function spend(p, cost, store = db.houses[p.houseId]) {
+  const stash = store;
   for (const [k, v] of Object.entries(cost)) {
     const have = k === 'comms' ? p.comms : p[k] + (stash[k] || 0);
     if (have < v) return false;
@@ -1054,6 +1332,12 @@ function invAction(p, msg) {
 
 // ---------------------------------------------------------------- deployment + travel
 /** Where a player may enter the map from. */
+function homeLabel(id) {
+  const h = map.houses[id];
+  if (h.townId !== null) return `stash house in ${map.towns[h.townId].name}`;
+  const near = map.towns.reduce((a, t) => (!a || Math.hypot(t.x - h.x, t.z - h.z) < Math.hypot(a.x - h.x, a.z - h.z) ? t : a), null);
+  return `${HOME_KINDS[h.kind].name.toLowerCase()} near ${near.name}`;
+}
 function deployOptions(p) {
   const own = ownedHouse(p.token);
   return {
@@ -1061,10 +1345,11 @@ function deployOptions(p) {
     freeHouses: own === null ? map.houses.filter((h) => !db.houses[h.id].owner).map((h) => h.id) : [],
     contacts: p.discovered,
     lzs: map.landingZones.map((l) => l.id),
+    crates: [...structs.values()].filter((st) => st.owner === p.token && PIECES[st.type].container).map((st) => ({ id: st.id, x: st.x, z: st.z })),
   };
 }
 function placeAt(p, x, z) {
-  const fixed = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3));
+  const fixed = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3), terrain.height(x, z));
   p.x = fixed.x; p.z = fixed.z;
   send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true });
 }
@@ -1080,13 +1365,17 @@ function handleDeploy(p, msg) {
     h.doorHp = doorMax(msg.id);
     p.houseId = msg.id;
     at = map.houses[msg.id].crate;
-    feed(`${p.name} claimed a stash house in ${map.towns[map.houses[msg.id].townId].name}`);
+    feed(`${p.name} claimed a ${homeLabel(msg.id)}`);
   } else if (msg.kind === 'house') {
     if (own === null) return;
     at = map.houses[own].crate;
   } else if (msg.kind === 'contact') {
     if (!p.discovered.includes(msg.id)) return;
     at = { x: map.contacts[msg.id].x + 3, z: map.contacts[msg.id].z + 3 };
+  } else if (msg.kind === 'crate') {
+    const st = structs.get(msg.id);
+    if (!st || st.owner !== p.token || !PIECES[st.type].container) return;
+    at = { x: st.x, z: st.z + 1.4 };
   } else if (msg.kind === 'lz') {
     at = map.landingZones[msg.id];
     if (!at) return;
@@ -1161,7 +1450,7 @@ function handleJoin(ws, msg) {
   if (p.houseId !== null) db.houses[p.houseId].ownerName = name;
   p.deploying = !!p.needsDeploy;
   if (p.deploying) p.dead = true;
-  else if (!p.dead) { const fixed = resolveCircle(p.x, p.z, PLAYER_RADIUS, solidsNear(p.x, p.z, 3)); p.x = fixed.x; p.z = fixed.z; }
+  else if (!p.dead) { const fixed = resolveCircle(p.x, p.z, PLAYER_RADIUS, solidsNear(p.x, p.z, 3), terrain.height(p.x, p.z)); p.x = fixed.x; p.z = fixed.z; }
   players.set(p.id, p);
   ws.player = p;
   send(ws, {
@@ -1191,7 +1480,7 @@ function handleState(p, msg) {
   const maxStep = SPRINT_SPEED * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
-  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2));
+  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain);
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
   p.x = np.x; p.z = np.z;
   p.yaw = Number(msg.yaw) || 0;
@@ -1282,7 +1571,7 @@ wss.on('connection', (ws) => {
       case 'shoot': return handleShoot(p, msg);
       case 'reload': return handleReload(p);
       case 'swap': if (!p.dead && p.reloadUntil < Date.now()) { p.active = p.active === 'primary' ? 'secondary' : 'primary'; if (!p.inv[p.active]) p.active = p.active === 'primary' ? 'secondary' : 'primary'; dirty(p); } return;
-      case 'interact': return !p.dead && interact(p);
+      case 'interact': p.buildIntent = !!msg.build; return !p.dead && interact(p);
       case 'container': return !p.dead && containerAction(p, msg);
       case 'closeContainer': p.openContainer = null; return;
       case 'inv': return !p.dead && invAction(p, msg);
@@ -1304,6 +1593,9 @@ wss.on('connection', (ws) => {
         if (!p.camoOn && p.tech <= 0) return toast(p, 'No tech to power camo');
         p.camoOn = !p.camoOn; dirty(p); return;
       case 'leaderboard': return send(p.ws, leaderboard());
+      case 'build': return !p.dead && handleBuild(p, msg);
+      case 'dismantle': return !p.dead && dismantle(p, msg);
+      case 'craft': return !p.dead && craft(p, msg);
       case 'dev':
         // Test-only helpers (teleport / die), never enabled unless the server is started with ALLOW_DEV=1.
         if (process.env.ALLOW_DEV !== '1') return;
@@ -1340,6 +1632,8 @@ function snapshotFor(r, views, now) {
     houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: doorMax(h.id), open: s.doorOpen, owner: s.ownerName, upg: s.upg }; }),
     terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
     objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
+    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: stageDef(st).hp, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0 })),
+    charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   };
 }
 
@@ -1349,6 +1643,7 @@ const loop = setInterval(() => {
   const dt = 1 / TICK_HZ;
   updateBots(dt, now);
   tickHacks(now);
+  for (const c of [...charges.values()]) if (c.detAt <= now) explode(c, now);
   if (tick % 10 === 0) tickSensors(now);
   if (tick % TICK_HZ === 0) {
     manageAmbientBots();

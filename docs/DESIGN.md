@@ -9,12 +9,74 @@ attachments you chose in the gunsmith, and both are unlocked by level.
 
 ## The world
 
-- **One persistent 8 × 8 km map** (the size of PUBG's Erangel/Miramar): about 40 towns (some
-  of them cities, some industrial) joined by roads, with farms, forests, rocks and abandoned cars in
-  between. It's generated from a seed, so every client builds the identical world locally and the
+- **One persistent 8 × 8 km map** (the size of PUBG's Erangel/Miramar): about 30 towns (some
+  cities, some industrial, some desert adobe towns) joined by roads, over terrain with mountains,
+  forests, desert, lakes and a coastline. It's generated from a seed, so every client builds the identical world locally and the
   server only sends what's within ~320 m of you.
-- Each town has **stash houses** (about 120 in total), a **Contact** NPC in the square, hackable
+- Each town has **stash houses**, and natural homes (caves, rock formations, tree huts and
+  boathouses) are spread through the wilds; about 135 homes in total. Each town also has a **Contact** NPC in the square, hackable
   **terminals**, and loot spots. Rogue patrols spawn around wherever players are.
+
+## Terrain and biomes
+
+The ground is real terrain, generated from the same seed on server and client:
+
+| Region | Where | Feel |
+| --- | --- | --- |
+| **Mountains** | West | Ridges up to ~130 m with snowy peaks, boulders, pines, caves. Steep slopes can't be climbed |
+| **Forest** | North | Rolling hills, dense woods, giant hollow trees, lots of wood to chop |
+| **Plains and cities** | Centre | Farmland and most towns; the city fades into forest and desert around it |
+| **Desert** | South-east | Dunes, cacti, adobe towns and ruins, rock formations, stone to mine |
+| **Water** | East coast and lakes | The sea and lakes block you past wading depth; boathouses sit on the shores |
+
+Biome borders are noise-warped, so they meander and blend instead of following straight lines.
+Towns sit on flattened ground. Bullets, line of sight and tagging all respect hills: you can take
+cover behind a ridge.
+
+## Homes: five kinds of stash house
+
+| Home | Biome | Character |
+| --- | --- | --- |
+| Town house | Towns | Close to Contacts, terminals and loot, and to everyone else |
+| Mountain cave | Mountains | Thick rock walls, a roof and one way in; hard to approach unseen |
+| Rock formation | Desert | A ring of boulders with open sightlines across the sand |
+| Giant tree hut | Forest | A hollowed giant tree, hidden under the canopy |
+| Boathouse | Lake/sea shore | Water at your back with a jetty |
+
+All of them are claimable and raidable the same way (door, stash, gunsmith, upgrades), and all of
+them can be fortified further with things you build.
+
+## Building (DayZ-style)
+
+1. **Tools** (carried, lost on death): **hammer** (place and upgrade), **hatchet** (chop trees →
+   wood, and chop wooden walls), **pickaxe** (mine rocks → stone, and break stone walls). New
+   characters start with a hammer and hatchet. More are found in loot (farms, forests, industry,
+   mountains) or crafted at your stash house or one of your crates.
+2. **Materials:** **wood** (4 chops per tree, 6 each, regrows), **stone** (4 per rock, 5 each), and
+   **salvage** (metal and nails, scavenged).
+3. **Place a frame** in build mode (**X** / D-pad ▶) wherever you like in the wild: not inside
+   towns, not on water, not on steep ground, not next to Contacts or landing zones. Frames are
+   scaffolding you can walk and shoot through.
+4. **Upgrade in stages** (E / A in build mode, with a 3 s action):
+
+| Piece | Frame | Stage 2 | Stage 3 |
+| --- | --- | --- | --- |
+| Wall (4 m) | 10 wood · 300 HP | Wooden wall: 15 wood · 1500 HP | Stone wall: 20 stone + 10 salvage · 4000 HP |
+| Gate (4 m) | 10 wood · 300 HP | Wooden gate: 15 wood + 10 salvage · 1400 HP | Reinforced: 15 stone + 20 salvage · 3500 HP |
+| Barricade | 8 wood · 800 HP (crouch cover) | — | — |
+| Stash crate | 20 wood · 20 slots | Reinforced: 10 stone + 15 salvage · 40 slots | — |
+
+- **Gates** open and close for you and your squad. Anyone else has to break them, hack them
+  (level 8, tech) or blow them up.
+- **Stash crates** are extra storage anywhere. They aren't locked (your walls are the protection),
+  you can redeploy at them, and you can craft at them.
+- **Dismantle** your own pieces (Q / Y in build mode) for half the materials back.
+
+**Raiding a base:** bullets barely scratch built walls (wood takes 15% damage, stone 4%). Instead,
+chop wood with a **hatchet** (350 damage per 6 s), break stone with a **pickaxe** (500 per 8 s), or
+craft a **breach charge** (level 7: 30 salvage, 20 tech, 20 parts). It's placed against a wall,
+gate or stash door and goes off after 8 s, wrecking everything within 4.5 m and hurting anyone
+standing near it. Owners get an alert whenever someone starts breaking in.
 
 ## Entering the map, and dying
 
@@ -142,7 +204,8 @@ they're within 9 m or a tag or sensor has exposed them, so it can't be beaten by
   alongside player level.
 - Offline raid protection: should doors get tougher while the owner is offline?
 - Vehicles: 8 km is a long walk. Bikes or trucks would pair well with the walk-home rule.
-- Terrain height (hills, rivers) on top of the current flat ground.
+- Rivers, bridges and boats; climbable watchtowers and multi-storey builds.
+- Base decay or upkeep, so abandoned bases eventually fall apart.
 - More gadgets: UAV drone, cross-com sync shot (squad fires together on tagged targets for a bonus),
   intel jammer.
 - Clans/factions above squads, with a shared clan stronghold.

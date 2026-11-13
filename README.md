@@ -1,6 +1,8 @@
 # Deadzone (working title)
 
-A prototype **third-person shooter** set in one **persistent, always-PvP 8 × 8 km open world** (PUBG-sized).
+A prototype **third-person shooter** set in one **persistent, always-PvP 8 × 8 km open world** (PUBG-sized),
+with mountains, forest, desert, cities, lakes and a coastline, natural homes (caves, rock formations,
+giant tree huts, boathouses) and **DayZ-style base building**.
 
 - **Level-based progression, not random drops.** You earn XP by playing: time alive in the zone,
   kills (players are worth more, especially high-level ones), breaching stash houses, building gear.
@@ -31,6 +33,9 @@ A prototype **third-person shooter** set in one **persistent, always-PvP 8 × 8 
   You deploy by picking your stash house on the map; after a death you redeploy at home, at a
   discovered Contact, or at a landing zone. Fast travel only goes out from home. See
   [docs/DESIGN.md](docs/DESIGN.md).
+- **Building:** chop trees (hatchet) and mine rocks (pickaxe) for wood and stone, then place
+  frames and upgrade them into wooden or stone walls, gates, barricades and stash crates, anywhere
+  in the wild. Raid other bases with hatchets, pickaxes, gate hacks or breach charges.
 - Open-world rules: no safe zones, no instancing. When you die, everything you carried drops in a bag
   anyone can loot. When you log off, your character stays where you stood.
 - **Stash houses are part of the live world.** Each player is given a walled stash house with a crate.
@@ -54,7 +59,8 @@ interval), `DATA_FILE` (where the world is saved; default `data/world.json`).
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
 H medkit · Tab inventory · F tag · G sensor grenade · V optical camo · T rally (squad leader) ·
-B squad ping · P squad panel and leaderboard · M map (controller layout below). Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
+B squad ping · P squad panel and leaderboard · M map · X build mode (1-5 piece, R rotate, click
+place, E upgrade, Q dismantle). Controller layout below. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
 
 ## Playing on a phone with a Backbone One (or any controller)
 
@@ -75,8 +81,10 @@ smaller HUD for landscape.
 | X / Y | Reload / swap weapon | Y: gunsmith exploded view |
 | RB / LB | Tag target / sensor grenade | |
 | R3 (click right stick) | Optical camo | |
-| D-pad ▲ ▼ ◀ ▶ | Medkit · squad ping · Rally (leader) · squad panel | Move highlight |
-| View (⧉) / Menu (☰) | Inventory / map | Map: LT/RT zoom |
+| D-pad ▲ ▼ ◀ ▶ | Medkit · squad ping · Rally (leader) · build mode | Move highlight |
+| View (⧉) / Menu (☰) | Inventory (squad panel button inside) / map | Map: LT/RT zoom |
+
+In build mode: LB/RB pick a piece, X rotates, RT places, A upgrades, Y dismantles, ▶ exits.
 
 On-screen prompts switch to controller buttons as soon as you use the controller.
 

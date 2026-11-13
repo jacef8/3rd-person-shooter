@@ -224,15 +224,19 @@ export function makeConsumable(kind) {
  */
 export function worldSupply(index, zone = 'town') {
   const tables = {
-    town:       [['parts', 15], ['ammo', 60], ['medkit'], ['parts', 10], ['tech', 8], ['salvage', 10]],
-    industrial: [['salvage', 25], ['salvage', 20], ['parts', 20], ['salvage', 30], ['tech', 10]],
-    farm:       [['salvage', 15], ['ammo', 60], ['medkit'], ['salvage', 15], ['parts', 15]],
-    forest:     [['tech', 12], ['salvage', 15], ['medkit'], ['ammo', 60]],
+    town:       [['parts', 15], ['ammo', 60], ['medkit'], ['parts', 10], ['tech', 8], ['salvage', 10], ['tool', 'hammer']],
+    industrial: [['salvage', 25], ['salvage', 20], ['parts', 20], ['tool', 'pickaxe'], ['salvage', 30], ['tech', 10], ['tool', 'hammer']],
+    farm:       [['wood', 20], ['ammo', 60], ['medkit'], ['salvage', 15], ['tool', 'hatchet'], ['parts', 15]],
+    forest:     [['wood', 15], ['tech', 12], ['medkit'], ['tool', 'hatchet'], ['ammo', 60]],
     road:       [['parts', 20], ['ammo', 60], ['salvage', 12], ['tech', 8]],
+    desert:     [['salvage', 25], ['ammo', 60], ['stone', 15], ['parts', 15], ['tech', 10]],
+    mountain:   [['stone', 20], ['tech', 12], ['tool', 'pickaxe'], ['salvage', 15], ['medkit']],
+    lake:       [['wood', 15], ['ammo', 60], ['salvage', 12], ['medkit']],
   };
   const t = tables[zone] || tables.town;
   const [kind, amount] = t[index % t.length];
-  const names = { parts: 'Parts Cache', ammo: 'Ammo Box', medkit: 'Medkit', tech: 'Electronics', salvage: 'Salvage' };
+  const names = { parts: 'Parts Cache', ammo: 'Ammo Box', medkit: 'Medkit', tech: 'Electronics', salvage: 'Salvage', wood: 'Lumber', stone: 'Stone' };
+  if (kind === 'tool') return { kind: 'tool', tool: amount, name: amount[0].toUpperCase() + amount.slice(1) };
   return amount ? { kind, name: names[kind], amount } : { kind, name: names[kind] };
 }
 

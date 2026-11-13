@@ -1,6 +1,24 @@
 // Full-map rendering for the map screen (M), the deploy/redeploy screen and fast travel.
 const COL = { grass: '#3f4d31', town: '#4b4f55', building: '#7b7f86', road: '#2c2f33', tree: '#24391f', house: '#a8774c', farm: '#8a6d4c' };
 
+const GC = { plains: [92, 115, 64], forest: [54, 82, 41], desert: [199, 171, 115], mountain: [115, 110, 102], snow: [230, 232, 240], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
+/** Map colour (0-255 RGB) for a point: biome blend, water, beaches, snow, shaded by slope. */
+export function mapGroundColor(map, x, z, H = map.terrain.height) {
+  const t = map.terrain;
+  const h = H(x, z);
+  if (h < -6) return GC.deep;
+  if (h < 0) return GC.water;
+  if (h < 1.4) return GC.sand;
+  const b = t.biome(x, z);
+  const c = [0, 0, 0];
+  for (const k of ['plains', 'forest', 'desert', 'mountain']) for (let i = 0; i < 3; i++) c[i] += GC[k][i] * b[k];
+  for (let i = 0; i < 3; i++) c[i] += GC.sand[i] * b.sea;
+  if (h > 95) { const s = Math.min(1, (h - 95) / 20); for (let i = 0; i < 3; i++) c[i] = c[i] * (1 - s) + GC.snow[i] * s; }
+  // Hill shading from the slope toward the light (north-west).
+  const shade = Math.max(0.6, Math.min(1.35, 1 + (h - H(x - 12, z - 12)) * 0.04));
+  return c.map((v) => Math.min(255, v * shade));
+}
+
 /** Draw the static world once into an offscreen canvas. */
 export function buildMapBase(map, px = 1400) {
   const c = document.createElement('canvas');
@@ -8,13 +26,26 @@ export function buildMapBase(map, px = 1400) {
   const g = c.getContext('2d');
   const k = px / map.size;
   const X = (x) => (x + map.half) * k, Z = (z) => (z + map.half) * k;
-  g.fillStyle = COL.grass; g.fillRect(0, 0, px, px);
+  // Terrain: sample a coarse grid and scale it up smoothly.
+  const res = Math.round(px / 5);
+  const tc = Object.assign(document.createElement('canvas'), { width: res, height: res });
+  const tg = tc.getContext('2d');
+  const img = tg.createImageData(res, res);
+  for (let i = 0; i < res; i++) for (let j = 0; j < res; j++) {
+    // Direct evaluation here: going through the cached sampler would fill it for the whole map.
+    const col = mapGroundColor(map, -map.half + (i + 0.5) * map.size / res, -map.half + (j + 0.5) * map.size / res, map.terrain.exact);
+    const o = (j * res + i) * 4;
+    img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
+  }
+  tg.putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = true;
+  g.drawImage(tc, 0, 0, px, px);
   g.strokeStyle = COL.road; g.lineWidth = Math.max(2, 8 * k);
   for (const r of map.roads) { g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke(); }
   for (const t of map.towns) { g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {
-    if (b.type === 'tree') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
-    if (b.type === 'border' || b.type === 'cover' || b.type === 'rock' || b.type === 'car' || b.type === 'terminal') continue;
+    if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
+    if (['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty'].includes(b.type)) continue;
     g.fillStyle = b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : COL.building;
     g.fillRect(X(b.minX), Z(b.minZ), Math.max(1, (b.maxX - b.minX) * k), Math.max(1, (b.maxZ - b.minZ) * k));
   }

@@ -9,9 +9,12 @@ import {
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import { createWorldView } from '/worldview.js';
-import { buildMapBase, drawMap } from '/mapview.js';
+import { buildMapBase, drawMap, mapGroundColor } from '/mapview.js';
+import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, placementProblem } from '/shared/building.js';
 
 const $ = (id) => document.getElementById(id);
+/** Terrain height under a point (0 before the world exists). */
+const ground = (x, z) => (state.map ? state.map.terrain.height(x, z) : 0);
 
 // ------------------------------------------------------------------ renderer / scene
 const canvas = $('game');
@@ -72,7 +75,7 @@ function initWorld(m) {
   // Contacts: friendly NPCs standing in each town square.
   for (const c of map.contacts) {
     const g = makeCharacter('contact', c.name);
-    g.position.set(c.x, 0, c.z);
+    g.position.set(c.x, ground(c.x, c.z), c.z);
     g.rotation.y = Math.PI / 4;
     setLabel(g.userData.label, `✦ ${c.name}`, '#7fd6ff');
     g.userData.bars.visible = false;
@@ -90,10 +93,10 @@ function syncHouses(list) {
     if (!v) {
       const d = def.door;
       const door = new THREE.Mesh(new THREE.BoxGeometry(d.maxX - d.minX, d.h, d.maxZ - d.minZ), doorMat.clone());
-      door.position.set((d.minX + d.maxX) / 2, d.h / 2, (d.minZ + d.maxZ) / 2);
+      door.position.set((d.minX + d.maxX) / 2, d.y0 + d.h / 2, (d.minZ + d.maxZ) / 2);
       door.castShadow = true;
       const label = makeLabel('', 0.012);
-      label.position.set(def.x, 5.2, def.z);
+      label.position.set(def.x, ground(def.x, def.z) + 5.2, def.z);
       scene.add(door, label);
       houseVis.set(h.id, (v = { door, label }));
     }
@@ -118,7 +121,7 @@ function syncTerminals(list) {
     if (!mesh) {
       const t = state.map.terminals[id];
       mesh = new THREE.Mesh(termGeo, new THREE.MeshStandardMaterial({ color: 0x23303a, emissive: 0x16c2ff, emissiveIntensity: 0.7 }));
-      mesh.position.set(t.x, 0.75, t.z - 0.17);
+      mesh.position.set(t.x, state.map.towns[t.townId].elev + 0.75, t.z - 0.17);
       scene.add(mesh);
       termVis.set(id, mesh);
     }
@@ -138,7 +141,7 @@ function syncDrops() {
     beam.position.y = 30;
     g.add(crate, beam);
     g.userData = { crate, drop: d };
-    g.position.set(d.x, 0, d.z);
+    g.position.set(d.x, ground(d.x, d.z), d.z);
     scene.add(g);
     dropVis.set(d.id, g);
   }
@@ -150,7 +153,7 @@ function syncObjectives(list) {
   for (const o of list) {
     if (objVis.has(o.id)) continue;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 0.7, 0.8), new THREE.MeshStandardMaterial({ color: 0xffc53d, emissive: 0x553300 }));
-    mesh.position.set(o.x, 0.35, o.z);
+    mesh.position.set(o.x, ground(o.x, o.z) + 0.35, o.z);
     scene.add(mesh);
     objVis.set(o.id, mesh);
   }
@@ -233,6 +236,7 @@ function updateCharacterMesh(g, c, dt) {
   const k = Math.min(1, dt * 12);
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
+  g.position.y = ground(g.position.x, g.position.z);
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
@@ -288,7 +292,7 @@ function syncEntities(list, store, create) {
   for (const e of list) {
     seen.add(e.id);
     let rec = store.get(e.id);
-    if (!rec) { rec = { mesh: create(e) }; rec.mesh.position.set(e.x, 0, e.z); store.set(e.id, rec); }
+    if (!rec) { rec = { mesh: create(e) }; rec.mesh.position.set(e.x, ground(e.x, e.z), e.z); store.set(e.id, rec); }
     rec.data = e;
   }
   for (const [id, rec] of store) if (!seen.has(id)) { scene.remove(rec.mesh); store.delete(id); }
@@ -340,7 +344,8 @@ function feedLine(text) {
 }
 
 // ------------------------------------------------------------------ minimap
-const MM_COLORS = { building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
+const MM_COLORS = { pine: '#1f3a24', boulder: '#6a6560', adobe: '#a88a64', cactus: '#3f6a33', cavewall: '#5a5550', caveroof: 'rgba(0,0,0,0)', rockwall: '#8c7258', logwall: '#5a3d24', plankwall: '#7a5e3e', canopy: 'rgba(0,0,0,0)', jetty: '#7a5e3e', building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
+const mmTerrain = { canvas: null, x: 0, z: 0, span: 1 };
 function drawMinimap() {
   const c = $('minimap'), g = c.getContext('2d');
   const R = 100, view = 80;   // metres shown radius
@@ -348,9 +353,24 @@ function drawMinimap() {
   g.clearRect(0, 0, 200, 200);
   g.save();
   g.beginPath(); g.arc(R, R, R, 0, Math.PI * 2); g.clip();
-  g.fillStyle = '#26301f'; g.fillRect(0, 0, 200, 200);
+  // Terrain layer (re-rendered when you've moved a bit).
+  if (!mmTerrain.canvas || Math.hypot(state.x - mmTerrain.x, state.z - mmTerrain.z) > 12) {
+    mmTerrain.canvas ??= Object.assign(document.createElement('canvas'), { width: 48, height: 48 });
+    const tg = mmTerrain.canvas.getContext('2d');
+    const img = tg.createImageData(48, 48);
+    const span = view * 2 * 1.2;
+    for (let i = 0; i < 48; i++) for (let j = 0; j < 48; j++) {
+      const x = state.x - span / 2 + (i + 0.5) * span / 48, z = state.z - span / 2 + (j + 0.5) * span / 48;
+      const c = mapGroundColor(state.map, x, z);
+      const o = (j * 48 + i) * 4;
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+    }
+    tg.putImageData(img, 0, 0);
+    mmTerrain.x = state.x; mmTerrain.z = state.z; mmTerrain.span = span;
+  }
   const X = (x) => R + (x - state.x) * k, Z = (z) => R + (z - state.z) * k;
-  for (const t of state.map.towns) { const q = t.rect; g.fillStyle = '#2f3236'; g.fillRect(X(q.minX), Z(q.minZ), (q.maxX - q.minX) * k, (q.maxZ - q.minZ) * k); }
+  g.imageSmoothingEnabled = true;
+  g.drawImage(mmTerrain.canvas, X(mmTerrain.x - mmTerrain.span / 2), Z(mmTerrain.z - mmTerrain.span / 2), mmTerrain.span * k, mmTerrain.span * k);
   for (const b of state.map.grid.near(state.x, state.z, view * 1.42)) {
     g.fillStyle = b.type === 'housewall' && b.houseId === state.houseId ? '#4fbf6a' : MM_COLORS[b.type] || '#3a3f44';
     g.fillRect(X(b.minX), Z(b.minZ), Math.max(1.5, (b.maxX - b.minX) * k), Math.max(1.5, (b.maxZ - b.minZ) * k));
@@ -396,7 +416,7 @@ function handle(m) {
       Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, doorBase: m.doorBase });
       if (!state.map) initWorld(m);
       selfMesh.visible = true;
-      selfMesh.position.set(m.x, 0, m.z);
+      selfMesh.position.set(m.x, ground(m.x, m.z), m.z);
       $('login').hidden = true; $('hud').hidden = false;
       if (m.deploy) openMapScreen(m.firstDeploy ? 'first' : 'redeploy', m.deploy);
       else { toast('Back in the zone where you left off.'); lockPointer(); }
@@ -405,7 +425,7 @@ function handle(m) {
       for (const p of m.players) {
         if (p.id === state.id) { state.selfSnap = p; continue; }
         let rec = state.players.get(p.id);
-        if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, 0, p.z); state.players.set(p.id, rec); }
+        if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, ground(p.x, p.z), p.z); state.players.set(p.id, rec); }
         rec.data = p;
         setCharacterGun(rec.mesh, p.gun);
         setLabel(rec.mesh.userData.label, `${p.sq ? '◆ ' : ''}${p.name}  [${p.level}]${p.hacking ? '  ⌁ hacking' : ''}`, p.sq ? '#7dff9a' : '#ffb27a');
@@ -416,7 +436,7 @@ function handle(m) {
         let rec = state.bots.get(b.id);
         if (!rec) {
           rec = { mesh: makeCharacter('bot', b.name || 'Rogue') };
-          rec.mesh.position.set(b.x, 0, b.z);
+          rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
           setCharacterGun(rec.mesh, { a: b.kind === 'hvt' ? 'dmr' : 'carbine', paint: 'factory' });
           if (b.kind === 'hvt') rec.mesh.scale.setScalar(1.15);
           state.bots.set(b.id, rec);
@@ -430,6 +450,8 @@ function handle(m) {
       syncHouses(m.houses);
       syncTerminals(m.terminals || []);
       syncObjectives(m.objectives || []);
+      syncStructs(m.structs || []);
+      syncCharges(m.charges || []);
       break;
     }
     case 'you': {
@@ -442,6 +464,7 @@ function handle(m) {
       if (state.invOpen) renderInventory();
       if (state.gunsmithOpen) renderGunsmith();
       setCloak(selfMesh, m.camoActive ? 0.3 : 1);
+      if (build.on) renderBuildBar();
       document.body.classList.toggle('cloaked', !!m.camoActive);
       updateGadgetBar();
       setCharacterGun(selfMesh, m.inv[m.active] ? { a: m.inv[m.active].archetype, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
@@ -449,7 +472,7 @@ function handle(m) {
     }
     case 'correct':
       state.x = m.x; state.z = m.z;
-      if (m.force) { selfMesh.position.set(m.x, 0, m.z); state.view?.update(m.x, m.z); }
+      if (m.force) { selfMesh.position.set(m.x, ground(m.x, m.z), m.z); state.view?.update(m.x, m.z); }
       break;
     case 'shot': {
       // Suppressed fire from other players only shows up close.
@@ -491,9 +514,9 @@ function handle(m) {
       break;
     case 'sensor': {
       const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff9b21 }));
-      mesh.position.set(m.x, 0.2, m.z);
+      mesh.position.set(m.x, ground(m.x, m.z) + 0.2, m.z);
       const ring = new THREE.Mesh(new THREE.RingGeometry(m.radius - 0.15, m.radius, 48), new THREE.MeshBasicMaterial({ color: 0xff9b21, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
-      ring.rotation.x = -Math.PI / 2; ring.position.set(m.x, 0.05, m.z);
+      ring.rotation.x = -Math.PI / 2; ring.position.set(m.x, ground(m.x, m.z) + 0.3, m.z);
       scene.add(mesh, ring);
       state.sensors.push({ meshes: [mesh, ring], until: performance.now() + (m.until - Date.now()) });
       break;
@@ -541,6 +564,7 @@ function handle(m) {
       state.contact = m;
       openContact();
       break;
+    case 'boom': boomFx(m.x, m.y, m.z); break;
     case 'contractDone':
       toast(`✔ Contract complete: ${m.name} — ${Object.entries(m.reward).map(([k, v]) => `+${v} ${k === 'comms' ? 'commendations' : k}`).join(', ')}`);
       break;
@@ -571,7 +595,7 @@ function updateHud() {
   $('reserve').textContent = me.ammo;
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
-  $('resources').innerHTML = `<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades">⛭ ${me.salvage} salvage</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
+  $('resources').innerHTML = `<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades, building">⛭ ${me.salvage} salvage</span><span title="Building: chop trees with a hatchet">🪵 ${me.wood}</span><span title="Building: mine rocks with a pickaxe">⛰ ${me.stone}</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
   const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
   $('level').textContent = `LEVEL ${me.level}`;
   $('xpbar').style.width = me.level >= MAX_LEVEL ? '100%' : `${((me.xp - lo) / (hi - lo)) * 100}%`;
@@ -579,6 +603,9 @@ function updateHud() {
 }
 
 function statLine(item) {
+  if (item.kind === 'tool') return TOOLS[item.tool]?.desc || '';
+  if (item.kind === 'charge') return CRAFTS.charge.desc;
+  if (item.kind === 'package') return 'Contract crate — deliver to any Contact';
   if (item.kind === 'weapon') {
     const s = weaponStats(item);
     return `${Math.round(s.damage)}${s.pellets > 1 ? `×${s.pellets}` : ''} dmg · ${Math.round(s.rpm)} rpm · ${s.mag} mag · ${Math.round(s.range)} m`;
@@ -663,6 +690,7 @@ function renderInventory() {
       box.append(tr);
     }
     if (c.upg) box.append(upgradePanel(c));
+    if (c.craft) box.append(craftPanel(c));
     if (c.canPut) {
       const dep = document.createElement('div');
       dep.className = 'gsentry';
@@ -810,20 +838,39 @@ function closeMapScreen() {
   $('mapscreen').hidden = true;
   if (state.mapMode === 'view' || state.mapMode === 'travel') lockPointer();
 }
+const HOME_ICONS = { house: '🏠', cave: '⛰', rockfort: '🪨', treehut: '🌳', boathouse: '⚓' };
+const HOME_NAMES = { house: 'Town house', cave: 'Mountain cave', rockfort: 'Rock formation', treehut: 'Giant tree hut', boathouse: 'Boathouse' };
+function homeLabel(id, icon = false) {
+  const map = state.map, h = map.houses[id];
+  if (h.townId !== null) return `${icon ? '🏠 ' : ''}${map.towns[h.townId].name}`;
+  const near = map.towns.reduce((a, t) => (!a || Math.hypot(t.x - h.x, t.z - h.z) < Math.hypot(a.x - h.x, a.z - h.z) ? t : a), null);
+  return `${icon ? HOME_ICONS[h.kind] + ' ' : ''}${HOME_NAMES[h.kind]} near ${near.name}`;
+}
 /** The options the side list shows for the current mode. */
 function mapOptions() {
   const map = state.map, o = state.deployOpts || {};
-  const town = (h) => map.towns[map.houses[h].townId].name;
+  const town = (h) => homeLabel(h);
   if (state.mapMode === 'first') {
-    // One entry per town with free houses (the first free one), so a controller can pick quickly.
-    const byTown = new Map();
-    for (const id of o.freeHouses || []) { const t = map.houses[id].townId; if (!byTown.has(t)) byTown.set(t, []); byTown.get(t).push(id); }
-    return [...byTown.entries()].map(([t, ids]) => ({ label: `${map.towns[t].name} — ${ids.length} free`, x: map.houses[ids[0]].x, z: map.houses[ids[0]].z, msg: { t: 'deploy', kind: 'claim', id: ids[0] }, color: '#ffd29a' }));
+    // One entry per town (town houses) plus one per natural home (caves, rock formations, tree huts,
+    // boathouses), so a controller can pick quickly.
+    const byTown = new Map(), natural = [];
+    for (const id of o.freeHouses || []) {
+      const t = map.houses[id].townId;
+      if (t === null) { natural.push(id); continue; }
+      if (!byTown.has(t)) byTown.set(t, []);
+      byTown.get(t).push(id);
+    }
+    const colors = { cave: '#b0a89a', rockfort: '#e0b070', treehut: '#7fc46a', boathouse: '#7fc4e8' };
+    return [
+      ...[...byTown.entries()].map(([t, ids]) => ({ label: `🏠 ${map.towns[t].name} — ${ids.length} free`, x: map.houses[ids[0]].x, z: map.houses[ids[0]].z, msg: { t: 'deploy', kind: 'claim', id: ids[0] }, color: '#ffd29a' })),
+      ...natural.map((id) => ({ label: homeLabel(id, true), x: map.houses[id].x, z: map.houses[id].z, msg: { t: 'deploy', kind: 'claim', id }, color: colors[map.houses[id].kind] })),
+    ];
   }
   if (state.mapMode === 'redeploy') {
     const list = [];
     if (o.houseId !== null && o.houseId !== undefined) list.push({ label: `Your stash house (${town(o.houseId)})`, x: map.houses[o.houseId].x, z: map.houses[o.houseId].z, msg: { t: 'deploy', kind: 'house' }, color: '#4fbf6a' });
     for (const id of o.contacts || []) list.push({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' });
+    for (const c of o.crates || []) list.push({ label: 'Your stash crate', x: c.x, z: c.z, msg: { t: 'deploy', kind: 'crate', id: c.id }, color: '#c9a36b' });
     for (const id of o.lzs || []) list.push({ label: map.landingZones[id].name, x: map.landingZones[id].x, z: map.landingZones[id].z, msg: { t: 'deploy', kind: 'lz', id }, color: '#e0e0e0' });
     return list;
   }
@@ -838,7 +885,7 @@ function renderMapScreen() {
   if (!state.mapOpen || !state.map) return;
   const titles = { first: 'Choose your stash house', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
-    first: 'This is your base: it stays in the world while you\'re offline, and anyone can raid it. Pick a town — you\'ll spawn at the house.',
+    first: 'This is your base: it stays in the world while you\'re offline, and anyone can raid it. Pick a town house, or a natural home — a mountain cave, desert rock formation, giant forest tree or lakeside boathouse. You can fortify it later by building walls and gates around it.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
     view: 'Gold ◆ contracts · red ● supply drops · blue ✦ Contacts (dim = undiscovered) · green = home & squad.',
@@ -1113,6 +1160,17 @@ function doAction(a) {
       return;
   }
   if (state.me.dead || state.invOpen || state.panelOpen || state.mapOpen || state.contactOpen) return;
+  if (a === 'build') { toggleBuild(); return; }
+  if (build.on) {
+    // In build mode the same buttons drive building.
+    switch (a) {
+      case 'interact': send({ t: 'interact', build: true }); return;
+      case 'reload': build.rot ^= 1; return;
+      case 'tag': cyclePiece(1); return;
+      case 'sensor': cyclePiece(-1); return;
+      case 'swap': dismantleAimed(); return;
+    }
+  }
   switch (a) {
     case 'interact': send({ t: 'interact' }); break;
     case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
@@ -1162,6 +1220,13 @@ addEventListener('mouseup', (e) => {
   if (e.button === 2) state.aiming = false;
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
+addEventListener('keydown', (e) => {
+  // Build mode: X toggles, 1-5 pick a piece.
+  if (document.activeElement === $('name') || !state.me) return;
+  if (e.code === 'KeyX' && !e.repeat) doAction('build');
+  if (build.on && /^Digit[1-5]$/.test(e.code)) { build.piece = Object.keys(PIECES)[Number(e.code.slice(5)) - 1]; renderBuildBar(); e.stopImmediatePropagation(); }
+}, true);
+addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
   KeyQ: 'swap', Digit1: 'swap', Digit2: 'swap', KeyH: 'heal', KeyC: 'crouch', ControlLeft: 'crouch',
@@ -1185,13 +1250,17 @@ addEventListener('keyup', (e) => state.keys.delete(e.code));
 addEventListener('blur', () => { state.keys.clear(); state.mouseDown = false; state.aiming = false; });
 
 // ------------------------------------------------------------------ simulation helpers
+function structSolid(sv) { const st = sv.data; const mat = PIECES[st.type].stages[st.stage].material; return mat !== 'frame' && !PIECES[st.type].explosive && !(PIECES[st.type].door && st.open); }
+function structBoxOf(st) { return { ...pieceBox(st.type, st.x, st.z, st.rot, st.y0), type: 'struct', structId: st.id }; }
 function solidsNear(x, z, r) {
   const out = state.map.grid.near(x, z, r);
+  for (const sv of structVis.values()) if (structSolid(sv) && Math.abs(sv.data.x - x) < r + 3 && Math.abs(sv.data.z - z) < r + 3) out.push(structBoxOf(sv.data));
   for (const d of state.doorSolids) if (Math.abs(d.minX - x) < r + 2 && Math.abs(d.minZ - z) < r + 2) out.push(d);
   return out;
 }
 function solidsAlongRay(ox, oz, dx, dz, dist) {
   const out = state.map.grid.ray(ox, oz, dx, dz, dist);
+  for (const sv of structVis.values()) if (structSolid(sv)) out.push(structBoxOf(sv.data));
   return out.concat(state.doorSolids);
 }
 
@@ -1199,17 +1268,18 @@ function lookDir() {
   return new THREE.Vector3(Math.sin(state.yaw) * Math.cos(state.pitch), Math.sin(state.pitch), Math.cos(state.yaw) * Math.cos(state.pitch));
 }
 
-function eyeHeight() { return state.crouch ? CROUCH_EYE : STAND_EYE; }
+function eyeHeight() { return ground(state.x, state.z) + (state.crouch ? CROUCH_EYE : STAND_EYE); }
 
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
   const o = camera.position, d = lookDir();
   let best = rayAgainstBoxes(o.x, o.y, o.z, d.x, d.y, d.z, solidsAlongRay(o.x, o.z, d.x, d.z, 400), 400).t;
+  best = Math.min(best, state.map.terrain.ray(o.x, o.y, o.z, d.x, d.y, d.z, Math.min(best, 400)));
   const minT = o.distanceTo(new THREE.Vector3(state.x, eyeHeight(), state.z));
   state.aimTargetId = null;
   const test = (c) => {
     if (!c || c.dead) return;
-    const b = characterBounds(c.x, c.z, c.crouch);
+    const b = characterBounds(c.x, c.z, c.crouch, ground(c.x, c.z));
     const t = rayBox(o.x, o.y, o.z, d.x, d.y, d.z, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
     if (t > minT && t < best) { best = t; state.aimTargetId = c.sq ? null : c.id; }
   };
@@ -1252,6 +1322,25 @@ function nearestInteractable() {
   for (const c of state.map.contacts) if (Math.abs(c.x - state.x) < 5 && Math.abs(c.z - state.z) < 5) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.8, `Talk to ${c.name} — contracts & field gear`);
   for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
   for (const o of state.objectives) consider(Math.hypot(o.x - state.x, o.z - state.z) - 0.5, 'Recover contract crate (3s)');
+  const me = state.me;
+  const has = (t) => me?.inv.pack.some((i) => i.kind === 'tool' && i.tool === t);
+  for (const sv of structVis.values()) {
+    const st = sv.data, def = PIECES[st.type], stage = def.stages[st.stage];
+    if (def.explosive) continue;
+    const d = Math.hypot(Math.max(structBoxOf(st).minX - state.x, 0, state.x - structBoxOf(st).maxX), Math.max(structBoxOf(st).minZ - state.z, 0, state.z - structBoxOf(st).maxZ)) + 0.3;
+    let text;
+    const next = def.stages[st.stage + 1];
+    const hp = ` <small>${st.hp}/${st.max} HP</small>`;
+    if (st.mine) {
+      if (build.on) text = next ? `Upgrade to ${next.name} (${Object.entries(next.cost).map(([k, v]) => `${v} ${k}`).join(', ')})${has('hammer') ? '' : ' — needs a hammer'}` : `${stage.name} — fully built`;
+      else if (def.container) text = `Open ${stage.name.toLowerCase()}`;
+      else if (def.door && st.stage > 0) text = st.open ? 'Close gate' : 'Open gate';
+      else text = `${stage.name}${next ? ' — press X for build mode to upgrade' : ''}`;
+    } else if (def.container) text = `Search ${st.owner}'s crate`;
+    else if (stage.material === 'frame') text = `${st.owner}'s ${stage.name.toLowerCase()}`;
+    else text = stage.material === 'stone' ? (has('pickaxe') ? `Break ${st.owner}'s ${stage.name.toLowerCase()} (pickaxe)` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a pickaxe or breach charge`) : (has('hatchet') || has('pickaxe') ? `Chop through ${st.owner}'s ${stage.name.toLowerCase()}` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a hatchet`);
+    consider(d, text + hp);
+  }
   for (const [id, hs] of state.houseState) {
     const h = state.map.houses[id];
     const own = id === state.houseId;
@@ -1261,6 +1350,15 @@ function nearestInteractable() {
     const lockText = (state.me?.level ?? 1) >= GADGETS.doorHack.level ? `Hack lock (${GADGETS.doorHack.cost} tech, 8s)` : `Locked — shoot it down (hack at lvl ${GADGETS.doorHack.level})`;
     const doorText = own || squadHouse ? (hs.hp <= 0 ? (own ? 'Rebuild door' : 'Doorway (breached)') : hs.open ? 'Close door' : 'Open door') : (hs.hp <= 0 ? 'Doorway (breached)' : hs.open ? 'Doorway (open)' : `${lockText} · ${Math.round(hs.hp / hs.max * 100)}%`);
     consider(Math.hypot((d.minX + d.maxX) / 2 - state.x, (d.minZ + d.maxZ) / 2 - state.z), doorText);
+  }
+  if (!best) {
+    for (const b of state.map.grid.near(state.x, state.z, 2.5)) {
+      const wood = b.type === 'tree' || b.type === 'pine', stone = b.type === 'rock' || b.type === 'boulder';
+      if (!wood && !stone) continue;
+      const tool = wood ? 'hatchet' : 'pickaxe';
+      const d = Math.hypot(Math.max(b.minX - state.x, 0, state.x - b.maxX), Math.max(b.minZ - state.z, 0, state.z - b.maxZ)) + 0.6;
+      consider(d, has(tool) ? (wood ? 'Chop tree for wood (3s)' : 'Mine rock for stone (3s)') : `${wood ? 'Tree' : 'Rock'} — needs a ${tool}`);
+    }
   }
   return best;
 }
@@ -1302,23 +1400,23 @@ function drawMarkers() {
       const c = state.players.get(id)?.data || state.bots.get(id)?.data;
       if (!c || c.dead) continue;
       const d = Math.hypot(c.x - state.x, c.z - state.z);
-      marker(`x${id}`, e.kind === 'mark' ? 'tag' : 'sensed', e.kind === 'mark' ? `◆ ${Math.round(d)}m` : '●', new THREE.Vector3(c.x, (c.crouch ? 1.2 : 1.8) + 0.5, c.z));
+      marker(`x${id}`, e.kind === 'mark' ? 'tag' : 'sensed', e.kind === 'mark' ? `◆ ${Math.round(d)}m` : '●', new THREE.Vector3(c.x, ground(c.x, c.z) + (c.crouch ? 1.2 : 1.8) + 0.5, c.z));
     }
     for (const [id, r] of state.players) {
       if (!r.data.sq || r.data.dead) continue;
-      marker(`s${id}`, 'squad', `▼ ${r.data.name}`, new THREE.Vector3(r.data.x, 2.6, r.data.z));
+      marker(`s${id}`, 'squad', `▼ ${r.data.name}`, new THREE.Vector3(r.data.x, ground(r.data.x, r.data.z) + 2.6, r.data.z));
     }
     state.pings = state.pings.filter((p) => p.until > now);
-    state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${Math.round(Math.hypot(p.x - state.x, p.z - state.z))}m`, new THREE.Vector3(p.x, 1.5, p.z)));
-    for (const ct of state.contracts) marker(`c${ct.id}`, 'objective', `◆ ${CONTRACT_TYPES[ct.type].name} · ${Math.round(Math.hypot(ct.x - state.x, ct.z - state.z))}m`, new THREE.Vector3(ct.x, 2.5, ct.z));
-    for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${Math.round(Math.hypot(d.x - state.x, d.z - state.z))}m`, new THREE.Vector3(d.x, 3, d.z));
+    state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${Math.round(Math.hypot(p.x - state.x, p.z - state.z))}m`, new THREE.Vector3(p.x, ground(p.x, p.z) + 1.5, p.z)));
+    for (const ct of state.contracts) marker(`c${ct.id}`, 'objective', `◆ ${CONTRACT_TYPES[ct.type].name} · ${Math.round(Math.hypot(ct.x - state.x, ct.z - state.z))}m`, new THREE.Vector3(ct.x, ground(ct.x, ct.z) + 2.5, ct.z));
+    for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${Math.round(Math.hypot(d.x - state.x, d.z - state.z))}m`, new THREE.Vector3(d.x, ground(d.x, d.z) + 3, d.z));
     if (state.houseId !== null && state.houseId !== undefined) {
       const hh = state.map.houses[state.houseId];
       const dh = Math.hypot(hh.x - state.x, hh.z - state.z);
-      if (dh > 40) marker('home', 'squad', `⌂ Home ${Math.round(dh)}m`, new THREE.Vector3(hh.x, 4, hh.z));
+      if (dh > 40) marker('home', 'squad', `⌂ Home ${Math.round(dh)}m`, new THREE.Vector3(hh.x, ground(hh.x, hh.z) + 4, hh.z));
     }
     state.alerts = state.alerts.filter((a) => a.until > now);
-    state.alerts.forEach((a, i) => marker(`a${i}`, 'alert', '⚠', new THREE.Vector3(a.x, 2, a.z)));
+    state.alerts.forEach((a, i) => marker(`a${i}`, 'alert', '⚠', new THREE.Vector3(a.x, ground(a.x, a.z) + 2, a.z)));
   }
   for (const [k, el] of markerEls) if (!el.dataset.seen) { el.remove(); markerEls.delete(k); }
   for (let i = state.sensors.length - 1; i >= 0; i--) {
@@ -1416,10 +1514,10 @@ function renderSquadPanel() {
 const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, L3: 10, R3: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
 const PAD_ACTIONS = {
   [BTN.A]: 'interact', [BTN.B]: 'crouch', [BTN.X]: 'reload', [BTN.Y]: 'swap', [BTN.LB]: 'sensor', [BTN.RB]: 'tag',
-  [BTN.R3]: 'camo', [BTN.UP]: 'heal', [BTN.DOWN]: 'ping', [BTN.LEFT]: 'rally', [BTN.RIGHT]: 'squadPanel',
+  [BTN.R3]: 'camo', [BTN.UP]: 'heal', [BTN.DOWN]: 'ping', [BTN.LEFT]: 'rally', [BTN.RIGHT]: 'build',
   [BTN.VIEW]: 'inventory', [BTN.MENU]: 'map',
 };
-const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: '▶' };
+const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: '☰', X: '▶', LMB: 'RT' };
 const pad = { prev: [], moveX: 0, moveY: 0, sprint: false, navAt: 0, settings: { lookSpeed: 2.6, invertY: false } };
 function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : k; }
 
@@ -1555,6 +1653,202 @@ new MutationObserver(() => {
   if (p && !p.contains(document.activeElement)) { const l = focusables(p); if (l.length) padFocus(l.find((el) => el.tagName === 'BUTTON') || l[0]); }
 }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
 
+$('openSquadBtn').onclick = () => { closeInventory(); openSquadPanel(); };
+$('openMapBtn').onclick = () => { closeInventory(); openMapScreen('view'); };
+
+// ------------------------------------------------------------------ building (client)
+const build = { on: false, piece: 'wall', rot: 0, ghost: null, ok: false, x: 0, z: 0 };
+const structVis = new Map();   // id -> { mesh, data, key }
+const chargeVis = new Map();
+const STRUCT_MATS = {
+  frame: new THREE.MeshStandardMaterial({ color: 0x9b7a52, transparent: true, opacity: 0.55, roughness: 1 }),
+  wood: new THREE.MeshStandardMaterial({ color: 0x7a5533, roughness: 0.95 }),
+  stone: new THREE.MeshStandardMaterial({ color: 0x7d7c78, roughness: 1, flatShading: true }),
+  charge: new THREE.MeshStandardMaterial({ color: 0xff2a2a, emissive: 0x880000 }),
+};
+function structMesh(st) {
+  const def = PIECES[st.type], stage = def.stages[st.stage];
+  const b = pieceBox(st.type, st.x, st.z, st.rot, st.y0);
+  const w = b.maxX - b.minX, d = b.maxZ - b.minZ, h = b.h + 0.15;
+  const g = new THREE.Group();
+  const mat = STRUCT_MATS[stage.material] || STRUCT_MATS.wood;
+  if (stage.material === 'frame') {
+    // Scaffolding: posts and rails you can see (and walk) through.
+    const long = Math.max(w, d), alongX = w >= d;
+    for (const f of [-0.5, 0, 0.5]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.15, h, 0.15), mat);
+      post.position.set(alongX ? f * (long - 0.15) : 0, h / 2, alongX ? 0 : f * (long - 0.15));
+      g.add(post);
+    }
+    for (const y of [0.4, h - 0.1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(alongX ? long : 0.12, 0.12, alongX ? 0.12 : long), mat);
+      rail.position.y = y;
+      g.add(rail);
+    }
+  } else if (def.door) {
+    const long = Math.max(w, d), alongX = w >= d;
+    for (const f of [-0.5, 0.5]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(alongX ? 0.3 : d, h, alongX ? d : 0.3), mat);
+      post.position.set(alongX ? f * (long - 0.3) : 0, h / 2, alongX ? 0 : f * (long - 0.3));
+      g.add(post);
+    }
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(alongX ? long : d, 0.3, alongX ? d : long), mat);
+    lintel.position.y = h - 0.15;
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(alongX ? long - 0.6 : d * 0.8, h - 0.3, alongX ? d * 0.8 : long - 0.6), mat.clone());
+    panel.material.color.multiplyScalar(0.8);
+    panel.position.y = (h - 0.3) / 2;
+    panel.visible = !st.open;
+    g.add(lintel, panel);
+    g.userData.panel = panel;
+  } else {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.y = h / 2;
+    g.add(m);
+  }
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  g.position.set(st.x, b.y0, st.z);
+  scene.add(g);
+  return g;
+}
+function syncStructs(list) {
+  const seen = new Set();
+  for (const st of list) {
+    seen.add(st.id);
+    const key = `${st.stage}`;
+    let v = structVis.get(st.id);
+    if (v && v.key !== key) { scene.remove(v.mesh); v = null; }
+    if (!v) { v = { mesh: structMesh(st), key }; structVis.set(st.id, v); }
+    v.data = st;
+    if (v.mesh.userData.panel) v.mesh.userData.panel.visible = !st.open;
+  }
+  for (const [id, v] of structVis) if (!seen.has(id)) { scene.remove(v.mesh); structVis.delete(id); }
+}
+function syncCharges(list) {
+  const seen = new Set(list.map((c) => c.id));
+  for (const c of list) {
+    if (chargeVis.has(c.id)) continue;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.3, 0.4), STRUCT_MATS.charge);
+    m.position.set(c.x, c.y + 0.4, c.z);
+    scene.add(m);
+    chargeVis.set(c.id, m);
+  }
+  for (const [id, m] of chargeVis) if (!seen.has(id)) { scene.remove(m); chargeVis.delete(id); }
+}
+function boomFx(x, y, z) {
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.9 }));
+  ball.position.set(x, y, z);
+  scene.add(ball);
+  const t0 = performance.now();
+  const step = () => {
+    const f = (performance.now() - t0) / 600;
+    if (f >= 1) { scene.remove(ball); ball.geometry.dispose(); return; }
+    ball.scale.setScalar(1 + f * 6);
+    ball.material.opacity = 0.9 * (1 - f);
+    requestAnimationFrame(step);
+  };
+  step();
+  const d = Math.hypot(x - state.x, z - state.z);
+  if (d < 40) state.recoil += 0.05 * (1 - d / 40);
+}
+
+function toggleBuild() {
+  build.on = !build.on;
+  $('buildbar').hidden = !build.on;
+  document.body.classList.toggle('building', build.on);
+  if (build.on) toast('Build mode: aim and place. Frames are cheap; upgrade them (E) to make them solid.');
+  else if (build.ghost) { scene.remove(build.ghost); build.ghost = null; }
+  renderBuildBar();
+}
+function cyclePiece(dir) {
+  const keys = Object.keys(PIECES);
+  build.piece = keys[(keys.indexOf(build.piece) + dir + keys.length) % keys.length];
+  renderBuildBar();
+}
+function renderBuildBar() {
+  const me = state.me;
+  if (!me) return;
+  const items = Object.entries(PIECES).map(([k, p]) => {
+    const st = p.stages[0];
+    const cost = p.explosive ? `${me.inv.pack.filter((i) => i.kind === 'charge').length} carried` : Object.entries(st.cost).map(([r, v]) => `${v} ${r}`).join(' ');
+    return `<div class="bpiece ${k === build.piece ? 'sel' : ''}"><kbd>${p.key}</kbd>${p.name}<small>${cost}</small></div>`;
+  }).join('');
+  const pad = state.inputMode === 'pad';
+  $('buildbar').innerHTML = `<div class="pieces">${items}</div><div class="bhint">${pad
+    ? 'LB/RB piece · X rotate · RT place · A upgrade · Y dismantle · ▶ exit'
+    : '1-5 piece · R / wheel rotate · Click place · E upgrade · Q dismantle · X exit'}${me.inv.pack.some((i) => i.tool === 'hammer') ? '' : ' · <b style="color:#ff6b6b">You need a hammer</b>'}</div>`;
+}
+const buildWorldClient = () => ({
+  terrain: state.map.terrain, towns: state.map.towns, contacts: state.map.contacts, landingZones: state.map.landingZones,
+  solidsNear: (x, z, r) => {
+    const out = solidsNear(x, z, r);
+    for (const sv of structVis.values()) if (!structSolid(sv) && !PIECES[sv.data.type].explosive && Math.abs(sv.data.x - x) < r + 3 && Math.abs(sv.data.z - z) < r + 3) out.push(structBoxOf(sv.data));
+    return out;
+  },
+});
+function updateBuildGhost() {
+  if (!build.on || !state.me || state.me.dead) { if (build.ghost) build.ghost.visible = false; return; }
+  const def = PIECES[build.piece];
+  const key = `${build.piece}:${build.rot}`;
+  if (!build.ghost || build.ghost.userData.key !== key) {
+    if (build.ghost) scene.remove(build.ghost);
+    const b = pieceBox(build.piece, 0, 0, build.rot);
+    build.ghost = new THREE.Mesh(new THREE.BoxGeometry(b.maxX - b.minX, b.h, b.maxZ - b.minZ), new THREE.MeshBasicMaterial({ color: 0x5fd35f, transparent: true, opacity: 0.4, depthWrite: false }));
+    build.ghost.userData.key = key;
+    scene.add(build.ghost);
+  }
+  // Aim point, pulled back to build reach and snapped to a 0.5 m grid.
+  const p = aimPoint();
+  let dx = p.x - state.x, dz = p.z - state.z;
+  const d = Math.hypot(dx, dz), reach = def.explosive ? 1.8 : BUILD.reach - 0.5;
+  if (d > reach) { dx *= reach / d; dz *= reach / d; }
+  build.x = Math.round((state.x + dx) * 2) / 2;
+  build.z = Math.round((state.z + dz) * 2) / 2;
+  let problem;
+  if (def.explosive) {
+    const near = [...structVis.values()].some((sv) => { const b = structBoxOf(sv.data); return Math.hypot(Math.max(b.minX - build.x, 0, build.x - b.maxX), Math.max(b.minZ - build.z, 0, build.z - b.maxZ)) < 1.6; })
+      || [...state.houseState.keys()].some((id) => { const dd = state.map.houses[id].door; return Math.hypot(Math.max(dd.minX - build.x, 0, build.x - dd.maxX), Math.max(dd.minZ - build.z, 0, build.z - dd.maxZ)) < 1.6; });
+    problem = near ? null : 'Place it against a wall, gate or door';
+  } else problem = placementProblem(buildWorldClient(), build.piece, build.x, build.z, build.rot, state);
+  build.ok = !problem;
+  build.problem = problem;
+  build.ghost.visible = true;
+  build.ghost.material.color.setHex(build.ok ? 0x5fd35f : 0xff4040);
+  const b = pieceBox(build.piece, build.x, build.z, build.rot);
+  const gy = Math.min(...[[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].map(([a, c]) => ground(a, c)));
+  build.ghost.position.set(build.x, gy + b.h / 2, build.z);
+}
+function placePiece() {
+  if (!build.ok) { toast(build.problem || 'Can\'t build there'); return; }
+  send({ t: 'build', piece: build.piece, x: build.x, z: build.z, rot: build.rot });
+}
+function dismantleAimed() {
+  let best = null, bd = 4;
+  for (const sv of structVis.values()) {
+    if (!sv.data.mine) continue;
+    const b = structBoxOf(sv.data);
+    const d = Math.hypot(Math.max(b.minX - state.x, 0, state.x - b.maxX), Math.max(b.minZ - state.z, 0, state.z - b.maxZ));
+    if (d < bd) { bd = d; best = sv.data; }
+  }
+  if (best) send({ t: 'dismantle', id: best.id }); else toast('Stand next to one of your structures to dismantle it');
+}
+function craftPanel(c) {
+  const me = state.me;
+  const wrap = document.createElement('div');
+  wrap.className = 'upgrades';
+  wrap.innerHTML = '<h2>Craft tools</h2>';
+  const have = (k) => (me[k] || 0) + (c[k] || 0);
+  for (const [key, d] of Object.entries(CRAFTS)) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">${d.name}</div><div class="st">${TOOLS[key]?.desc || d.desc || ''}</div><div class="at">${Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(' · ')}${me.level < d.level ? ` · needs level ${d.level}` : ''}</div></div>`;
+    const b = btn('Craft', () => send({ t: 'craft', item: key }));
+    b.disabled = me.level < d.level || !Object.entries(d.cost).every(([k, v]) => have(k) >= v);
+    row.append(b);
+    wrap.append(row);
+  }
+  return wrap;
+}
+
 // ------------------------------------------------------------------ main loop
 let last = performance.now();
 function frame(now) {
@@ -1584,10 +1878,11 @@ function frame(now) {
     const len = Math.hypot(mx, mz);
     if (len > 0.05) {
       if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
-      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3));
+      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain);
       state.x = p.x; state.z = p.z;
     }
-    if (state.mouseDown) tryFire(now); else state.firedThisPress = false;
+    if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
+    else if (state.mouseDown) tryFire(now); else state.firedThisPress = false;
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
@@ -1621,7 +1916,8 @@ function frame(now) {
   const hit = rayAgainstBoxes(pivot.x, pivot.y, pivot.z, toCam.x, toCam.y, toCam.z, solidsNear(pivot.x, pivot.z, tl + 1), tl);
   const camDist = Math.max(0.3, Math.min(tl, hit.t - 0.25));
   camera.position.copy(pivot).addScaledVector(toCam, camDist);
-  if (camera.position.y < 0.3) camera.position.y = 0.3;
+  const camGround = Math.max(ground(camera.position.x, camera.position.z), 0);
+  if (camera.position.y < camGround + 0.4) camera.position.y = camGround + 0.4;
   camera.lookAt(camera.position.clone().add(d));
   // Optic zoom sets ADS field of view; handling sets how fast you get there.
   const ws = me && weaponStats(me.inv[me.active]);
@@ -1639,8 +1935,9 @@ function frame(now) {
     const left = g.userData.drop.landsAt - Date.now();
     g.userData.crate.position.y = left > 0 ? 0.5 + Math.min(60, left / 1000) : 0.5;
   }
-  sun.position.set(state.x + 40, 80, state.z + 25);
-  sun.target.position.set(state.x, 0, state.z);
+  const gy0 = ground(state.x, state.z);
+  sun.position.set(state.x + 40, gy0 + 80, state.z + 25);
+  sun.target.position.set(state.x, gy0, state.z);
 
   for (let i = tracers.length - 1; i >= 0; i--) {
     const t = tracers[i];
@@ -1654,6 +1951,8 @@ function frame(now) {
   renderer.render(scene, camera);
   drawGunsmith(dt);
   drawMarkers();
+  updateBuildGhost();
+  for (const v of chargeVis.values()) v.visible = Math.floor(now / 300) % 2 === 0;
 }
 requestAnimationFrame(frame);
 
