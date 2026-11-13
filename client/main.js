@@ -5,7 +5,7 @@ import {
 } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
-  xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS,
+  xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
@@ -693,6 +693,40 @@ function drawMinimap() {
   g.restore();
 }
 
+// ------------------------------------------------------------------ special sights: thermal, spotter, rangefinder, lens glint
+const HEAT = new THREE.Color(0xffb060);
+/** Make a character (or animal) glow as seen through a thermal sight, or put it back. */
+function setHeat(g, on) {
+  if (!!g.userData.hot === on) return;
+  g.userData.hot = on;
+  g.traverse((m) => {
+    if (!m.material || !m.material.emissive) return;
+    if (on) { m.userData.cool = [m.material.emissive.getHex(), m.material.emissiveIntensity, m.material.opacity, m.material.transparent]; m.material.emissive.copy(HEAT); m.material.emissiveIntensity = 1.6; m.material.opacity = 1; m.material.transparent = false; }
+    else if (m.userData.cool) { const [e, i, o, t] = m.userData.cool; m.material.emissive.setHex(e); m.material.emissiveIntensity = i; m.material.opacity = o; m.material.transparent = t; delete m.userData.cool; }
+  });
+}
+const glintGeo = new THREE.SphereGeometry(1, 8, 6), glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+/** The flash of a 12x lens pointed your way: a bright speck that stays visible at range. */
+function setGlint(g, on) {
+  if (on && !g.userData.glint) { g.userData.glint = new THREE.Mesh(glintGeo, glintMat); g.userData.glint.position.set(0, 1.6, 0.2); g.add(g.userData.glint); }
+  if (g.userData.glint) { g.userData.glint.visible = on; if (on) g.userData.glint.scale.setScalar(Math.max(0.05, camera.position.distanceTo(g.position) * 0.004)); }
+}
+let tagAt = 0;
+/** Runs every frame with the stats of the sight you're aiming through (null when you aren't). */
+function updateSight(ws, now) {
+  if (!ws) state.zoomAlt = false;
+  // Thermal: living things within range glow, cloaked or not.
+  const R = COMBAT_RULES.optics.thermalRange, hot = !!ws?.thermal;
+  for (const [, r] of state.players) setHeat(r.mesh, hot && !r.data.dead && Math.hypot(r.data.x - state.x, r.data.z - state.z) < R);
+  for (const [, r] of state.bots) setHeat(r.mesh, hot && Math.hypot(r.data.x - state.x, r.data.z - state.z) < R);
+  // Spotter: tag whoever is under the crosshair for the crew.
+  if (ws?.autoTag && state.aimTargetId && now - tagAt > 900) { tagAt = now; send({ t: 'mark', id: state.aimTargetId }); }
+  // Rangefinder: the range to whatever the crosshair is on.
+  const el = $('rangefinder'), show = !!ws?.rangefinder && state.aimDist > 0 && state.aimDist < 399;
+  if (el.hidden === show) el.hidden = !show;
+  if (show) { const t = `Range ${distText(state.aimDist)}`; if (el.textContent !== t) el.textContent = t; }
+}
+
 // ------------------------------------------------------------------ where am I: the road underfoot and the nearest town
 const AREA = { plains: 'Farmland', forest: 'Pine flatwoods', desert: 'Sandhills', mountain: 'Hill country', sea: 'River swamp' };
 const where = { at: 0, place: null, town: null };
@@ -783,6 +817,7 @@ function handle(m) {
         setCharacterGun(rec.mesh, p.gun);
         setLabel(rec.mesh.userData.label, `${p.sq ? '◆ ' : ''}${p.name}  [${p.level}]${p.hacking ? '  ⌁ hacking' : ''}`, p.sq ? '#7dff9a' : '#ffb27a');
         setCloak(rec.mesh, p.camo ? (p.sq ? 0.35 : 0.12) : 1);
+        setGlint(rec.mesh, !!p.gl);
       }
       for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
@@ -855,7 +890,7 @@ function handle(m) {
       break;
     case 'shot': {
       // Suppressed fire from other players only shows up close.
-      const near = Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < 25;
+      const near = Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < (m.sup === 2 ? 8 : 25);
       if (m.sup && m.from !== state.id && !near) break;
       for (const h of m.hits) addTracer(m.o, h, h[3]);
       break;
@@ -1637,7 +1672,9 @@ function renderStatBars(item, preview) {
   const n = $('gsNumbers');
   const fmt = (x, y, f, suffix = '') => (Math.abs(f(x) - f(y)) > 0.0001 ? `${f(x)}${suffix} → <b>${f(y)}${suffix}</b>` : `${f(x)}${suffix}`);
   n.innerHTML = `Damage ${fmt(cur, nxt, (s) => Math.round(s.damage * s.pellets))} · RPM ${fmt(cur, nxt, (s) => Math.round(s.rpm))} · Mag ${fmt(cur, nxt, (s) => s.mag)}
-    · Range ${fmt(cur, nxt, (s) => Math.round(s.range * 3.28084 / 5) * 5, ' ft')} · Reload ${fmt(cur, nxt, (s) => (s.reloadMs / 1000).toFixed(1), 's')} · Zoom ${fmt(cur, nxt, (s) => s.zoom.toFixed(1), 'x')}${nxt.suppressed ? ' · <b>Suppressed</b>' : ''}`;
+    · Range ${fmt(cur, nxt, (s) => Math.round(s.range * 3.28084 / 5) * 5, ' ft')} · Reload ${fmt(cur, nxt, (s) => (s.reloadMs / 1000).toFixed(1), 's')} · Zoom ${fmt(cur, nxt, (s) => s.zoom.toFixed(1), 'x')}${nxt.zoomAlt ? ` (flips to <b>${(nxt.zoom + nxt.zoomAlt).toFixed(1)}x</b> with ${glyph('V')} while aiming)` : ''}
+    · Against armor ${fmt(cur, nxt, (s) => Math.round(s.armor * 100), '%')} · Against health ${fmt(cur, nxt, (s) => Math.round(s.flesh * 100), '%')}${
+  [['suppressed', 'Suppressed'], ['subsonic', 'Subsonic'], ['thermal', 'Thermal'], ['autoTag', 'Tags what you aim at'], ['rangefinder', 'Rangefinder'], ['glint', 'Lens glint']].filter(([k]) => nxt[k]).map(([, t]) => ` · <b>${t}</b>`).join('')}`;
 }
 
 function setPreviewModel(item) {
@@ -1703,7 +1740,7 @@ function renderGunsmith() {
   renderStatBars(item, previewItem(item, gs.hover));
 
   for (const slot of [...SLOTS, 'paint']) {
-    const cur = slot === 'paint' ? PAINTS[item.paint]?.name : PARTS[item.parts[slot]]?.name;
+    const cur = slot === 'paint' ? PAINTS[item.paint]?.name : PARTS[item.parts[slot] || DEFAULT_PARTS[slot]]?.name;
     const anyFit = slot === 'paint' || Object.entries(PARTS).some(([id, p]) => p.slot === slot && partFits(id, item.archetype) && p.level > 1);
     const b = document.createElement('button');
     b.className = 'gsslot' + (gs.slot === slot ? ' sel' : '');
@@ -1717,7 +1754,7 @@ function renderGunsmith() {
     const b = document.createElement('button');
     const locked = !isUnlocked(def, id, me);
     b.className = 'gsopt' + (equipped ? ' sel' : '') + (locked ? ' locked' : '');
-    b.innerHTML = `${def.field ? '★ ' : ''}${label}${locked ? `<small>${lockLabel(def)}</small>` : equipped ? '<small>equipped</small>' : ''}`;
+    b.innerHTML = `<span class="gsname">${def.field ? '★ ' : ''}${label}${def.style ? `<em>${def.style}</em>` : ''}</span>${locked ? `<small>${lockLabel(def)}</small>` : equipped ? '<small>equipped</small>' : ''}`;
     b.onmouseenter = () => { gs.hover = hover; setPreviewModel(previewItem(item, hover)); renderStatBars(item, previewItem(item, hover)); setExplode(gs.model, gs.explode, gs.slot); };
     b.onmouseleave = () => { gs.hover = null; setPreviewModel(item); renderStatBars(item, item); };
     if (!locked && !equipped) b.onclick = onPick;
@@ -1730,7 +1767,7 @@ function renderGunsmith() {
   } else {
     for (const [id, p] of Object.entries(PARTS)) {
       if (p.slot !== gs.slot || !partFits(id, item.archetype)) continue;
-      option(p.name, p, id, item.parts[gs.slot] === id, { slot: gs.slot, partId: id }, () => send({ t: 'gunsmith', action: 'attach', itemId: item.id, slot: gs.slot, partId: id }));
+      option(p.name, p, id, (item.parts[gs.slot] || DEFAULT_PARTS[gs.slot]) === id, { slot: gs.slot, partId: id }, () => send({ t: 'gunsmith', action: 'attach', itemId: item.id, slot: gs.slot, partId: id }));
     }
   }
 }
@@ -1815,7 +1852,11 @@ function doAction(a) {
       toast(`Grenade: ${state.grenade === 'stun' ? 'Stun grenade' : 'Sensor grenade'}`);
       updateGadgetBar();
       break;
-    case 'camo': send({ t: 'camo' }); break;
+    case 'camo':
+      // While aiming through a two-range sight, the same button flips its magnification.
+      if (state.aiming && weaponStats(state.me.inv[state.me.active])?.zoomAlt) { state.zoomAlt = !state.zoomAlt; break; }
+      send({ t: 'camo' });
+      break;
     case 'rally': send({ t: 'rally' }); break;
     case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
     case 'reload': send({ t: 'reload' }); break;
@@ -1920,6 +1961,7 @@ function aimPoint() {
   for (const [, r] of state.players) test(r.data);
   for (const [, r] of state.bots) test(r.data);
   if (best >= 400) best = 400;
+  state.aimDist = best - minT;   // from you, not from the camera behind you
   return o.clone().addScaledVector(d, best);
 }
 
@@ -2810,7 +2852,8 @@ function frame(now) {
   camera.lookAt(camera.position.clone().add(d));
   // Optic zoom sets ADS field of view; handling sets how fast you get there.
   const ws = me && weaponStats(me.inv[me.active]);
-  const fov = aim && ws ? 70 / ws.zoom : 70;
+  const fov = aim && ws ? 70 / (ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : 70;
+  updateSight(aim ? ws : null, now);
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
   $('crosshair').classList.toggle('aim', aim);
@@ -2849,7 +2892,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { state, send, boatVis };
+window.__dz = { state, send, boatVis, structVis };
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere

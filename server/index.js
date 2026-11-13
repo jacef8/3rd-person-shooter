@@ -1984,7 +1984,7 @@ function tickDowned(now) {
     if (now > p.downedUntil || !canGoDown(p)) killPlayer(p, p.downedBy, p.downedHead);
   }
 }
-function applyDamage(target, amount, attacker, isBot, headshot = false) {
+function applyDamage(target, amount, attacker, isBot, headshot = false, ammo = null) {
   if (target.dead) return;
   if (!isBot && attacker && !attacker.isBot && (inFair(target.x, target.z) || inFair(attacker.x, attacker.z) || inCamp(target.x, target.z) || inCamp(attacker.x, attacker.z))) return;   // the fairgrounds and swamp camps are safe zones
   if (target.npc && target.kind === 'trader') return;   // river traders are left alone by everyone
@@ -1998,9 +1998,11 @@ function applyDamage(target, amount, attacker, isBot, headshot = false) {
     dirty(target);
     return;
   }
+  // Ammunition: armor-piercing chews through plates faster, hollow points hit health harder.
+  const vsArmor = ammo?.armor ?? 1, vsFlesh = ammo?.flesh ?? 1;
   let dmg = amount;
-  if (!isBot && target.armor > 0) { const absorbed = Math.min(target.armor, dmg); target.armor -= absorbed; dmg -= absorbed; }
-  target.hp -= dmg;
+  if (!isBot && target.armor > 0) { const absorbed = Math.min(target.armor, dmg * vsArmor); target.armor -= absorbed; dmg -= absorbed / vsArmor; }
+  target.hp -= dmg * vsFlesh;
   target.lastHit = Date.now();
   if (target.animal) { target.hurtUntil = Date.now() + 6000; target.lastAttacker = attacker; }
   if (target.eventId && attacker && !attacker.isBot) worldEvents.get(target.eventId)?.hitters.add(attacker.token);
@@ -2163,12 +2165,12 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
         notifyOwner(hit.target, `⚠ ${shooter.name} is shooting your stash house door!`);
       }
     } else {
-      applyDamage(hit.target, dmg, shooter, hit.kind === 'bot', hit.headshot);
+      applyDamage(hit.target, dmg, shooter, hit.kind === 'bot', hit.headshot, isBot ? null : s);
       if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2] });
     }
   }
   if (!isBot) { breakCamo(shooter, 2000); shooter.protectedUntil = 0; }
-  const msg = JSON.stringify({ t: 'shot', from: shooter.id, sup: !!s.suppressed, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
+  const msg = JSON.stringify({ t: 'shot', from: shooter.id, sup: s.suppressed ? (s.subsonic ? 2 : 1) : 0, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
   for (const p of players.values()) if (p.ws.readyState === 1 && Math.abs(p.x - ox) < INTEREST && Math.abs(p.z - oz) < INTEREST) p.ws.send(msg);
 }
 function notifyOwner(houseId, text) { notifyStore(db.houses[houseId], text); }
@@ -3468,10 +3470,12 @@ wss.on('connection', (ws) => {
 function snapshotFor(r, views, now) {
   const near = (o, d = INTEREST) => Math.abs(o.x - r.x) < d && Math.abs(o.z - r.z) < d;
   const list = [];
+  const thermal = r.aiming && !r.dead && !!stats(r)?.thermal;   // aiming through a thermal sight
   for (const [p, v] of views) {
     const squad = sameSquad(r, p);
     if (!squad && !near(p) && !exposedTo(p, r)) continue;   // hacked enemies show wherever they are
-    if (p !== r && v.camo && !squad && !exposedTo(p, r) && Math.hypot(p.x - r.x, p.z - r.z) > CAMO_REVEAL_DIST) continue;
+    const d = Math.hypot(p.x - r.x, p.z - r.z);
+    if (p !== r && v.camo && !squad && !exposedTo(p, r) && d > CAMO_REVEAL_DIST && !(thermal && d < COMBAT.optics.thermalRange)) continue;
     list.push(squad && p !== r ? { ...v, sq: 1 } : v);
   }
   return {
@@ -3534,6 +3538,7 @@ const loop = setInterval(() => {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
+      gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
     }]));
     for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(JSON.stringify(snapshotFor(r, views, now)));

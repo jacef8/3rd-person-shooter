@@ -1,5 +1,5 @@
 {
-  "_about": "Weapon platforms, gunsmith parts, paints and armor. Distances in metres, times in ms, spreads in radians. Part mods: fields ending in Mul multiply, others add. \"field\" = commendations needed (bought from Contacts).",
+  "_about": "Weapon platforms, gunsmith parts, paints and armor. Distances in metres, times in ms, spreads in radians. Part mods: fields ending in Mul multiply, true/false fields switch something on, others add. \"field\" = commendations needed (bought from Contacts). \"style\" says who the part is for. Every slot offers at least three real choices on every long gun, and none is simply better: each trades something away. Special mods: zoomAlt = a second magnification you flip to while aiming; thermal = living things glow and optical camo is seen through; autoTag = tags what you aim at for your crew; rangefinder = shows the range to what you aim at; glint = the lens flashes when you aim; armorMul / fleshMul = damage against armor / against health; subsonic = with a suppressor the shot gives nothing away.",
   "fitGroups": {
     "all": [
       "sidearm",
@@ -131,20 +131,24 @@
     "optic",
     "muzzle",
     "barrel",
+    "forearm",
     "underbarrel",
     "magazine",
+    "ammo",
     "stock",
     "trigger"
   ],
   "slotLabels": {
-    "optic": "Optic",
+    "optic": "Sight",
     "muzzle": "Muzzle",
     "barrel": "Barrel",
+    "forearm": "Forearm",
     "underbarrel": "Underbarrel",
     "magazine": "Magazine",
+    "ammo": "Ammunition",
     "stock": "Stock",
     "trigger": "Trigger",
-    "paint": "Paint"
+    "paint": "Skin"
   },
   "parts": {
     "iron": {
@@ -152,7 +156,8 @@
       "name": "Iron Sights",
       "level": 1,
       "fits": "all",
-      "mods": {}
+      "mods": {},
+      "style": "Nothing to slow you down."
     },
     "reflex": {
       "slot": "optic",
@@ -162,18 +167,48 @@
       "mods": {
         "zoom": 0.1,
         "adsSpreadMul": 0.95
-      }
+      },
+      "style": "Close quarters: quickest to the eye."
+    },
+    "tritium": {
+      "slot": "optic",
+      "name": "Night Sights",
+      "level": 4,
+      "fits": "all",
+      "mods": {
+        "handling": 4,
+        "adsSpreadMul": 0.97
+      },
+      "style": "Snap shooting: the fastest sight there is."
     },
     "holo": {
       "slot": "optic",
       "name": "Holographic Sight",
       "level": 5,
-      "fits": "longGuns",
+      "fits": "all",
       "mods": {
         "zoom": 0.2,
         "adsSpreadMul": 0.9,
         "handling": -3
-      }
+      },
+      "style": "Close to mid range: a wider, steadier picture."
+    },
+    "prism": {
+      "slot": "optic",
+      "name": "2x Prism Sight",
+      "level": 7,
+      "fits": [
+        "smg",
+        "carbine",
+        "shotgun",
+        "lmg"
+      ],
+      "mods": {
+        "zoom": 0.7,
+        "adsSpreadMul": 0.86,
+        "handling": -5
+      },
+      "style": "Run and gun at mid range."
     },
     "acog": {
       "slot": "optic",
@@ -188,7 +223,25 @@
         "zoom": 1.4,
         "adsSpreadMul": 0.75,
         "handling": -10
-      }
+      },
+      "style": "Mid-range rifleman."
+    },
+    "lpvo": {
+      "slot": "optic",
+      "name": "1-6x Variable Scope",
+      "level": 13,
+      "fits": [
+        "carbine",
+        "dmr",
+        "lmg"
+      ],
+      "mods": {
+        "zoom": 0.15,
+        "zoomAlt": 2.6,
+        "adsSpreadMul": 0.78,
+        "handling": -13
+      },
+      "style": "Two ranges in one: 1x for the street, 6x for the field. Heavy."
     },
     "sniper": {
       "slot": "optic",
@@ -202,14 +255,94 @@
         "adsSpreadMul": 0.55,
         "handling": -18,
         "hipSpreadMul": 1.3
-      }
+      },
+      "style": "Long-range marksman. Clumsy up close."
+    },
+    "marksman": {
+      "slot": "optic",
+      "name": "6x Marksman Scope",
+      "level": 19,
+      "fits": [
+        "carbine",
+        "dmr",
+        "lmg"
+      ],
+      "mods": {
+        "zoom": 2.3,
+        "adsSpreadMul": 0.65,
+        "handling": -14,
+        "hipSpreadMul": 1.15
+      },
+      "style": "Overwatch from a rooftop or a bluff."
+    },
+    "spotter": {
+      "slot": "optic",
+      "name": "5x Spotter Scope",
+      "level": 21,
+      "fits": [
+        "carbine",
+        "dmr",
+        "lmg"
+      ],
+      "mods": {
+        "zoom": 1.9,
+        "adsSpreadMul": 0.72,
+        "handling": -12,
+        "autoTag": true,
+        "rangefinder": true
+      },
+      "style": "Team spotter: tags whoever you aim at for your crew and reads the range."
+    },
+    "thermal": {
+      "slot": "optic",
+      "name": "Thermal Sight",
+      "level": 23,
+      "fits": "longGuns",
+      "mods": {
+        "zoom": 0.9,
+        "adsSpreadMul": 0.85,
+        "handling": -12,
+        "thermal": true
+      },
+      "style": "Hunter: people and animals glow, and optical camo does not hide them."
+    },
+    "long12": {
+      "slot": "optic",
+      "name": "12x Long-Range Scope",
+      "level": 27,
+      "fits": [
+        "dmr"
+      ],
+      "mods": {
+        "zoom": 4.6,
+        "adsSpreadMul": 0.42,
+        "handling": -24,
+        "hipSpreadMul": 1.5,
+        "glint": true
+      },
+      "style": "Extreme range. The lens flashes when you aim, so they know."
+    },
+    "fieldOptic": {
+      "slot": "optic",
+      "name": "Field Hybrid Sight",
+      "level": 6,
+      "field": 3,
+      "fits": "longGuns",
+      "mods": {
+        "zoom": 0.15,
+        "zoomAlt": 1.4,
+        "adsSpreadMul": 0.84,
+        "handling": -6
+      },
+      "style": "Two ranges in one: flip the magnifier in and out while aiming."
     },
     "noMuzzle": {
       "slot": "muzzle",
       "name": "Bare Muzzle",
       "level": 1,
       "fits": "all",
-      "mods": {}
+      "mods": {},
+      "style": "Nothing fitted."
     },
     "compensator": {
       "slot": "muzzle",
@@ -219,7 +352,8 @@
       "mods": {
         "recoilMul": 0.8,
         "hipSpreadMul": 1.08
-      }
+      },
+      "style": "Keeps the muzzle down in a burst."
     },
     "suppressor": {
       "slot": "muzzle",
@@ -230,17 +364,8 @@
         "damageMul": 0.92,
         "rangeMul": 0.9,
         "suppressed": true
-      }
-    },
-    "brake": {
-      "slot": "muzzle",
-      "name": "Muzzle Brake",
-      "level": 12,
-      "fits": "longGuns",
-      "mods": {
-        "recoilMul": 0.68,
-        "handling": -6
-      }
+      },
+      "style": "Stealth: no tracer past 80 ft, a little less punch."
     },
     "choke": {
       "slot": "muzzle",
@@ -253,14 +378,39 @@
         "hipSpreadMul": 0.7,
         "adsSpreadMul": 0.7,
         "damageMul": 0.95
-      }
+      },
+      "style": "Tightens the pattern for longer shots."
+    },
+    "brake": {
+      "slot": "muzzle",
+      "name": "Muzzle Brake",
+      "level": 12,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.68,
+        "handling": -6
+      },
+      "style": "Sustained fire: the most recoil control, slower to bring up."
+    },
+    "intSup": {
+      "slot": "muzzle",
+      "name": "Integrated Suppressor",
+      "level": 4,
+      "field": 3,
+      "fits": "all",
+      "mods": {
+        "suppressed": true,
+        "rangeMul": 0.97
+      },
+      "style": "Stealth with almost no downside."
     },
     "stdBarrel": {
       "slot": "barrel",
       "name": "Standard Barrel",
       "level": 1,
       "fits": "all",
-      "mods": {}
+      "mods": {},
+      "style": "Balanced: no gains, no costs."
     },
     "shortBarrel": {
       "slot": "barrel",
@@ -271,7 +421,8 @@
         "rangeMul": 0.8,
         "handling": 12,
         "mobility": 0.04
-      }
+      },
+      "style": "Room clearing: quick and light, short reach."
     },
     "longBarrel": {
       "slot": "barrel",
@@ -283,7 +434,8 @@
         "damageMul": 1.04,
         "handling": -12,
         "mobility": -0.03
-      }
+      },
+      "style": "Reach and punch, slower in the hands."
     },
     "matchBarrel": {
       "slot": "barrel",
@@ -297,14 +449,103 @@
       "mods": {
         "adsSpreadMul": 0.75,
         "rpmMul": 0.92
-      }
+      },
+      "style": "Accuracy over rate of fire."
+    },
+    "heavyBarrel": {
+      "slot": "barrel",
+      "name": "Heavy Barrel",
+      "level": 21,
+      "fits": [
+        "carbine",
+        "dmr",
+        "lmg",
+        "sidearm"
+      ],
+      "mods": {
+        "recoilMul": 0.88,
+        "adsSpreadMul": 0.9,
+        "handling": -8,
+        "mobility": -0.03
+      },
+      "style": "Long, accurate strings of fire from one spot."
+    },
+    "hardBarrel": {
+      "slot": "barrel",
+      "name": "Hardened Barrel",
+      "level": 8,
+      "field": 4,
+      "fits": "longGuns",
+      "mods": {
+        "damageMul": 1.06,
+        "rangeMul": 1.12,
+        "handling": -6
+      },
+      "style": "Reach and punch with less weight."
+    },
+    "stdForearm": {
+      "slot": "forearm",
+      "name": "Standard Handguard",
+      "level": 1,
+      "fits": "all",
+      "mods": {},
+      "style": "Balanced: no gains, no costs."
+    },
+    "slimRail": {
+      "slot": "forearm",
+      "name": "Slimline Handguard",
+      "level": 4,
+      "fits": "longGuns",
+      "mods": {
+        "handling": 8,
+        "recoilMul": 1.05
+      },
+      "style": "Snap shooter: quicker to aim, a little more kick."
+    },
+    "quadRail": {
+      "slot": "forearm",
+      "name": "Heavy Quad Rail",
+      "level": 10,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.9,
+        "hipSpreadMul": 0.92,
+        "handling": -7,
+        "mobility": -0.01
+      },
+      "style": "Steady: tames recoil and hip fire, weighs more."
+    },
+    "carbonRail": {
+      "slot": "forearm",
+      "name": "Carbon-Fibre Handguard",
+      "level": 25,
+      "fits": "longGuns",
+      "mods": {
+        "mobility": 0.03,
+        "handling": 4,
+        "recoilMul": 1.03
+      },
+      "style": "Runner: lighter on your feet."
+    },
+    "opRail": {
+      "slot": "forearm",
+      "name": "Operator Rail",
+      "level": 9,
+      "field": 3,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.94,
+        "handling": 5
+      },
+      "style": "Steadier and quicker, both a little."
     },
     "noUnder": {
       "slot": "underbarrel",
       "name": "None",
       "level": 1,
       "fits": "all",
-      "mods": {}
+      "mods": {},
+      "style": "Nothing fitted."
     },
     "vgrip": {
       "slot": "underbarrel",
@@ -314,7 +555,8 @@
       "mods": {
         "recoilMul": 0.85,
         "handling": -3
-      }
+      },
+      "style": "Recoil control."
     },
     "agrip": {
       "slot": "underbarrel",
@@ -324,7 +566,22 @@
       "mods": {
         "handling": 12,
         "recoilMul": 1.05
-      }
+      },
+      "style": "Faster to aim."
+    },
+    "railWeight": {
+      "slot": "underbarrel",
+      "name": "Rail Weight",
+      "level": 8,
+      "fits": [
+        "sidearm",
+        "smg"
+      ],
+      "mods": {
+        "recoilMul": 0.88,
+        "handling": -4
+      },
+      "style": "Keeps a small gun flat."
     },
     "laser": {
       "slot": "underbarrel",
@@ -333,7 +590,8 @@
       "fits": "all",
       "mods": {
         "hipSpreadMul": 0.7
-      }
+      },
+      "style": "Hip fire: shoot without aiming."
     },
     "bipod": {
       "slot": "underbarrel",
@@ -348,14 +606,53 @@
         "crouchSpreadMul": 0.55,
         "crouchRecoilMul": 0.5,
         "handling": -8
-      }
+      },
+      "style": "Dug-in fire: rock steady while crouched."
+    },
+    "thumbRest": {
+      "slot": "underbarrel",
+      "name": "Thumb-Rest Grip",
+      "level": 15,
+      "fits": [
+        "sidearm"
+      ],
+      "mods": {
+        "handling": 6,
+        "recoilMul": 0.96
+      },
+      "style": "Faster follow-up shots."
+    },
+    "handStop": {
+      "slot": "underbarrel",
+      "name": "Hand Stop",
+      "level": 19,
+      "fits": "longGuns",
+      "mods": {
+        "handling": 6,
+        "mobility": 0.02,
+        "recoilMul": 0.97
+      },
+      "style": "Light and quick: for guns you move with."
+    },
+    "fieldGrip": {
+      "slot": "underbarrel",
+      "name": "Operator Grip",
+      "level": 5,
+      "field": 3,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.82,
+        "handling": 6
+      },
+      "style": "Recoil control and quicker aim together."
     },
     "stdMag": {
       "slot": "magazine",
       "name": "Standard Magazine",
       "level": 1,
       "fits": "all",
-      "mods": {}
+      "mods": {},
+      "style": "Balanced: no gains, no costs."
     },
     "extMag": {
       "slot": "magazine",
@@ -366,7 +663,8 @@
         "magMul": 1.4,
         "reloadMsMul": 1.15,
         "mobility": -0.02
-      }
+      },
+      "style": "More rounds, slower reload."
     },
     "fastMag": {
       "slot": "magazine",
@@ -376,7 +674,21 @@
       "mods": {
         "reloadMsMul": 0.7,
         "magMul": 0.85
-      }
+      },
+      "style": "Fast reloads, fewer rounds."
+    },
+    "lightMag": {
+      "slot": "magazine",
+      "name": "Polymer Light Magazine",
+      "level": 15,
+      "fits": "all",
+      "mods": {
+        "magMul": 0.9,
+        "mobility": 0.02,
+        "handling": 5,
+        "reloadMsMul": 0.92
+      },
+      "style": "Runner: lighter and quicker, a few rounds fewer."
     },
     "drum": {
       "slot": "magazine",
@@ -393,14 +705,112 @@
         "reloadMsMul": 1.45,
         "handling": -10,
         "mobility": -0.03
-      }
+      },
+      "style": "Suppressing fire: double the rounds, heavy."
+    },
+    "coupledMag": {
+      "slot": "magazine",
+      "name": "Jungle-Taped Magazines",
+      "level": 24,
+      "fits": [
+        "smg",
+        "carbine",
+        "dmr"
+      ],
+      "mods": {
+        "reloadMsMul": 0.78,
+        "handling": -5
+      },
+      "style": "Two magazines taped together: fast swaps, front-heavy."
+    },
+    "beltBox": {
+      "slot": "magazine",
+      "name": "Belt Box",
+      "level": 29,
+      "fits": [
+        "lmg"
+      ],
+      "mods": {
+        "magMul": 2.5,
+        "reloadMsMul": 1.6,
+        "mobility": -0.05,
+        "handling": -8
+      },
+      "style": "Hold a doorway all afternoon."
+    },
+    "ball": {
+      "slot": "ammo",
+      "name": "Standard Ball",
+      "level": 1,
+      "fits": "all",
+      "mods": {},
+      "style": "Balanced: no gains, no costs."
+    },
+    "hollow": {
+      "slot": "ammo",
+      "name": "Hollow Points",
+      "level": 6,
+      "fits": "all",
+      "mods": {
+        "fleshMul": 1.2,
+        "armorMul": 0.6
+      },
+      "style": "Hunting and Rogues: hits harder on anything without armor, poor against plates."
+    },
+    "ap": {
+      "slot": "ammo",
+      "name": "Armor-Piercing",
+      "level": 14,
+      "fits": "all",
+      "mods": {
+        "armorMul": 1.5,
+        "fleshMul": 0.9
+      },
+      "style": "Fighting players: cracks armor fast."
+    },
+    "subsonic": {
+      "slot": "ammo",
+      "name": "Subsonic",
+      "level": 18,
+      "fits": "all",
+      "mods": {
+        "rangeMul": 0.85,
+        "damageMul": 0.94,
+        "subsonic": true
+      },
+      "style": "Ghost: with a suppressor, nobody sees or hears the shot."
+    },
+    "matchAmmo": {
+      "slot": "ammo",
+      "name": "Match-Grade",
+      "level": 26,
+      "fits": "all",
+      "mods": {
+        "adsSpreadMul": 0.85,
+        "hipSpreadMul": 0.95,
+        "rangeMul": 1.08
+      },
+      "style": "Marksman: tighter groups and more reach."
+    },
+    "overpressure": {
+      "slot": "ammo",
+      "name": "Overpressure +P",
+      "level": 28,
+      "fits": "all",
+      "mods": {
+        "damageMul": 1.08,
+        "recoilMul": 1.15,
+        "rangeMul": 1.05
+      },
+      "style": "Brawler: hits harder, kicks harder."
     },
     "stdStock": {
       "slot": "stock",
       "name": "Standard Stock",
       "level": 1,
       "fits": "all",
-      "mods": {}
+      "mods": {},
+      "style": "Balanced: no gains, no costs."
     },
     "lightStock": {
       "slot": "stock",
@@ -410,7 +820,8 @@
       "mods": {
         "handling": 10,
         "recoilMul": 1.1
-      }
+      },
+      "style": "Quick to the shoulder, kicks more."
     },
     "heavyStock": {
       "slot": "stock",
@@ -420,7 +831,34 @@
       "mods": {
         "recoilMul": 0.8,
         "handling": -10
-      }
+      },
+      "style": "Soaks up recoil, slower to aim."
+    },
+    "braceKit": {
+      "slot": "stock",
+      "name": "Pistol Brace",
+      "level": 10,
+      "fits": [
+        "sidearm"
+      ],
+      "mods": {
+        "recoilMul": 0.82,
+        "adsSpreadMul": 0.9,
+        "handling": -6
+      },
+      "style": "Turns a sidearm into a tiny carbine."
+    },
+    "foldStock": {
+      "slot": "stock",
+      "name": "Folding Stock",
+      "level": 13,
+      "fits": "longGuns",
+      "mods": {
+        "mobility": 0.04,
+        "handling": 6,
+        "recoilMul": 1.08
+      },
+      "style": "Mover: quicker on your feet and to the shoulder."
     },
     "noStock": {
       "slot": "stock",
@@ -436,14 +874,60 @@
         "handling": 15,
         "recoilMul": 1.3,
         "adsSpreadMul": 1.15
-      }
+      },
+      "style": "Run and gun: fastest, hardest to control."
+    },
+    "pdwStock": {
+      "slot": "stock",
+      "name": "Wire PDW Stock",
+      "level": 17,
+      "fits": [
+        "sidearm",
+        "smg"
+      ],
+      "mods": {
+        "recoilMul": 0.9,
+        "handling": -2,
+        "mobility": -0.01
+      },
+      "style": "A little steadier, still small."
+    },
+    "precisionStock": {
+      "slot": "stock",
+      "name": "Precision Stock",
+      "level": 20,
+      "fits": [
+        "carbine",
+        "dmr",
+        "lmg"
+      ],
+      "mods": {
+        "adsSpreadMul": 0.88,
+        "crouchSpreadMul": 0.85,
+        "handling": -8,
+        "mobility": -0.02
+      },
+      "style": "Marksman: an adjustable cheek rest for careful shots."
+    },
+    "bufferStock": {
+      "slot": "stock",
+      "name": "Recoil-Buffer Stock",
+      "level": 12,
+      "field": 4,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.88,
+        "handling": 4
+      },
+      "style": "Less kick without the weight."
     },
     "stdTrigger": {
       "slot": "trigger",
       "name": "Standard Trigger",
       "level": 1,
       "fits": "all",
-      "mods": {}
+      "mods": {},
+      "style": "Balanced: no gains, no costs."
     },
     "matchTrig": {
       "slot": "trigger",
@@ -453,7 +937,8 @@
       "mods": {
         "adsSpreadMul": 0.9,
         "rpmMul": 0.95
-      }
+      },
+      "style": "Precision: tighter aimed shots, a little slower."
     },
     "hairTrig": {
       "slot": "trigger",
@@ -463,61 +948,58 @@
       "mods": {
         "rpmMul": 1.12,
         "recoilMul": 1.12
-      }
+      },
+      "style": "Aggression: faster fire, more kick."
     },
-    "intSup": {
-      "slot": "muzzle",
-      "name": "Integrated Suppressor",
-      "level": 4,
+    "dutyTrig": {
+      "slot": "trigger",
+      "name": "Heavy Duty Trigger",
+      "level": 16,
+      "fits": "all",
+      "mods": {
+        "recoilMul": 0.9,
+        "hipSpreadMul": 0.9,
+        "rpmMul": 0.92
+      },
+      "style": "Control: slower, steadier fire."
+    },
+    "binaryTrig": {
+      "slot": "trigger",
+      "name": "Binary Trigger",
+      "level": 22,
+      "fits": [
+        "sidearm",
+        "shotgun",
+        "dmr"
+      ],
+      "mods": {
+        "rpmMul": 1.35,
+        "recoilMul": 1.2,
+        "adsSpreadMul": 1.1
+      },
+      "style": "Spray from a semi-auto: fires on the pull and the release."
+    },
+    "tunedTrig": {
+      "slot": "trigger",
+      "name": "Tuned Two-Stage Trigger",
+      "level": 10,
       "field": 3,
       "fits": "all",
       "mods": {
-        "suppressed": true,
-        "rangeMul": 0.97
-      }
-    },
-    "fieldOptic": {
-      "slot": "optic",
-      "name": "Field Hybrid Sight",
-      "level": 6,
-      "field": 3,
-      "fits": "longGuns",
-      "mods": {
-        "zoom": 0.8,
-        "adsSpreadMul": 0.8,
-        "handling": -4
-      }
-    },
-    "hardBarrel": {
-      "slot": "barrel",
-      "name": "Hardened Barrel",
-      "level": 8,
-      "field": 4,
-      "fits": "longGuns",
-      "mods": {
-        "damageMul": 1.06,
-        "rangeMul": 1.12,
-        "handling": -6
-      }
-    },
-    "fieldGrip": {
-      "slot": "underbarrel",
-      "name": "Operator Grip",
-      "level": 5,
-      "field": 3,
-      "fits": "longGuns",
-      "mods": {
-        "recoilMul": 0.82,
-        "handling": 6
-      }
+        "adsSpreadMul": 0.92,
+        "rpmMul": 1.04
+      },
+      "style": "A little faster and a little tighter."
     }
   },
   "defaultParts": {
     "optic": "iron",
     "muzzle": "noMuzzle",
     "barrel": "stdBarrel",
+    "forearm": "stdForearm",
     "underbarrel": "noUnder",
     "magazine": "stdMag",
+    "ammo": "ball",
     "stock": "stdStock",
     "trigger": "stdTrigger"
   },
@@ -540,17 +1022,59 @@
     "woodland": {
       "name": "Woodland",
       "level": 8,
-      "color": "#4d5e3a"
+      "color": "#4d5e3a",
+      "pattern": "blotch",
+      "color2": "#2f3a22",
+      "color3": "#6b5a3a"
+    },
+    "swamp": {
+      "name": "Swamp Moss",
+      "level": 11,
+      "color": "#3f4a2c"
     },
     "arctic": {
       "name": "Arctic White",
       "level": 12,
       "color": "#d9dde0"
     },
+    "cypress": {
+      "name": "Cypress Bark",
+      "level": 16,
+      "color": "#6a5a48",
+      "pattern": "stripes",
+      "color2": "#3d3229"
+    },
     "ember": {
       "name": "Ember Orange",
       "level": 20,
       "color": "#e0661c"
+    },
+    "tiger": {
+      "name": "Tiger Stripe",
+      "level": 22,
+      "color": "#7a6a3c",
+      "pattern": "stripes",
+      "color2": "#1f1b14"
+    },
+    "digital": {
+      "name": "Digital Grey",
+      "level": 24,
+      "color": "#7a8087",
+      "pattern": "digital",
+      "color2": "#3a3f44",
+      "color3": "#a7adb3"
+    },
+    "moonshine": {
+      "name": "Moonshine Steel",
+      "level": 26,
+      "color": "#b8c0c8"
+    },
+    "gator": {
+      "name": "Gator Hide",
+      "level": 28,
+      "color": "#3f4a2c",
+      "pattern": "scales",
+      "color2": "#1f2a18"
     },
     "gold": {
       "name": "Veteran Gold",

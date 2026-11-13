@@ -35,6 +35,11 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 #minimap { position: absolute; top: 12px; right: 12px; border: 1px solid #ff7a1a66; border-radius: 50%; background: #0d1014; }
 /* Colours for new HUD pieces are tokens; text sits on solid panels with no glow or shadow. */
 :root { --hud-surface: #171a21; --hud-line: #2a2f3a; --hud-ink: #ffffff; --hud-ink-2: rgba(255, 255, 255, 0.84); --hud-accent: #ff7a1a; }
+/* Rangefinder sights: the range to what you're aiming at, on a solid chip beside the crosshair. */
+#rangefinder { position: absolute; top: calc(50% + 26px); left: calc(50% + 28px); padding: 3px 9px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 10px; font-size: 14px; font-weight: 700; color: var(--hud-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Gunsmith options: the part's name, then who it's for. */
+.gsopt .gsname { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gsopt .gsname em { font-style: normal; font-weight: 500; font-size: 12px; line-height: 1.3; color: var(--hud-ink-2); }
 /* Where you are: the road underfoot (or the place) and the nearest town. */
 #where { position: absolute; top: 222px; right: 12px; width: 200px; box-sizing: border-box; padding: 7px 10px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 12px; text-align: center; }
 #where b { display: block; font-size: 15px; font-weight: 700; line-height: 1.25; color: var(--hud-ink); }
@@ -90,7 +95,10 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 #gunsmith header h2 { margin: 0; color: #ff8a2a; letter-spacing: 0.15em; text-transform: uppercase; font-size: 18px; flex: 0 0 auto; }
 #gunsmith header #gsParts { flex: 1; color: #ffc53d; font-size: 13px; }
 #gunsmith h3 { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #889; margin: 12px 0 6px; }
-.gsgrid { flex: 1; display: grid; grid-template-columns: 240px 1fr 260px; gap: 18px; min-height: 0; }
+.gsgrid { flex: 1; display: grid; grid-template-columns: 240px 1fr 340px; gap: 18px; min-height: 0; }
+/* Ten slots: two columns of them, so the options for the one you picked stay in view. */
+#gsSlots { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+#gsSlots .gsslot { margin-bottom: 0; }
 .gsgrid aside { overflow: auto; }
 .gsgrid main { display: flex; flex-direction: column; min-height: 0; }
 #gsview { width: 100%; flex: 1; min-height: 200px; background: radial-gradient(ellipse at center, #2a3038 0%, #12151a 75%); border-radius: 4px; }
@@ -173,7 +181,7 @@ input { -webkit-user-select: text; user-select: text; }
   .item { padding: 4px 8px; } .item .nm { font-size: 12px; } .item .st, .item .at { font-size: 10px; }
   #gunsmith { inset: 2vh 2vw; padding: 8px 12px; }
   #gunsmith header h2 { font-size: 14px; } #gunsmith header #gsParts { font-size: 10px; }
-  .gsgrid { grid-template-columns: 170px 1fr 190px; gap: 10px; }
+  .gsgrid { grid-template-columns: 150px 1fr 260px; gap: 10px; }
   #gunsmith h3 { margin: 6px 0 4px; font-size: 9px; }
   .gsweapon, .gsslot, .gsopt { padding: 4px 8px; font-size: 11px; margin-bottom: 3px; }
   #gsview { min-height: 110px; }

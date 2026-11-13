@@ -122,15 +122,18 @@ export function weaponStats(item) {
     hipSpread: a.hipSpread, adsSpread: a.adsSpread, recoil: a.recoil, handling: a.handling,
     mobility: a.mobility, pellets: a.pellets, zoom: a.zoom, semi: a.semi,
     suppressed: false, crouchSpread: 1, crouchRecoil: 1,
+    zoomAlt: 0,            // extra magnification you can flip to while aiming (hybrid and variable sights)
+    armor: 1, flesh: 1,    // ammunition: damage multiplier against armor, and against health
+    thermal: false, autoTag: false, rangefinder: false, glint: false, subsonic: false,   // what a sight or a load can do
   };
   for (const slot of SLOTS) {
     const id = item.parts?.[slot] || DEFAULT_PARTS[slot];
     if (!partFits(id, item.archetype)) continue;
     const m = PARTS[id].mods;
     for (const [k, v] of Object.entries(m)) {
-      if (k === 'suppressed') s.suppressed = true;
+      if (typeof v === 'boolean') s[k] = v;   // suppressed, thermal, autoTag, rangefinder, glint, subsonic
       else if (k.endsWith('Mul')) { const key = k.slice(0, -3); s[key] = (key in s ? s[key] : 1) * v; }
-      else s[k] += v;
+      else s[k] = (s[k] || 0) + v;
     }
   }
   s.mag = Math.max(1, Math.round(s.mag));

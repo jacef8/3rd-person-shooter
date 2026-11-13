@@ -42,5 +42,10 @@
     "reviveRange": 2.2,
     "reviveHp": 35,
     "reviveXp": 75
+  },
+  "optics": {
+    "_about": "thermalRange: how far a thermal sight picks out people and animals (and sees through optical camo) while you aim. glintRange: how far away a 12x lens flash shows.",
+    "thermalRange": 150,
+    "glintRange": 320
   }
 }
