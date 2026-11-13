@@ -3,10 +3,13 @@ import {
   moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, INTERACT_RANGE,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED,
 } from '/shared/world.js';
-import { RARITY, ARCHETYPES, ATTR_LABELS, weaponStats, armorStats, itemScore } from '/shared/items.js';
+import {
+  ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
+  xpForLevel, MAX_LEVEL,
+} from '/shared/items.js';
+import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 
 const $ = (id) => document.getElementById(id);
-const SEMI_AUTO = new Set(['dmr', 'shotgun', 'sidearm']);
 
 // ------------------------------------------------------------------ renderer / scene
 const canvas = $('game');
@@ -165,9 +168,9 @@ function makeCharacter(kind, name) {
   visor.position.set(0, 1.6, 0.17);
   const pack = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 0.22), new THREE.MeshStandardMaterial({ color: 0x3b3a30 }));
   pack.position.set(0, 1.05, -0.3);
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.75), new THREE.MeshStandardMaterial({ color: 0x1b1b1b }));
-  gun.position.set(-0.25, 1.25, 0.4);
-  for (const m of [body, head, pack, gun]) m.castShadow = true;
+  const gun = new THREE.Group();          // holds the gunsmith-built weapon model
+  gun.position.set(-0.25, 1.25, 0.25);
+  for (const m of [body, head, pack]) m.castShadow = true;
   g.add(body, head, visor, pack, gun);
   const upper = new THREE.Group();
   g.userData = { body, head, visor, gun, pack };
@@ -188,6 +191,14 @@ function makeCharacter(kind, name) {
   g.add(upper);
   scene.add(g);
   return g;
+}
+
+function setCharacterGun(g, gun) {
+  const key = gunKey(gun);
+  if (g.userData.gunKey === key) return;
+  g.userData.gunKey = key;
+  g.userData.gun.clear();
+  if (gun) g.userData.gun.add(buildGunModel(gun));
 }
 
 function updateCharacterMesh(g, c, dt) {
@@ -224,15 +235,17 @@ const selfMesh = makeCharacter('self', '');
 selfMesh.visible = false;
 
 // ------------------------------------------------------------------ loot visuals
-function lootMesh(rarity, isBag) {
-  const color = isBag ? 0xffffff : new THREE.Color(RARITY[rarity].color);
+const LOOT_COLORS = { parts: 0xffc53d, ammo: 0x7bd88f, medkit: 0xff5a5a, bag: 0xffffff };
+function lootMesh(kind) {
+  const color = LOOT_COLORS[kind] ?? 0xffffff;
+  const isBag = kind === 'bag';
   const g = new THREE.Group();
-  const crate = new THREE.Mesh(new THREE.BoxGeometry(isBag ? 0.6 : 0.5, isBag ? 0.4 : 0.3, 0.4), new THREE.MeshStandardMaterial({ color: isBag ? 0x2d2d22 : color, emissive: isBag ? 0x000000 : color, emissiveIntensity: 0.4 }));
+  const crate = new THREE.Mesh(new THREE.BoxGeometry(isBag ? 0.6 : 0.5, isBag ? 0.4 : 0.3, 0.4), new THREE.MeshStandardMaterial({ color: isBag ? 0x2d2d22 : color, emissive: isBag ? 0x000000 : color, emissiveIntensity: 0.35 }));
   crate.position.y = 0.2;
-  const tier = isBag ? 2 : RARITY[rarity].tier;
-  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.12, 2 + tier * 2, 8, 1, true),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
-  beam.position.y = 1 + tier;
+  const tall = isBag ? 4 : 2.5;
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.12, tall, 8, 1, true),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+  beam.position.y = tall / 2;
   g.add(crate, beam);
   scene.add(g);
   return g;
@@ -320,9 +333,8 @@ function drawMinimap() {
   // Map is drawn with +X to the right and +Z downward (north-up = -Z).
   g.drawImage(minimapBase, (state.x + off - view) * MM_SCALE, (state.z + off - view) * MM_SCALE, view * 2 * MM_SCALE, view * 2 * MM_SCALE, 0, 0, 200, 200);
   for (const [, l] of state.loot) {
-    const t = RARITY[l.data.rarity]?.tier ?? 0;
-    if (t < 2 && l.data.kind !== 'armor' && l.data.kind !== 'weapon') continue;
-    g.fillStyle = RARITY[l.data.rarity].color;
+    if (l.data.kind !== 'parts') continue;
+    g.fillStyle = '#ffc53d';
     g.fillRect(R + (l.data.x - state.x) * k - 1.5, R + (l.data.z - state.z) * k - 1.5, 3, 3);
   }
   // Player arrow (screen-up = -Z, so rotate by yaw accordingly).
@@ -362,16 +374,18 @@ function handle(m) {
         let rec = state.players.get(p.id);
         if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, 0, p.z); state.players.set(p.id, rec); }
         rec.data = p;
+        setCharacterGun(rec.mesh, p.gun);
+        setLabel(rec.mesh.userData.label, `${p.name}  [${p.level}]`, '#ffb27a');
       }
       for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
         let rec = state.bots.get(b.id);
-        if (!rec) { rec = { mesh: makeCharacter('bot', 'Rogue') }; rec.mesh.position.set(b.x, 0, b.z); state.bots.set(b.id, rec); }
+        if (!rec) { rec = { mesh: makeCharacter('bot', 'Rogue') }; rec.mesh.position.set(b.x, 0, b.z); setCharacterGun(rec.mesh, { a: 'carbine', paint: 'factory' }); state.bots.set(b.id, rec); }
         rec.data = { ...b, armor: 0, maxArmor: 0 };
       }
       for (const [id, rec] of state.bots) if (!m.bots.some((b) => b.id === id)) { scene.remove(rec.mesh); state.bots.delete(id); }
-      syncEntities(m.loot, state.loot, (e) => lootMesh(e.rarity, false));
-      syncEntities(m.bags, state.bags, () => lootMesh(null, true));
+      syncEntities(m.loot, state.loot, (e) => lootMesh(e.kind));
+      syncEntities(m.bags, state.bags, () => lootMesh('bag'));
       state.houses = m.houses;
       state.doorSolids = m.houses.filter((h) => h.hp > 0 && !h.open).map((h) => ({ ...state.map.houses[h.id].door, type: 'door' }));
       m.houses.forEach((h, i) => {
@@ -392,13 +406,25 @@ function handle(m) {
       if (!m.dead && wasDead) $('death').hidden = true;
       updateHud();
       if (state.invOpen) renderInventory();
+      if (state.gunsmithOpen) renderGunsmith();
+      setCharacterGun(selfMesh, m.inv[m.active] ? { a: m.inv[m.active].archetype, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
       break;
     }
     case 'correct':
       state.x = m.x; state.z = m.z;
       break;
-    case 'shot':
+    case 'shot': {
+      // Suppressed fire from other players only shows up close.
+      const near = Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < 25;
+      if (m.sup && m.from !== state.id && !near) break;
       for (const h of m.hits) addTracer(m.o, h, h[3]);
+      break;
+    }
+    case 'xp':
+      xpPopup(m.amount, m.reason);
+      break;
+    case 'levelup':
+      levelBanner(m.level, m.unlocks);
       break;
     case 'hitmark':
       damageNumber(m.dmg, m.crit, [m.x, m.y, m.z]);
@@ -408,13 +434,19 @@ function handle(m) {
     case 'died':
       $('deathby').textContent = `Killed by ${m.by}`;
       $('death').hidden = false;
+      state.gunsmithOpen = false; $('gunsmith').hidden = true;
       closeInventory();
       document.exitPointerLock?.();
       break;
     case 'container':
-      if (m.closed) { state.container = null; if (state.invOpen) renderInventory(); break; }
+      if (m.closed) {
+        state.container = null;
+        if (state.gunsmithOpen) { state.gunsmithOpen = false; $('gunsmith').hidden = true; openInventory(); }
+        if (state.invOpen) renderInventory();
+        break;
+      }
       state.container = m;
-      openInventory();
+      if (state.gunsmithOpen) renderGunsmith(); else openInventory();
       break;
   }
 }
@@ -428,44 +460,46 @@ function updateHud() {
   $('armorbar').style.width = me.maxArmor ? `${(me.armor / me.maxArmor) * 100}%` : '0%';
   $('armortext').textContent = me.maxArmor ? `ARMOR ${Math.ceil(me.armor)} / ${me.maxArmor}` : 'NO ARMOR';
   const w = me.inv[me.active];
-  $('wname').textContent = w ? w.name : 'Unarmed';
-  $('wname').style.color = w ? RARITY[w.rarity].color : '#aaa';
+  $('wname').textContent = w ? `${w.name}${w.parts?.muzzle === 'suppressor' ? ' · suppressed' : ''}` : 'Unarmed';
   $('mag').textContent = me.mag;
   $('reserve').textContent = me.ammo;
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
-  $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
+  $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Parts ${me.parts} · Medkits ${medkits} · Kills ${me.kills}`;
+  const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
+  $('level').textContent = `LEVEL ${me.level}`;
+  $('xpbar').style.width = me.level >= MAX_LEVEL ? '100%' : `${((me.xp - lo) / (hi - lo)) * 100}%`;
+  $('xptext').textContent = me.level >= MAX_LEVEL ? `${me.xp} XP · max level` : `${me.xp - lo} / ${hi - lo} XP`;
 }
 
 function statLine(item) {
   if (item.kind === 'weapon') {
     const s = weaponStats(item);
-    return `${ARCHETYPES[item.archetype].label} · ${Math.round(s.damage)}${s.pellets > 1 ? `×${s.pellets}` : ''} dmg · ${Math.round(s.rpm)} rpm · ${s.mag} mag`;
+    return `${Math.round(s.damage)}${s.pellets > 1 ? `×${s.pellets}` : ''} dmg · ${Math.round(s.rpm)} rpm · ${s.mag} mag · ${Math.round(s.range)} m`;
   }
-  if (item.kind === 'armor') { const a = armorStats(item); return `Armor ${a.armor}`; }
+  if (item.kind === 'armor') { const a = armorStats(item); return `Armor ${a.armor}${a.mobility ? ` · ${Math.round(a.mobility * 100)}% speed` : ''}`; }
   if (item.kind === 'medkit') return 'Restores 60 health and 40 armor';
   return '';
 }
 
-function itemCard(item, { slot, buttons = [], compare } = {}) {
+function attachmentLine(item) {
+  if (item.kind !== 'weapon') return '';
+  const mods = SLOTS.map((sl) => item.parts?.[sl]).filter((id) => id && PARTS[id] && PARTS[id].level > 1).map((id) => PARTS[id].name);
+  return mods.length ? mods.join(' · ') : 'Stock configuration';
+}
+
+function itemCard(item, { slot, buttons = [] } = {}) {
   const el = document.createElement('div');
   el.className = 'item';
   if (!item) {
     el.innerHTML = `<span class="slot">${slot}</span><span class="empty">— empty —</span>`;
     return el;
   }
-  const r = RARITY[item.rarity];
-  el.style.borderLeftColor = r.color;
-  const attrs = Object.entries(item.attrs || {}).map(([k, v]) => `+${v}% ${ATTR_LABELS[k]}`).join(' · ');
-  const score = itemScore(item);
-  let diff = '';
-  if (compare !== undefined && score) {
-    const d = score - itemScore(compare);
-    diff = d > 0 ? `<div class="up">▲ ${d}</div>` : d < 0 ? `<div class="down">▼ ${-d}</div>` : '';
-  }
+  const color = item.kind === 'weapon' ? (PAINTS[item.paint]?.color || '#888') : item.kind === 'armor' ? '#5aa8ff' : '#888';
+  el.style.borderLeftColor = color;
+  const att = attachmentLine(item);
   el.innerHTML = `${slot ? `<span class="slot">${slot}</span>` : ''}
-    <div class="meta"><div class="nm" style="color:${r.color}">${item.name} <small style="color:#888">${item.kind === 'weapon' || item.kind === 'armor' ? r.name : ''}</small></div>
-    <div class="st">${statLine(item)}</div>${attrs ? `<div class="at">${attrs}</div>` : ''}</div>
-    <div class="score">${score || ''}${diff}</div>`;
+    <div class="meta"><div class="nm">${item.name}</div>
+    <div class="st">${statLine(item)}</div>${att ? `<div class="at">${att}</div>` : ''}</div>`;
   for (const [label, fn] of buttons) {
     const b = document.createElement('button');
     b.className = 'ghost';
@@ -492,7 +526,7 @@ function renderInventory() {
     eq.append(itemCard(inv[slot], { slot, buttons: inv[slot] ? [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [] }));
   }
   const pack = $('pack'); pack.innerHTML = '';
-  $('packcount').textContent = `(${inv.pack.length}/${state.packSize}) · ammo ${me.ammo}`;
+  $('packcount').textContent = `(${inv.pack.length}/${state.packSize}) · ammo ${me.ammo} · parts ${me.parts}`;
   const c = state.container;
   if (!inv.pack.length) pack.innerHTML = '<div class="empty">Empty</div>';
   for (const item of inv.pack) {
@@ -501,15 +535,24 @@ function renderInventory() {
     if (item.kind === 'medkit') buttons.push(['Use', () => send({ t: 'inv', action: 'use' })]);
     if (c?.canPut) buttons.push(['Stash →', () => send({ t: 'container', action: 'put', itemId: item.id })]);
     buttons.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: item.id })]);
-    pack.append(itemCard(item, { buttons, compare: equippedFor(item) }));
+    pack.append(itemCard(item, { buttons }));
   }
   $('containerCol').hidden = !c;
   if (c) {
     $('containerTitle').textContent = `${c.title}${c.cap ? ` (${c.items.length}/${c.cap})` : ''}`;
     const box = $('container'); box.innerHTML = '';
-    if (c.ammo) box.append(itemCard({ kind: 'ammo', rarity: 'scrap', name: `${c.ammo} rounds` }, { buttons: [['← Take', () => send({ t: 'container', action: 'take', ammo: true })]] }));
-    if (!c.items.length && !c.ammo) box.innerHTML = '<div class="empty">Empty</div>';
-    for (const item of c.items) box.append(itemCard(item, { buttons: [['← Take', () => send({ t: 'container', action: 'take', itemId: item.id })]], compare: equippedFor(item) }));
+    if (c.gunsmith) {
+      const bar = document.createElement('div');
+      bar.className = 'gsentry';
+      bar.innerHTML = `<button id="openGs">Open Gunsmith</button><button class="ghost" id="depositParts">Deposit ${me.parts} parts</button>`;
+      box.append(bar);
+      bar.querySelector('#openGs').onclick = openGunsmith;
+      bar.querySelector('#depositParts').onclick = () => send({ t: 'container', action: 'put', parts: true });
+    }
+    if (c.parts) box.append(itemCard({ kind: 'parts', name: `${c.parts} parts` }, { buttons: [['← Take', () => send({ t: 'container', action: 'take', parts: true })]] }));
+    if (c.ammo) box.append(itemCard({ kind: 'ammo', name: `${c.ammo} rounds` }, { buttons: [['← Take', () => send({ t: 'container', action: 'take', ammo: true })]] }));
+    if (!c.items.length && !c.ammo && !c.parts) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty' }));
+    for (const item of c.items) box.append(itemCard(item, { buttons: [['← Take', () => send({ t: 'container', action: 'take', itemId: item.id })]] }));
   }
 }
 
@@ -525,6 +568,188 @@ function closeInventory() {
   if (state.container) { state.container = null; send({ t: 'closeContainer' }); }
 }
 
+// ------------------------------------------------------------------ gunsmith
+const gs = { selectedId: null, slot: 'optic', hover: null, explode: 0, explodeTarget: 0, model: null, modelKey: '' };
+const gsRenderer = new THREE.WebGLRenderer({ canvas: $('gsview'), antialias: true, alpha: true, preserveDrawingBuffer: true });
+gsRenderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const gsScene = new THREE.Scene();
+const gsCamera = new THREE.PerspectiveCamera(32, 1, 0.01, 20);
+gsScene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.4));
+const gsKey = new THREE.DirectionalLight(0xffffff, 2); gsKey.position.set(1, 2, 2); gsScene.add(gsKey);
+const gsTurntable = new THREE.Group(); gsScene.add(gsTurntable);
+
+function ownedWeapons() {
+  const me = state.me, out = [];
+  if (!me) return out;
+  for (const slot of ['primary', 'secondary']) if (me.inv[slot]) out.push({ item: me.inv[slot], where: slot });
+  for (const i of me.inv.pack) if (i.kind === 'weapon') out.push({ item: i, where: 'backpack' });
+  if (state.container?.gunsmith) for (const i of state.container.items) if (i.kind === 'weapon') out.push({ item: i, where: 'stash' });
+  return out;
+}
+
+function openGunsmith() {
+  state.gunsmithOpen = true;
+  $('inventory').hidden = true;
+  $('gunsmith').hidden = false;
+  const list = ownedWeapons();
+  if (!list.some((w) => w.item.id === gs.selectedId)) gs.selectedId = list[0]?.item.id ?? null;
+  renderGunsmith();
+}
+function closeGunsmith() {
+  state.gunsmithOpen = false;
+  $('gunsmith').hidden = true;
+  if (state.container) openInventory();
+}
+$('gsClose').onclick = closeGunsmith;
+$('gsExplode').onclick = () => { gs.explodeTarget = gs.explodeTarget ? 0 : 1; };
+
+function previewItem(item, hover) {
+  if (!hover) return item;
+  if (hover.paint) return { ...item, paint: hover.paint };
+  return { ...item, parts: { ...item.parts, [hover.slot]: hover.partId } };
+}
+
+function renderStatBars(item, preview) {
+  const cur = weaponStats(item), nxt = weaponStats(preview);
+  const a = statBars(cur), b = statBars(nxt);
+  const el = $('gsStats'); el.innerHTML = '';
+  for (const k of Object.keys(a)) {
+    const lo = Math.min(a[k], b[k]), hi = Math.max(a[k], b[k]);
+    const better = b[k] > a[k];
+    const row = document.createElement('div');
+    row.className = 'statrow';
+    row.innerHTML = `<span>${k}</span><div class="sbar"><i style="width:${lo * 100}%"></i>${hi > lo ? `<b class="${better ? 'up' : 'down'}" style="left:${lo * 100}%;width:${(hi - lo) * 100}%"></b>` : ''}</div>`;
+    el.append(row);
+  }
+  const n = $('gsNumbers');
+  const fmt = (x, y, f, suffix = '') => (Math.abs(f(x) - f(y)) > 0.0001 ? `${f(x)}${suffix} → <b>${f(y)}${suffix}</b>` : `${f(x)}${suffix}`);
+  n.innerHTML = `Damage ${fmt(cur, nxt, (s) => Math.round(s.damage * s.pellets))} · RPM ${fmt(cur, nxt, (s) => Math.round(s.rpm))} · Mag ${fmt(cur, nxt, (s) => s.mag)}
+    · Range ${fmt(cur, nxt, (s) => Math.round(s.range), 'm')} · Reload ${fmt(cur, nxt, (s) => (s.reloadMs / 1000).toFixed(1), 's')} · Zoom ${fmt(cur, nxt, (s) => s.zoom.toFixed(1), 'x')}${nxt.suppressed ? ' · <b>Suppressed</b>' : ''}`;
+}
+
+function setPreviewModel(item) {
+  const gun = item ? { a: item.archetype, parts: item.parts, paint: item.paint } : null;
+  const key = gunKey(gun);
+  if (key === gs.modelKey) return;
+  gs.modelKey = key;
+  gsTurntable.clear();
+  gs.model = gun ? buildGunModel(gun) : null;
+  if (gs.model) {
+    // Center the assembled gun on the turntable.
+    const bb = new THREE.Box3().setFromObject(gs.model);
+    const c = bb.getCenter(new THREE.Vector3());
+    gs.model.position.set(-c.x, -c.y, -c.z);
+    gsTurntable.add(gs.model);
+  }
+}
+
+function renderGunsmith() {
+  const me = state.me;
+  if (!me || !state.gunsmithOpen) return;
+  const totalParts = me.parts + (state.container?.parts || 0);
+  $('gsParts').textContent = `Level ${me.level} · ${totalParts} parts available (${me.parts} carried, ${state.container?.parts || 0} in stash)`;
+
+  // Weapon list.
+  const list = ownedWeapons();
+  const wl = $('gsWeapons'); wl.innerHTML = '';
+  for (const { item, where } of list) {
+    const b = document.createElement('button');
+    b.className = 'gsweapon' + (item.id === gs.selectedId ? ' sel' : '');
+    b.innerHTML = `<b>${item.name}</b><small>${where}</small>`;
+    b.onclick = () => { gs.selectedId = item.id; gs.hover = null; renderGunsmith(); };
+    wl.append(b);
+  }
+  if (!list.length) wl.innerHTML = '<div class="empty">No weapons — build one below.</div>';
+
+  // Blueprints (build new platforms / armor from parts).
+  const bp = $('gsBuild'); bp.innerHTML = '';
+  const blueprint = (label, lvl, cost, action, type) => {
+    const row = document.createElement('div');
+    row.className = 'bprow' + (lvl > me.level ? ' locked' : '');
+    row.innerHTML = `<span>${label}</span>`;
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = lvl > me.level ? `LVL ${lvl}` : cost ? `Build · ${cost}` : 'Build · free';
+    b.disabled = lvl > me.level || totalParts < cost;
+    b.onclick = () => send({ t: 'gunsmith', action, type });
+    row.append(b);
+    bp.append(row);
+  };
+  for (const [k, a] of Object.entries(ARCHETYPES)) blueprint(a.label, a.level, a.cost, 'build', k);
+  for (const [k, a] of Object.entries(ARMORS)) blueprint(`${a.name} (armor ${a.armor})`, a.level, a.cost, 'buildArmor', k);
+
+  const item = list.find((w) => w.item.id === gs.selectedId)?.item;
+  $('gsTitle').textContent = item ? item.name : 'Gunsmith';
+  setPreviewModel(item ? previewItem(item, gs.hover) : null);
+  const slotsEl = $('gsSlots'); slotsEl.innerHTML = '';
+  const opts = $('gsOptions'); opts.innerHTML = '';
+  if (!item) { $('gsStats').innerHTML = ''; $('gsNumbers').innerHTML = ''; return; }
+  renderStatBars(item, previewItem(item, gs.hover));
+
+  for (const slot of [...SLOTS, 'paint']) {
+    const cur = slot === 'paint' ? PAINTS[item.paint]?.name : PARTS[item.parts[slot]]?.name;
+    const anyFit = slot === 'paint' || Object.entries(PARTS).some(([id, p]) => p.slot === slot && partFits(id, item.archetype) && p.level > 1);
+    const b = document.createElement('button');
+    b.className = 'gsslot' + (gs.slot === slot ? ' sel' : '');
+    b.innerHTML = `<small>${SLOT_LABELS[slot]}</small><b>${anyFit ? cur : '—'}</b>`;
+    b.disabled = !anyFit;
+    b.onclick = () => { gs.slot = slot; gs.hover = null; renderGunsmith(); };
+    slotsEl.append(b);
+  }
+
+  const option = (label, lvl, equipped, hover, onPick) => {
+    const b = document.createElement('button');
+    const locked = lvl > me.level;
+    b.className = 'gsopt' + (equipped ? ' sel' : '') + (locked ? ' locked' : '');
+    b.innerHTML = `${label}${locked ? `<small>LVL ${lvl}</small>` : equipped ? '<small>equipped</small>' : ''}`;
+    b.onmouseenter = () => { gs.hover = hover; setPreviewModel(previewItem(item, hover)); renderStatBars(item, previewItem(item, hover)); setExplode(gs.model, gs.explode, gs.slot); };
+    b.onmouseleave = () => { gs.hover = null; setPreviewModel(item); renderStatBars(item, item); };
+    if (!locked && !equipped) b.onclick = onPick;
+    opts.append(b);
+  };
+  if (gs.slot === 'paint') {
+    for (const [id, p] of Object.entries(PAINTS)) {
+      option(`<i class="swatch" style="background:${p.color}"></i>${p.name}`, p.level, item.paint === id, { paint: id }, () => send({ t: 'gunsmith', action: 'paint', itemId: item.id, paint: id }));
+    }
+  } else {
+    for (const [id, p] of Object.entries(PARTS)) {
+      if (p.slot !== gs.slot || !partFits(id, item.archetype)) continue;
+      option(p.name, p.level, item.parts[gs.slot] === id, { slot: gs.slot, partId: id }, () => send({ t: 'gunsmith', action: 'attach', itemId: item.id, slot: gs.slot, partId: id }));
+    }
+  }
+}
+
+function drawGunsmith(dt) {
+  if (!state.gunsmithOpen) return;
+  const c = $('gsview');
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.floor(w * gsRenderer.getPixelRatio())) { gsRenderer.setSize(w, h, false); gsCamera.aspect = w / h; gsCamera.updateProjectionMatrix(); }
+  gs.explode += (gs.explodeTarget - gs.explode) * Math.min(1, dt * 6);
+  if (gs.model) setExplode(gs.model, gs.explode, gs.slot);
+  gsTurntable.rotation.y += dt * 0.4;
+  gsCamera.position.set(2.3, 0.6, 0);
+  gsCamera.lookAt(0, 0, 0);
+  gsRenderer.render(gsScene, gsCamera);
+}
+
+// ------------------------------------------------------------------ progression feedback
+function xpPopup(amount, reason) {
+  const el = document.createElement('div');
+  el.textContent = `+${amount} XP  ${reason}`;
+  $('xpfeed').prepend(el);
+  while ($('xpfeed').children.length > 4) $('xpfeed').lastChild.remove();
+  setTimeout(() => el.remove(), 2500);
+}
+
+function levelBanner(level, unlocks) {
+  const el = $('levelup');
+  el.innerHTML = `<h2>LEVEL ${level}</h2>${unlocks.length ? `<div>Unlocked: ${unlocks.map((u) => `<b>${u.name}</b>`).join(', ')}</div><small>Visit the gunsmith at your stash house</small>` : ''}`;
+  el.hidden = false;
+  el.animate([{ opacity: 0, transform: 'translate(-50%, -10px)' }, { opacity: 1, transform: 'translate(-50%, 0)' }], { duration: 250 });
+  clearTimeout(levelBanner.t);
+  levelBanner.t = setTimeout(() => { el.hidden = true; }, 5000);
+}
+
 // ------------------------------------------------------------------ input
 $('join').onclick = () => {
   const name = $('name').value.trim() || 'Agent';
@@ -538,7 +763,7 @@ $('respawn').onclick = () => { send({ t: 'respawn' }); $('death').hidden = true;
 canvas.addEventListener('click', () => { if (state.me && !state.invOpen && !state.me.dead) canvas.requestPointerLock?.(); });
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return;
-  const sens = state.aiming ? 0.0012 : 0.0022;
+  const sens = state.aiming ? 0.0022 * camera.fov / 70 : 0.0022;
   state.yaw -= e.movementX * sens;
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - e.movementY * sens));
 });
@@ -557,9 +782,10 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Tab' || e.code === 'KeyI') {
     e.preventDefault();
     if (!state.me || state.me.dead) return;
-    if (state.invOpen) { closeInventory(); canvas.requestPointerLock?.(); } else openInventory();
+    if (state.invOpen) { state.gunsmithOpen = false; $('gunsmith').hidden = true; closeInventory(); canvas.requestPointerLock?.(); } else openInventory();
     return;
   }
+  if (e.code === 'Escape' && state.gunsmithOpen) { closeGunsmith(); return; }
   if (e.code === 'Escape' && state.invOpen) { closeInventory(); return; }
   state.keys.add(e.code);
   if (e.repeat) return;
@@ -603,9 +829,9 @@ function tryFire(now) {
   if (!me || me.dead || state.invOpen) return;
   const w = me.inv[me.active];
   if (!w) return;
-  const semi = SEMI_AUTO.has(w.archetype);
+  const s = weaponStats(w);
+  const semi = s.semi;
   if (semi && state.firedThisPress) return;
-  const s = weaponStats(w, me.inv.armor);
   if (now - state.lastShot < 60000 / s.rpm) return;
   if (me.reloading) return;
   if (me.mag <= 0) { if (me.ammo > 0 && !state.autoReloadSent) { send({ t: 'reload' }); state.autoReloadSent = now; } return; }
@@ -618,13 +844,14 @@ function tryFire(now) {
   state.firedThisPress = true;
   me.mag -= 1;                          // predicted; server confirms via 'you'
   $('mag').textContent = me.mag;
-  state.recoil += semi ? 0.035 : 0.012;
+  // Recoil comes from the gunsmith build: stocks, grips, muzzles and bipods all change it.
+  state.recoil += s.recoil * (state.crouch ? s.crouchRecoil : 1) * (state.aiming ? 0.85 : 1) * (0.8 + Math.random() * 0.4);
 }
 
 function nearestInteractable() {
   let best = null, bestD = INTERACT_RANGE;
   const consider = (d, text) => { if (d < bestD) { bestD = d; best = text; } };
-  for (const [, l] of state.loot) consider(Math.hypot(l.data.x - state.x, l.data.z - state.z), `Pick up <span style="color:${RARITY[l.data.rarity].color}">${l.data.kind === 'weapon' || l.data.kind === 'armor' ? RARITY[l.data.rarity].name + ' ' : ''}${l.data.name}</span>`);
+  for (const [, l] of state.loot) consider(Math.hypot(l.data.x - state.x, l.data.z - state.z), `Pick up ${l.data.name}${l.data.amount ? ` (+${l.data.amount})` : ''}`);
   for (const [, b] of state.bags) consider(Math.hypot(b.data.x - state.x, b.data.z - state.z), `Search ${b.data.label}`);
   state.map.houses.forEach((h, i) => {
     const hs = state.houses[i];
@@ -655,7 +882,10 @@ function frame(now) {
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
     state.sprint = k.has('ShiftLeft') && f > 0 && !state.aiming;
     if (state.sprint) state.crouch = false;
-    const speed = state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED;
+    // Mobility comes from the active weapon build and the armor you wear.
+    const ws = weaponStats(me.inv[me.active]);
+    const mobility = (ws ? ws.mobility : 1.05) + armorStats(me.inv.armor).mobility;
+    const speed = (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
     const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
     const rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
     let mx = fx * f + rx * r, mz = fz * f + rz * r;
@@ -701,10 +931,15 @@ function frame(now) {
   camera.position.copy(pivot).addScaledVector(toCam, camDist);
   if (camera.position.y < 0.3) camera.position.y = 0.3;
   camera.lookAt(camera.position.clone().add(d));
-  const fov = aim ? 50 : 70;
-  if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * 12); camera.updateProjectionMatrix(); }
+  // Optic zoom sets ADS field of view; handling sets how fast you get there.
+  const ws = me && weaponStats(me.inv[me.active]);
+  const fov = aim && ws ? 70 / ws.zoom : 70;
+  const adsRate = ws ? 4 + ws.handling / 6 : 12;
+  if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
   $('crosshair').classList.toggle('aim', aim);
 
+  // Hide stash labels you're standing right under.
+  state.map.houses.forEach((h, i) => { houseLabels[i].visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; });
   sun.position.set(state.x + 40, 80, state.z + 25);
   sun.target.position.set(state.x, 0, state.z);
 
@@ -718,6 +953,7 @@ function frame(now) {
   $('prompt').innerHTML = prompt ? `<kbd>E</kbd>${prompt}` : '';
   drawMinimap();
   renderer.render(scene, camera);
+  drawGunsmith(dt);
 }
 requestAnimationFrame(frame);
 

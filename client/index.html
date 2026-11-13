@@ -17,7 +17,7 @@
     <button id="join">Enter the zone</button>
     <div class="controls">
       <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
-      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory
+      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
     </div>
   </div>
 
@@ -27,7 +27,10 @@
     <div id="crosshair"><i></i><i></i><i></i><i></i></div>
     <div id="prompt"></div>
     <div id="toasts"></div>
+    <div id="xpfeed"></div>
+    <div id="levelup" hidden></div>
     <div id="vitals">
+      <div id="levelrow"><span id="level">LEVEL 1</span><div class="bar xp"><div id="xpbar" class="fill xpfill"></div><span id="xptext"></span></div></div>
       <div class="bar"><div id="armorbar" class="fill armor"></div><span id="armortext"></span></div>
       <div class="bar"><div id="hpbar" class="fill hp"></div><span id="hptext"></span></div>
     </div>
@@ -54,6 +57,30 @@
       </section>
     </div>
     <div class="hint">Tab / Esc to close</div>
+  </div>
+
+  <div id="gunsmith" class="panel" hidden>
+    <header><h2 id="gsTitle">Gunsmith</h2><span id="gsParts"></span><button class="ghost" id="gsExplode">Exploded view</button><button class="ghost" id="gsClose">Back</button></header>
+    <div class="gsgrid">
+      <aside>
+        <h3>Your weapons</h3>
+        <div id="gsWeapons"></div>
+        <h3>Build</h3>
+        <div id="gsBuild"></div>
+      </aside>
+      <main>
+        <canvas id="gsview"></canvas>
+        <div id="gsNumbers"></div>
+        <div id="gsStats"></div>
+      </main>
+      <aside>
+        <h3>Slots</h3>
+        <div id="gsSlots"></div>
+        <h3>Options</h3>
+        <div id="gsOptions"></div>
+      </aside>
+    </div>
+    <div class="hint">Hover an option to preview it · Esc to go back</div>
   </div>
 
   <div id="death" class="panel center" hidden>

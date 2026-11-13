@@ -20,21 +20,22 @@ const TOK_A = 'a'.repeat(32), TOK_B = 'b'.repeat(32);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function character(name, x, z, inv, extra = {}) {
-  return { name, x, z, yaw: 0, hp: 100, armor: 0, inv, ammo: 400, mags: {}, active: 'primary', dead: false, kills: 0, ...extra };
+  return { name, x, z, yaw: 0, hp: 100, armor: 0, inv, ammo: 400, mags: {}, active: 'primary', dead: false, kills: 0, xp: 0, parts: 0, ...extra };
 }
 
-const relic = makeWeapon('carbine', 'relic');
-const lmg = makeWeapon('lmg', 'relic');
+const relic = makeWeapon('carbine', { optic: 'holo' }, 'desert');
+const lmg = makeWeapon('lmg', { magazine: 'drum' });
 const seed = {
   seed: 1337,
+  version: 2,
   characters: {
     [TOK_A]: character('Alice', h.x + 3, h.crate.z + 2, { primary: null, secondary: makeWeapon('sidearm', 'scrap'), armor: null, pack: [] }, { active: 'secondary' }),
     [TOK_B]: character('Bob', h.x, h.door.maxZ + 3, { primary: lmg, secondary: null, armor: null, pack: [] }, { mags: { [lmg.id]: 80 } }),
   },
-  houses: Object.fromEntries(map.houses.map((x) => [x.id, { owner: null, ownerName: null, doorHp: 300, doorOpen: false, items: [] }])),
+  houses: Object.fromEntries(map.houses.map((x) => [x.id, { owner: null, ownerName: null, doorHp: 300, doorOpen: false, items: [], parts: 0 }])),
   bags: [],
 };
-seed.houses[0] = { owner: TOK_A, ownerName: 'Alice', doorHp: 300, doorOpen: false, items: [relic] };
+seed.houses[0] = { owner: TOK_A, ownerName: 'Alice', doorHp: 300, doorOpen: false, items: [relic], parts: 50 };
 fs.writeFileSync(DATA_FILE, JSON.stringify(seed));
 
 function startServer() {
@@ -62,6 +63,29 @@ async function until(fn, ms = 5000) {
   while (Date.now() < end) { const v = fn(); if (v) return v; await sleep(25); }
   throw new Error('timed out');
 }
+
+test('gunsmith: level-gated attachments, building with parts, XP', async (t) => {
+  const server = await startServer();
+  t.after(() => server.kill('SIGKILL'));
+  const alice = await client('Alice', TOK_A);
+  await until(() => alice.you);
+  // Alice stands inside her house; walk to the crate.
+  for (let z = h.crate.z + 2; z >= h.crate.z + 1.2; z -= 0.2) { alice.send({ t: 'state', x: h.x + 1, z, yaw: Math.PI, pitch: 0 }); await sleep(50); }
+  const sidearm = alice.you.inv.secondary;
+  alice.send({ t: 'gunsmith', action: 'attach', itemId: sidearm.id, slot: 'muzzle', partId: 'suppressor' });
+  await until(() => alice.msgs.some((m) => m.t === 'toast' && /unlocks at level 7/.test(m.text)));
+  alice.send({ t: 'gunsmith', action: 'attach', itemId: sidearm.id, slot: 'optic', partId: 'reflex' });
+  alice.send({ t: 'gunsmith', action: 'build', type: 'carbine' });
+  await until(() => alice.msgs.some((m) => m.t === 'toast' && /level 3/.test(m.text)));
+  alice.send({ t: 'gunsmith', action: 'build', type: 'smg' });   // 30 parts, taken from her stash's 50
+  await until(() => alice.you.inv.pack.some((i) => i.archetype === 'smg'));
+  assert.equal(alice.you.inv.secondary.parts.optic, 'iron', 'reflex needs level 2');
+  // Building gave XP; level 2 needs 400 XP so she's not there yet.
+  await until(() => alice.msgs.some((m) => m.t === 'xp' && /Built/.test(m.reason)));
+  assert.equal(alice.you.level, 1);
+  alice.ws.close();
+  await sleep(200);
+});
 
 test('stash house breach, loot, PvP and persistence', async (t) => {
   let server = await startServer();
@@ -91,6 +115,7 @@ test('stash house breach, loot, PvP and persistence', async (t) => {
   }
   await until(breached);
   await until(() => alice.msgs.some((m) => m.t === 'toast' && /breached/.test(m.text)));
+  await until(() => bob.msgs.some((m) => m.t === 'xp' && /breached/.test(m.reason)));
 
   // Bob walks inside to the crate, respecting the speed limit.
   let z = bz;
@@ -105,6 +130,11 @@ test('stash house breach, loot, PvP and persistence', async (t) => {
   assert.equal(bob.container.canPut, false);
   bob.send({ t: 'container', action: 'take', itemId: relic.id });
   await until(() => bob.you.inv.pack.some((i) => i.id === relic.id));
+  bob.send({ t: 'container', action: 'take', parts: true });
+  await until(() => bob.you.parts === 50);
+  // The gunsmith only works at your own stash house.
+  bob.send({ t: 'gunsmith', action: 'attach', itemId: relic.id, slot: 'muzzle', partId: 'compensator' });
+  await until(() => bob.msgs.some((m) => m.t === 'toast' && /your stash house/.test(m.text)));
 
   // PvP: Bob shoots Alice (standing to his side inside the house).
   const before = alice.you.hp;

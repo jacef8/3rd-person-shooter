@@ -65,3 +65,43 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 .item button { pointer-events: auto; }
 .empty { color: #666; font-size: 13px; padding: 6px 0; }
 .hint { font-size: 11px; color: #666; text-align: right; margin-top: 8px; }
+
+#levelrow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+#level { font-weight: 800; font-size: 12px; color: #ffc53d; letter-spacing: 0.1em; white-space: nowrap; }
+#levelrow .bar { flex: 1; margin: 0; height: 8px; }
+#levelrow .bar span { font-size: 8px; line-height: 8px; }
+.bar .fill.xpfill { background: linear-gradient(90deg, #c98a10, #ffc53d); }
+#xpfeed { position: absolute; bottom: 110px; left: 24px; font-size: 13px; color: #ffc53d; text-shadow: 0 0 3px #000; }
+#levelup { position: absolute; top: 26%; left: 50%; transform: translateX(-50%); text-align: center; background: rgba(0,0,0,0.7); border: 1px solid #ffc53d; padding: 12px 28px; border-radius: 4px; max-width: 70vw; }
+#levelup h2 { margin: 0 0 4px; color: #ffc53d; letter-spacing: 0.25em; }
+#levelup b { color: #fff; } #levelup small { color: #aaa; }
+.gsentry { display: flex; gap: 8px; margin-bottom: 10px; }
+.gsentry button { pointer-events: auto; }
+
+#gunsmith { inset: 3vh 3vw; padding: 16px 20px; display: flex; flex-direction: column; }
+#gunsmith header { display: flex; align-items: center; gap: 14px; }
+#gunsmith header h2 { margin: 0; color: #ff8a2a; letter-spacing: 0.15em; text-transform: uppercase; font-size: 18px; flex: 0 0 auto; }
+#gunsmith header #gsParts { flex: 1; color: #ffc53d; font-size: 13px; }
+#gunsmith h3 { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #889; margin: 12px 0 6px; }
+.gsgrid { flex: 1; display: grid; grid-template-columns: 240px 1fr 260px; gap: 18px; min-height: 0; }
+.gsgrid aside { overflow: auto; }
+.gsgrid main { display: flex; flex-direction: column; min-height: 0; }
+#gsview { width: 100%; flex: 1; min-height: 200px; background: radial-gradient(ellipse at center, #2a3038 0%, #12151a 75%); border-radius: 4px; }
+#gsNumbers { font-size: 12px; color: #bbb; margin: 8px 0; } #gsNumbers b { color: #ffc53d; }
+.statrow { display: grid; grid-template-columns: 80px 1fr; align-items: center; gap: 8px; font-size: 11px; color: #aab; margin: 3px 0; }
+.sbar { position: relative; height: 8px; background: #23272e; }
+.sbar i { position: absolute; left: 0; top: 0; bottom: 0; background: #d8d8d8; }
+.sbar b { position: absolute; top: 0; bottom: 0; }
+.sbar b.up { background: #5fd35f; } .sbar b.down { background: #e55; }
+.gsweapon, .gsslot, .gsopt { display: flex; justify-content: space-between; align-items: center; width: 100%; text-align: left; background: #15181d; color: #ddd; border: 1px solid #2a2e35; font-weight: 500; padding: 7px 10px; margin-bottom: 4px; font-size: 13px; }
+.gsweapon small, .gsslot small, .gsopt small { color: #888; font-size: 10px; text-transform: uppercase; }
+.gsslot { flex-direction: column; align-items: flex-start; } .gsslot b { font-weight: 600; }
+.gsweapon.sel, .gsslot.sel { border-color: #ff7a1a; background: #2a1d12; }
+.gsopt.sel { border-color: #5fd35f; }
+.gsopt.locked { opacity: 0.45; cursor: not-allowed; }
+.gsopt:hover:not(.locked) { border-color: #ffc53d; }
+.gsslot:disabled { opacity: 0.35; }
+.swatch { display: inline-block; width: 12px; height: 12px; margin-right: 8px; border: 1px solid #555; vertical-align: middle; }
+.bprow { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #1f2329; }
+.bprow.locked span { color: #666; }
+.bprow button:disabled { opacity: 0.4; cursor: not-allowed; }

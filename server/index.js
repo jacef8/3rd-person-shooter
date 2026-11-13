@@ -15,7 +15,8 @@ import {
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE,
 } from '../shared/world.js';
 import {
-  rollLoot, makeWeapon, makeConsumable, weaponStats, armorStats,
+  makeWeapon, makeArmor, makeConsumable, weaponStats, armorStats, worldSupply, partFits,
+  levelFromXp, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS,
 } from '../shared/items.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,6 +31,7 @@ const STASH_SIZE = 30;
 const DOOR_HP = Number(process.env.DOOR_HP || 1500);
 const LOOT_RESPAWN_MS = 90_000;
 const BAG_LIFETIME_MS = 30 * 60_000;
+const DB_VERSION = 2;
 
 const map = generateMap(SEED);
 const staticSolids = map.boxes;
@@ -38,7 +40,7 @@ const staticSolids = map.boxes;
 function freshDb() {
   return {
     characters: {},   // token -> persistent character
-    houses: Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: DOOR_HP, doorOpen: false, items: [] }])),
+    houses: Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: DOOR_HP, doorOpen: false, items: [], parts: 0 }])),
     bags: [],
   };
 }
@@ -46,16 +48,18 @@ function freshDb() {
 function loadDb() {
   try {
     const db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    if (db.seed !== SEED) throw new Error('seed changed');
+    if (db.seed !== SEED || db.version !== DB_VERSION) throw new Error('incompatible save');
     for (const h of map.houses) db.houses[h.id] ??= freshDb().houses[h.id];
     return db;
   } catch {
-    return { seed: SEED, ...freshDb() };
+    return { seed: SEED, version: DB_VERSION, ...freshDb() };
   }
 }
 
 const db = loadDb();
 db.seed = SEED;
+db.version = DB_VERSION;
+for (const h of Object.values(db.houses)) h.parts ??= 0;
 
 function saveDb() {
   for (const p of players.values()) persistCharacter(p);
@@ -89,7 +93,7 @@ function solids() {
 function starterKit() {
   return {
     primary: null,
-    secondary: makeWeapon('sidearm', 'scrap'),
+    secondary: makeWeapon('sidearm'),
     armor: null,
     pack: [makeConsumable('medkit')],
   };
@@ -97,13 +101,13 @@ function starterKit() {
 
 function starterLoadout() {
   const inv = starterKit();
-  return { inv, ammo: 90, mags: { [inv.secondary.id]: weaponStats(inv.secondary).mag }, active: 'secondary' };
+  return { inv, ammo: 90, parts: 0, mags: { [inv.secondary.id]: weaponStats(inv.secondary).mag }, active: 'secondary' };
 }
 
 function newCharacter(name) {
   const sp = map.playerSpawns[Math.floor(Math.random() * map.playerSpawns.length)];
   return {
-    name, x: sp.x, z: sp.z, yaw: 0, hp: 100, armor: 0, ...starterLoadout(), dead: false, kills: 0,
+    name, x: sp.x, z: sp.z, yaw: 0, hp: 100, armor: 0, ...starterLoadout(), parts: 60, dead: false, kills: 0, xp: 0,
   };
 }
 
@@ -117,15 +121,30 @@ function claimHouse(token, name) {
   return Number(free[0]);
 }
 
-function maxHp(p) { return 100 + armorStats(p.inv.armor).health; }
+function maxHp() { return 100; }
 function maxArmor(p) { return armorStats(p.inv.armor).armor; }
 function activeWeapon(p) { return p.inv[p.active] || p.inv.primary || p.inv.secondary || null; }
-function stats(p) { return weaponStats(activeWeapon(p), p.inv.armor); }
+function stats(p) { return weaponStats(activeWeapon(p)); }
+function level(p) { return levelFromXp(p.xp || 0); }
+
+/** Grant XP; announces level-ups along with exactly what they unlocked. */
+function award(p, amount, reason) {
+  if (!p || p.isBot || !amount) return;
+  const before = level(p);
+  p.xp = (p.xp || 0) + amount;
+  const after = level(p);
+  send(p.ws, { t: 'xp', amount, reason });
+  for (let l = before + 1; l <= after; l++) {
+    send(p.ws, { t: 'levelup', level: l, unlocks: unlocksAt(l) });
+    feed(`${p.name} reached level ${l}`);
+  }
+  dirty(p);
+}
 
 function persistCharacter(p) {
   db.characters[p.token] = {
     name: p.name, x: p.x, z: p.z, yaw: p.yaw, hp: p.hp, armor: p.armor, inv: p.inv,
-    ammo: p.ammo, mags: p.mags, active: p.active, dead: p.dead, kills: p.kills,
+    ammo: p.ammo, mags: p.mags, active: p.active, dead: p.dead, kills: p.kills, xp: p.xp, parts: p.parts,
   };
 }
 
@@ -140,13 +159,14 @@ function privateState(p) {
   return {
     t: 'you', hp: p.hp, maxHp: maxHp(p), armor: p.armor, maxArmor: maxArmor(p), ammo: p.ammo,
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
+    xp: p.xp, level: level(p), parts: p.parts, atStash: atOwnStash(p),
     reloading: p.reloadUntil > Date.now(), houseId: p.houseId,
   };
 }
 function dirty(p) { p.dirty = true; }
 
 // ---------------------------------------------------------------- combat
-function applyDamage(target, amount, attacker, isBot) {
+function applyDamage(target, amount, attacker, isBot, headshot = false) {
   if (target.dead) return;
   let dmg = amount;
   if (!isBot && target.armor > 0) {
@@ -159,36 +179,40 @@ function applyDamage(target, amount, attacker, isBot) {
   if (!isBot) dirty(target);
   if (target.hp <= 0) {
     target.hp = 0;
-    if (isBot) killBot(target, attacker); else killPlayer(target, attacker);
+    if (isBot) killBot(target, attacker, headshot); else killPlayer(target, attacker, headshot);
   }
 }
 
-function dropBag(x, z, items, ammo = 0, label = 'Bag') {
-  const bag = { id: 'bag' + crypto.randomBytes(6).toString('hex'), x, z, items: items.filter(Boolean), ammo, label, expires: Date.now() + BAG_LIFETIME_MS };
-  if (bag.items.length || bag.ammo) db.bags.push(bag);
+function dropBag(x, z, items, ammo = 0, label = 'Bag', parts = 0) {
+  const bag = { id: 'bag' + crypto.randomBytes(6).toString('hex'), x, z, items: items.filter(Boolean), ammo, parts, label, expires: Date.now() + BAG_LIFETIME_MS };
+  if (bag.items.length || bag.ammo || bag.parts) db.bags.push(bag);
 }
 
-function killPlayer(p, attacker) {
+function killPlayer(p, attacker, headshotKill) {
   p.dead = true;
   const { primary, secondary, armor, pack } = p.inv;
-  dropBag(p.x, p.z, [primary, secondary, armor, ...pack], p.ammo, `${p.name}'s bag`);
+  dropBag(p.x, p.z, [primary, secondary, armor, ...pack], p.ammo, `${p.name}'s bag`, p.parts);
   p.inv = { primary: null, secondary: null, armor: null, pack: [] };
-  p.ammo = 0; p.mags = {}; p.armor = 0;
+  p.ammo = 0; p.mags = {}; p.armor = 0; p.parts = 0;
   const by = attacker ? attacker.name : 'the city';
-  if (attacker && !attacker.isBot) { attacker.kills++; dirty(attacker); }
+  if (attacker && !attacker.isBot) {
+    attacker.kills++;
+    award(attacker, XP.playerKill + 20 * level(p) + (headshotKill ? XP.headshotKill : 0), `Killed ${p.name}`);
+  }
   feed(`${by} ➜ ${p.name}`);
   send(p.ws, { t: 'died', by });
   dirty(p);
 }
 
-function killBot(b, attacker) {
+function killBot(b, attacker, headshotKill) {
   b.dead = true;
   b.respawnAt = Date.now() + 45_000;
-  const n = 1 + (Math.random() < 0.4 ? 1 : 0);
-  const items = [];
-  for (let i = 0; i < n; i++) items.push(rollLoot(Math.random, 0.6));
-  dropBag(b.x, b.z, items, 30, 'Rogue cache');
-  if (attacker && !attacker.isBot) { attacker.kills++; dirty(attacker); }
+  dropBag(b.x, b.z, b.drops % 3 === 0 ? [makeConsumable('medkit')] : [], 30, 'Rogue cache', 20);
+  b.drops++;
+  if (attacker && !attacker.isBot) {
+    attacker.kills++;
+    award(attacker, XP.rogueKill + (headshotKill ? XP.headshotKill : 0), 'Rogue down');
+  }
   if (attacker) feed(`${attacker.name} ➜ ${b.name}`);
 }
 
@@ -224,10 +248,11 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
   const len = Math.hypot(base[0], base[1], base[2]) || 1;
   base = [base[0] / len, base[1] / len, base[2] / len];
   const moving = !isBot && shooter.speed > 0.5;
-  const spreadMul = (moving ? 1.8 : 1) * (shooter.crouch ? 0.7 : 1) * (shooter.aiming ? 0.6 : 1) / botAccuracy;
+  const baseSpread = isBot ? s.hipSpread * 0.6 : shooter.aiming ? s.adsSpread : s.hipSpread;
+  const spreadMul = (moving ? 1.6 : 1) * (shooter.crouch ? 0.8 * s.crouchSpread : 1) / botAccuracy;
   const tracers = [];
   for (let i = 0; i < s.pellets; i++) {
-    const sp = s.spread * spreadMul;
+    const sp = baseSpread * spreadMul;
     let dx = base[0] + (Math.random() - 0.5) * 2 * sp;
     let dy = base[1] + (Math.random() - 0.5) * 2 * sp;
     let dz = base[2] + (Math.random() - 0.5) * 2 * sp;
@@ -240,14 +265,13 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
     // Damage falls off linearly past optimal range down to 40%.
     const falloff = t <= s.range ? 1 : Math.max(0.4, 1 - (t - s.range) / (s.range * 1.2) * 0.6);
     let dmg = s.damage * falloff;
-    let crit = false;
-    if (Math.random() < s.critChance) { dmg *= 1 + s.critDamage; crit = true; }
     if (hit.headshot) dmg *= 1.5;
     if (hit.kind === 'door') {
       const h = db.houses[hit.target];
       h.doorHp = Math.max(0, h.doorHp - dmg);
       h.lastDamaged = Date.now();
       if (h.doorHp === 0) {
+        if (!isBot && h.owner !== shooter.token) award(shooter, XP.breach, 'Stash house breached');
         feed(`${shooter.name} breached ${h.ownerName || 'an unclaimed'}'s stash house`);
         notifyOwner(hit.target, `⚠ Your stash house door was breached by ${shooter.name}!`);
       } else if (!h.alertedAt || Date.now() - h.alertedAt > 30_000) {
@@ -255,11 +279,11 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
         notifyOwner(hit.target, `⚠ ${shooter.name} is shooting your stash house door!`);
       }
     } else {
-      applyDamage(hit.target, dmg, shooter, hit.kind === 'bot');
-      if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: crit || hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2] });
+      applyDamage(hit.target, dmg, shooter, hit.kind === 'bot', hit.headshot);
+      if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2] });
     }
   }
-  broadcast({ t: 'shot', from: shooter.id, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
+  broadcast({ t: 'shot', from: shooter.id, sup: !!s.suppressed, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
 }
 
 function notifyOwner(houseId, text) {
@@ -274,12 +298,12 @@ function spawnBot(b) {
   const arche = BOT_WEAPONS[Math.floor(Math.random() * BOT_WEAPONS.length)];
   Object.assign(b, {
     x: sp.x, z: sp.z, homeX: sp.x, homeZ: sp.z, yaw: 0, hp: 140, maxHp: 140, dead: false,
-    weapon: { ...weaponStats(makeWeapon(arche, 'scrap')), damage: weaponStats(makeWeapon(arche, 'scrap')).damage * 0.55, critChance: 0 },
+    weapon: (() => { const w = weaponStats(makeWeapon(arche)); return { ...w, damage: w.damage * 0.55 }; })(),
     nextShot: 0, wander: null, crouch: false, target: null, burst: 0,
   });
 }
 for (let i = 0; i < BOT_COUNT; i++) {
-  const b = { id: uid('b'), name: 'Rogue', isBot: true };
+  const b = { id: uid('b'), name: 'Rogue', isBot: true, drops: i };
   spawnBot(b);
   bots.set(b.id, b);
 }
@@ -332,7 +356,7 @@ function refillLoot(now) {
   map.lootSpawns.forEach((sp, i) => {
     if (spawnCooldown.get(i) > now) return;
     for (const l of loot.values()) if (l.spawnIndex === i) return;
-    const item = rollLoot();
+    const item = { ...worldSupply(i), id: uid('i') };
     const id = uid('l');
     loot.set(id, { id, x: sp.x, z: sp.z, item, spawnIndex: i });
     spawnCooldown.set(i, Infinity);
@@ -340,7 +364,8 @@ function refillLoot(now) {
 }
 
 function addToPack(p, item) {
-  if (item.kind === 'ammo') { p.ammo += 60; return true; }
+  if (item.kind === 'ammo') { p.ammo += item.amount || 60; return true; }
+  if (item.kind === 'parts') { p.parts += item.amount || 10; return true; }
   if (p.inv.pack.length >= PACK_SIZE) return false;
   p.inv.pack.push(item);
   return true;
@@ -364,10 +389,10 @@ function containerView(p, kind, id) {
   if (kind === 'stash') {
     const h = db.houses[id];
     const mine = h.owner === p.token;
-    return { t: 'container', kind, id, title: mine ? 'Your stash' : `${h.ownerName || 'Unclaimed'}'s stash`, items: h.items, ammo: 0, canPut: mine, cap: STASH_SIZE };
+    return { t: 'container', kind, id, title: mine ? 'Your stash' : `${h.ownerName || 'Unclaimed'}'s stash`, items: h.items, ammo: 0, parts: h.parts || 0, canPut: mine, cap: STASH_SIZE, gunsmith: mine };
   }
   const bag = db.bags.find((b) => b.id === id);
-  return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ammo: bag.ammo, canPut: false, cap: 0 } : { t: 'container', closed: true };
+  return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ammo: bag.ammo, parts: bag.parts || 0, canPut: false, cap: 0 } : { t: 'container', closed: true };
 }
 
 function nearContainer(p, kind, id) {
@@ -391,6 +416,7 @@ function interact(p) {
   if (it.kind === 'loot') {
     if (!addToPack(p, it.ref.item)) return toast(p, 'Backpack full');
     loot.delete(it.ref.id);
+    award(p, XP.pickup, it.ref.item.name);
     spawnCooldown.set(it.ref.spawnIndex, Date.now() + LOOT_RESPAWN_MS);
     dirty(p);
   } else if (it.kind === 'bag' || it.kind === 'stash') {
@@ -426,6 +452,7 @@ function containerAction(p, msg) {
   if (!store) return;
   if (msg.action === 'take') {
     if (msg.ammo && store.ammo) { p.ammo += store.ammo; store.ammo = 0; }
+    else if (msg.parts && store.parts) { p.parts += store.parts; store.parts = 0; }
     else {
       const idx = store.items.findIndex((i) => i.id === msg.itemId);
       if (idx < 0) return;
@@ -434,14 +461,79 @@ function containerAction(p, msg) {
     }
   } else if (msg.action === 'put') {
     if (kind !== 'stash' || db.houses[id].owner !== p.token) return;
+    if (msg.parts) { store.parts = (store.parts || 0) + p.parts; p.parts = 0; dirty(p); return refreshContainerViewers(kind, id); }
     if (store.items.length >= STASH_SIZE) return toast(p, 'Stash full');
     const idx = p.inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0) return;
     store.items.push(p.inv.pack.splice(idx, 1)[0]);
   }
-  if (kind === 'bag' && !store.items.length && !store.ammo) db.bags = db.bags.filter((b) => b !== store);
+  if (kind === 'bag' && !store.items.length && !store.ammo && !store.parts) db.bags = db.bags.filter((b) => b !== store);
   dirty(p);
   refreshContainerViewers(kind, id);
+}
+
+// ---------------------------------------------------------------- gunsmith (at your own stash house)
+function atOwnStash(p) {
+  if (p.houseId === null || p.houseId === undefined || p.dead) return false;
+  const h = map.houses[p.houseId];
+  return Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6;
+}
+
+function findOwnedWeapon(p, itemId) {
+  const inv = p.inv;
+  for (const slot of ['primary', 'secondary']) if (inv[slot]?.id === itemId) return inv[slot];
+  const inPack = inv.pack.find((i) => i.id === itemId);
+  if (inPack) return inPack;
+  if (p.houseId !== null) return db.houses[p.houseId].items.find((i) => i.id === itemId) || null;
+  return null;
+}
+
+/** Spend parts, carried first, then from the stash you're standing at. */
+function spendParts(p, cost) {
+  const stash = db.houses[p.houseId];
+  if (p.parts + (stash.parts || 0) < cost) return false;
+  const fromPack = Math.min(p.parts, cost);
+  p.parts -= fromPack;
+  stash.parts -= cost - fromPack;
+  return true;
+}
+
+function gunsmithAction(p, msg) {
+  if (!atOwnStash(p)) return toast(p, 'The gunsmith bench is at your stash house');
+  const lvl = level(p);
+  if (msg.action === 'attach' || msg.action === 'paint') {
+    const w = findOwnedWeapon(p, msg.itemId);
+    if (!w || w.kind !== 'weapon') return;
+    if (msg.action === 'attach') {
+      const part = PARTS[msg.partId];
+      if (!part || !SLOTS.includes(msg.slot) || part.slot !== msg.slot) return;
+      if (!partFits(msg.partId, w.archetype)) return toast(p, `${part.name} doesn't fit a ${ARCHETYPES[w.archetype].label}`);
+      if (part.level > lvl) return toast(p, `${part.name} unlocks at level ${part.level}`);
+      w.parts[msg.slot] = msg.partId;
+      const cap = weaponStats(w).mag;
+      if ((p.mags[w.id] ?? 0) > cap) { p.ammo += p.mags[w.id] - cap; p.mags[w.id] = cap; }
+    } else {
+      const paint = PAINTS[msg.paint];
+      if (!paint) return;
+      if (paint.level > lvl) return toast(p, `${paint.name} unlocks at level ${paint.level}`);
+      w.paint = msg.paint;
+    }
+  } else if (msg.action === 'build' || msg.action === 'buildArmor') {
+    const isArmor = msg.action === 'buildArmor';
+    const def = isArmor ? ARMORS[msg.type] : ARCHETYPES[msg.type];
+    if (!def) return;
+    if (def.level > lvl) return toast(p, `${isArmor ? def.name : def.label} unlocks at level ${def.level}`);
+    const stash = db.houses[p.houseId];
+    const roomInPack = p.inv.pack.length < PACK_SIZE;
+    if (!roomInPack && stash.items.length >= STASH_SIZE) return toast(p, 'Backpack and stash are full');
+    if (!spendParts(p, def.cost)) return toast(p, `Needs ${def.cost} parts`);
+    const item = isArmor ? makeArmor(msg.type) : makeWeapon(msg.type);
+    if (roomInPack) p.inv.pack.push(item); else stash.items.push(item);
+    award(p, XP.build, `Built ${item.name}`);
+    toast(p, `Built ${item.name}${roomInPack ? '' : ' (sent to stash)'}`);
+  } else return;
+  dirty(p);
+  refreshContainerViewers('stash', p.houseId);
 }
 
 function invAction(p, msg) {
@@ -501,7 +593,7 @@ function handleJoin(ws, msg) {
   const c = db.characters[token];
   const p = {
     id: uid('p'), ws, token, ...structuredClone(c), name,
-    crouch: false, aiming: false, speed: 0, lastShot: 0, reloadUntil: 0, lastMove: Date.now(),
+    crouch: false, aiming: false, speed: 0, lastShot: 0, reloadUntil: 0, lastMove: Date.now(), aliveMs: 0,
     openContainer: null, dirty: true,
   };
   p.houseId = claimHouse(token, name);
@@ -623,6 +715,7 @@ wss.on('connection', (ws) => {
       case 'closeContainer': p.openContainer = null; return;
       case 'inv': return !p.dead && invAction(p, msg);
       case 'respawn': return handleRespawn(p);
+      case 'gunsmith': return gunsmithAction(p, msg);
     }
   });
   ws.on('close', () => {
@@ -648,10 +741,16 @@ const loop = setInterval(() => {
     for (const h of Object.values(db.houses)) {
       if (h.doorHp > 0 && h.doorHp < DOOR_HP && now - (h.lastDamaged || 0) > 60_000) h.doorHp = Math.min(DOOR_HP, h.doorHp + DOOR_HP * 0.02);
     }
+    // Time in the zone earns XP, so you level up just by playing — not only by farming kills or drops.
+    for (const p of players.values()) {
+      if (p.dead) continue;
+      p.aliveMs += 1000;
+      if (p.aliveMs >= 60_000) { p.aliveMs -= 60_000; award(p, XP.survivalPerMinute, 'Survived another minute'); }
+    }
     // Armor regen out of combat.
     for (const p of players.values()) {
       if (p.dead || now - (p.lastHit || 0) < 6000) continue;
-      const regen = 2 + armorStats(p.inv.armor).armorRegen;
+      const regen = 3;
       if (p.armor < maxArmor(p)) { p.armor = Math.min(maxArmor(p), p.armor + regen); dirty(p); }
     }
   }
@@ -661,10 +760,11 @@ const loop = setInterval(() => {
       players: [...players.values()].map((p) => ({
         id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
         crouch: p.crouch, dead: p.dead, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
-        weapon: activeWeapon(p)?.archetype || null,
+        level: level(p),
+        gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       })),
       bots: [...bots.values()].filter((b) => !b.dead).map((b) => ({ id: b.id, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp })),
-      loot: [...loot.values()].map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, rarity: l.item.rarity, name: l.item.name })),
+      loot: [...loot.values()].map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, name: l.item.name, amount: l.item.amount || 0 })),
       bags: db.bags.map((b) => ({ id: b.id, x: b.x, z: b.z, label: b.label })),
       houses: map.houses.map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), open: s.doorOpen, owner: s.ownerName }; }),
     };

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateMap, moveWithCollision, rayBox, circleOverlapsBox, PLAYER_RADIUS } from '../shared/world.js';
-import { rollLoot, makeWeapon, weaponStats, itemScore, RARITIES } from '../shared/items.js';
+import { makeWeapon, weaponStats, levelFromXp, xpForLevel, unlocksAt, PARTS, ARCHETYPES, MAX_LEVEL, partFits } from '../shared/items.js';
 
 test('map generation is deterministic and has stash houses', () => {
   const a = generateMap(42), b = generateMap(42);
@@ -36,15 +36,46 @@ test('ray vs box', () => {
   assert.equal(rayBox(-5, 3, 0, 1, 0, 0, 0, 0, -1, 1, 2, 1), Infinity);
 });
 
-test('higher rarity weapons are stronger', () => {
-  const lo = makeWeapon('carbine', 'scrap'); lo.roll = 1;
-  const hi = makeWeapon('carbine', 'relic'); hi.roll = 1; hi.attrs = {};
-  assert.ok(weaponStats(hi).damage > weaponStats(lo).damage);
-  assert.ok(itemScore(hi) > itemScore(lo));
+test('level curve is monotonic and round-trips', () => {
+  for (let l = 1; l < MAX_LEVEL; l++) {
+    assert.ok(xpForLevel(l + 1) > xpForLevel(l));
+    assert.equal(levelFromXp(xpForLevel(l)), l);
+    assert.equal(levelFromXp(xpForLevel(l + 1) - 1), l);
+  }
+  assert.equal(levelFromXp(1e9), MAX_LEVEL);
 });
 
-test('loot rolls produce every rarity over many drops', () => {
+test('every unlock is reachable and announced exactly once', () => {
   const seen = new Set();
-  for (let i = 0; i < 5000; i++) seen.add(rollLoot(Math.random, 0.5).rarity);
-  for (const r of RARITIES) assert.ok(seen.has(r.key), r.key);
+  for (let l = 2; l <= MAX_LEVEL; l++) for (const u of unlocksAt(l)) { assert.ok(!seen.has(u.type + u.id)); seen.add(u.type + u.id); }
+  for (const [id, p] of Object.entries(PARTS)) if (p.level > 1) assert.ok(seen.has('part' + id), id);
+  for (const [id, a] of Object.entries(ARCHETYPES)) if (a.level > 1) assert.ok(seen.has('weapon' + id), id);
+});
+
+test('gunsmith parts are trade-offs that change stats', () => {
+  const base = weaponStats(makeWeapon('carbine'));
+  const ext = weaponStats(makeWeapon('carbine', { magazine: 'extMag' }));
+  assert.ok(ext.mag > base.mag && ext.reloadMs > base.reloadMs);
+  const sup = weaponStats(makeWeapon('carbine', { muzzle: 'suppressor' }));
+  assert.ok(sup.suppressed && sup.damage < base.damage);
+  const acog = weaponStats(makeWeapon('carbine', { optic: 'acog' }));
+  assert.ok(acog.zoom > base.zoom && acog.handling < base.handling);
+  const heavy = weaponStats(makeWeapon('carbine', { stock: 'heavyStock' }));
+  assert.ok(heavy.recoil < base.recoil && heavy.handling < base.handling);
+});
+
+test('incompatible parts are ignored', () => {
+  assert.equal(partFits('sniper', 'smg'), false);
+  const s = weaponStats(makeWeapon('smg', { optic: 'sniper' }));
+  assert.equal(s.zoom, weaponStats(makeWeapon('smg')).zoom);
+});
+
+test('every part modifier maps onto a real stat', () => {
+  const base = weaponStats(makeWeapon('carbine'));
+  for (const p of Object.values(PARTS)) {
+    for (const k of Object.keys(p.mods)) {
+      const key = k.endsWith('Mul') ? k.slice(0, -3) : k;
+      assert.ok(key in base, `${p.name}: ${k}`);
+    }
+  }
 });
