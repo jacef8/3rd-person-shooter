@@ -11,7 +11,8 @@ const load = (f) => JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'));
 const arsenal = load('arsenal.json'), progression = load('progression.json'), stash = load('stash.json');
 const building = load('building.json'), activities = load('activities.json'), combat = load('combat.json');
 const gadgets = load('gadgets.json'), map = load('map-bristol.json');
-const RESOURCES = new Set(['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone', 'comms']);
+const homestead = load('homestead.json'), economy = load('economy.json');
+const RESOURCES = new Set(['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone', 'comms', ...Object.keys(homestead.goods)]);
 const costOk = (cost, where) => { for (const [k, v] of Object.entries(cost || {})) { assert.ok(RESOURCES.has(k), `${where}: unknown resource "${k}"`); assert.ok(v > 0, `${where}: ${k} must be > 0`); } };
 
 test('every data file is valid JSON with a description', () => {
@@ -61,4 +62,29 @@ test('map: real positions sit in the Florida panhandle and the shapes are well f
   for (const l of map.lakes) for (const c of l.capsules) assert.ok(inArea(c.from) && inArea(c.to) && c.radiusM > 0, l.name);
   for (const k of ['hills', 'sandhills', 'forest']) for (const g of map.terrainRegions[k]) assert.ok(inArea([g.lat, g.lon]) && g.radiusM > 0 && g.weight > 0, k);
   assert.ok(map.towns.some((t) => t.name === 'Bristol'));
+});
+
+test('homestead and economy: crops, food, animals and trading posts make sense', () => {
+  const BIOMES = ['plains', 'forest', 'desert', 'mountain', 'sea'];
+  for (const [id, c] of Object.entries(homestead.crops)) {
+    if (id.startsWith('_')) continue;
+    assert.ok(homestead.goods[id], `crop ${id} is a good`);
+    assert.ok(c.growMs > 0 && c.yield > 0 && c.biomes.every((b) => BIOMES.includes(b)), id);
+  }
+  // Every biome can grow something.
+  for (const b of BIOMES) assert.ok(Object.values(homestead.crops).some((c) => c.biomes?.includes(b)), `something grows in ${b}`);
+  for (const [id, g] of Object.entries(homestead.goods)) if (g.cooksTo) assert.ok(homestead.goods[g.cooksTo]?.food > g.food, `${id} cooks into something better`);
+  for (const [id, a] of Object.entries(homestead.animals)) if (a && typeof a === 'object' && !id.startsWith('_')) assert.ok(a.hp > 0 && a.meat > 0 && a.biomes.every((b) => BIOMES.includes(b)), id);
+  for (const [g, v] of Object.entries(economy.prices)) assert.ok(RESOURCES.has(g) && v > 0, `price for ${g}`);
+  for (const [town, mods] of Object.entries(economy.towns)) {
+    assert.ok(map.towns.some((t) => t.name === town), `${town} is a real town`);
+    for (const [g, m] of Object.entries(mods)) assert.ok(economy.prices[g] && m > 0.3 && m < 3, `${town}: ${g}`);
+  }
+  for (const [id, s] of Object.entries(economy.shop)) {
+    if (id.startsWith('_')) continue;
+    assert.ok(s.price > 0, id);
+    if (s.kind === 'good') assert.ok(homestead.goods[id], id);
+    if (s.kind === 'tool') assert.ok(building.tools[id], id);
+  }
+  assert.ok(economy.buyMarkup > 1, 'posts sell for more than they pay, so you can\'t loop money');
 });

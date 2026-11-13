@@ -271,3 +271,9 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
 #lbName input { margin-right: 6px; }
 @media (max-width: 700px) { .lbcols { grid-template-columns: 1fr; } }
 #invitebar { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; gap: 10px; align-items: center; padding: 10px 14px; background: rgba(20,24,30,0.95); border: 1px solid #7dff9a; border-radius: 6px; color: #eee; font-size: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+
+.foodfill { background: linear-gradient(90deg, #8a6a2a, #d8b04a); }
+.bar.food.low { animation: xblink 1s steps(2) infinite; }
+#contactpanel .cols { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 900px) { #contactpanel .cols { grid-template-columns: 1fr; } }
+#ctTrade h3 { font-size: 12px; letter-spacing: 0.1em; color: #ff8a2a; margin: 8px 0 4px; text-transform: uppercase; }

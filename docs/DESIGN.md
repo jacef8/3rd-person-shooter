@@ -137,6 +137,37 @@ up to three per building, from the building's zone table (town, industrial, farm
 ground floor is open; upper storeys are solid for now, because stairs and multi-level movement
 come with the move to Unreal. Roadside homesteads in the countryside are still solid scenery.
 
+## Living off the land (phase 1 of the living world)
+
+One shared world (Liberty County) that never resets. The aim: you can hike into the woods and build a
+small farm and hideout, or float down the river to a swamp camp with real people in it, and there are
+always reasons to move around, risk in doing it, and an economy that rewards hauling goods.
+
+- **Hunger:** a food meter that empties in about 1.5 hours of play. Below 20 your armor stops
+  recharging, below 10 you can't sprint, and at 0 you slowly lose health (down to 15, never death on
+  its own). **H** heals if you're hurt and have a medkit, otherwise eats whatever fills you best.
+  Food in the bag (inventory) can be eaten one by one.
+- **Farming:** build a **farm plot** (8 wood) anywhere outside town and plant a seed packet. The ground decides the crop: **corn** on
+  farmland and forest (2 h), **peanuts** on sandhills (3 h), **cotton** on the hills and swamp edges
+  (4 h, cash only). Crops grow in real time while you're away. **Anyone can harvest a ripe crop**,
+  so a farm needs watching (the owner gets an alert), and crops rot a day after ripening.
+- **Fishing:** craft or buy a rod; stand at any shore and press E (6 s, 1-3 fish; swamps bite better).
+- **Hunting:** deer and wild hogs wander the woods, swamps and fields. They bolt when you get close, less
+  if you're crouched or cloaked. Shoot one and loot the carcass for meat.
+- **Cooking:** a **campfire** (5 wood, 4 stone) turns raw fish and meat into meals (40 food, and they sell
+  for more).
+- **Money and trading posts:** every Contact runs a trading post: sell goods for **cash**, buy seeds,
+  meals, rods, tools, medkits and ammo. Each town pays according to what it has plenty of: corn is
+  cheap in Blountstown (farm country) and dear in Bristol, fish is cheap in Estiffanulga and Lake Mystic
+  on the river and dear in Hosford. Hauling goods to where they're scarce is a real way to earn.
+  Posts sell for 1.6× what they pay, so there's no looping money.
+- **Risk:** cash and goods are carried like everything else: you drop them all when you die.
+  Farms can be stolen from. Everything is in `shared/data/homestead.json` and `economy.json`.
+
+Coming next: boats and the river trade (phase 2), prices that move with what players sell, a player
+market, player jobs and bounties, land upkeep and outlaw reputation (phase 3), then more regions,
+day/night, weather and world events (phase 4).
+
 ## Units
 
 The simulation runs in metres (one game metre is one real metre). Everything the player reads is

@@ -44,6 +44,9 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   seconds. The helicopter then flies you, any squadmates in the zone and everything you carry to your stash
   houses. Everyone within half a mile is alerted and can try to stop you. Leaving the zone or going down aborts it,
   and the pilot then needs 5 minutes before the next call.
+- **Living off the land:** hunger, farm plots with crops that grow in real time (and can be stolen),
+  fishing, hunting deer and hogs, campfire cooking, and cash with a **trading post at every Contact**
+  whose prices depend on the town, so hauling goods across the map pays. One shared world that never resets.
 - **Units:** distances, ranges and radii are shown in feet and miles.
 - **Enterable buildings:** town buildings, houses, warehouses, farmhouses, barns and ranger stations
   have doorways, a ceiling and loot inside. Bigger ones have an interior wall, so you can fight room

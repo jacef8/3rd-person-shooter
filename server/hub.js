@@ -27,11 +27,11 @@ const DATA_FILE = process.env.DATA_FILE || path.join(ROOT, 'data', 'world.json')
 const DATA_DIR = path.dirname(DATA_FILE);
 const HUB_FILE = process.env.HUB_FILE || path.join(DATA_DIR, 'hub.json');
 const WORLD_PORT_BASE = Number(process.env.WORLD_PORT_BASE || 9100);
-const WORLD_COUNT = Number(process.env.WORLDS || 2);
+const WORLD_COUNT = Number(process.env.WORLDS || 1);   // one shared living world; more regions come later
 const WORLD_CAP = Number(process.env.WORLD_CAP || 40);
 const WORLDS = Array.from({ length: WORLD_COUNT }, (_, i) => ({
   id: i + 1,
-  name: `Bristol ${i + 1}`,
+  name: i === 0 ? 'Liberty County' : `Region ${i + 1}`,
   port: WORLD_PORT_BASE + i + 1,
   file: i === 0 ? DATA_FILE : path.join(DATA_DIR, `world-${i + 1}.json`),
   online: 0, names: [], up: false, proc: null,

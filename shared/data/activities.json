@@ -117,6 +117,16 @@
         {
           "kind": "marker",
           "name": "Claim marker"
+        },
+        {
+          "kind": "meals",
+          "name": "Canned meals",
+          "amount": 2
+        },
+        {
+          "kind": "cash",
+          "name": "Cash",
+          "amount": 25
         }
       ],
       "industrial": [
@@ -154,6 +164,11 @@
           "kind": "tool",
           "tool": "hammer",
           "name": "Hammer"
+        },
+        {
+          "kind": "cash",
+          "name": "Cash",
+          "amount": 40
         }
       ],
       "farm": [
@@ -189,6 +204,16 @@
         {
           "kind": "marker",
           "name": "Claim marker"
+        },
+        {
+          "kind": "seeds",
+          "name": "Seed packets",
+          "amount": 3
+        },
+        {
+          "kind": "corn",
+          "name": "Corn",
+          "amount": 6
         }
       ],
       "park": [
@@ -241,6 +266,11 @@
           "kind": "ammo",
           "name": "Ammo Box",
           "amount": 60
+        },
+        {
+          "kind": "meat",
+          "name": "Jerky",
+          "amount": 2
         }
       ],
       "road": [
@@ -337,6 +367,16 @@
         {
           "kind": "medkit",
           "name": "Medkit"
+        },
+        {
+          "kind": "fish",
+          "name": "Fish",
+          "amount": 3
+        },
+        {
+          "kind": "tool",
+          "tool": "rod",
+          "name": "Fishing rod"
         }
       ]
     }

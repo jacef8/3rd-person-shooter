@@ -35,6 +35,14 @@ characters persist between sessions and redeploys. A change to the save format w
 
 ## Things to try
 
+Living off the land:
+- Watch your **FOOD** bar. **H** eats (or heals if you're hurt and carry a medkit).
+- Buy **seed packets** at any Contact's **trading post**, walk out of town, BUILD → **Farm plot**, then
+  E to plant. Come back later to harvest (anyone can steal a ripe crop!).
+- Buy or craft a **fishing rod**; stand at the river and press E.
+- Hunt deer and hogs (sneak up crouched). BUILD → **Campfire** to cook raw fish/meat into meals.
+- Sell goods at a trading post. Compare prices between towns: corn pays more in Bristol than Blountstown.
+
 Solo:
 1. **Claim a home.** You start with a claim marker. Walk into any building (or a house, cave, RV…)
    with nothing else around and press E. Take your time picking: it's your base.

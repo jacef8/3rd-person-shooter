@@ -1,0 +1,109 @@
+{
+  "_about": "Money and trading posts. Every Contact runs a trading post. 'prices' is what a post pays you for goods; it sells them at buyMarkup times that. Each town scales prices by what's plentiful or scarce there: cheap where it's produced, dear where it isn't. That's what makes hauling goods across the map pay.",
+  "startingCash": 50,
+  "buyMarkup": 1.6,
+  "prices": {
+    "corn": 4,
+    "peanuts": 7,
+    "cotton": 10,
+    "fish": 5,
+    "meat": 6,
+    "meals": 12,
+    "seeds": 2,
+    "wood": 2,
+    "stone": 2,
+    "salvage": 3,
+    "parts": 5,
+    "tech": 7
+  },
+  "shop": {
+    "_about": "What trading posts sell besides goods. kind: good (adds to your goods), tool, medkit, ammo.",
+    "seeds": {
+      "kind": "good",
+      "price": 5,
+      "qty": 1
+    },
+    "meals": {
+      "kind": "good",
+      "price": 20,
+      "qty": 1
+    },
+    "rod": {
+      "kind": "tool",
+      "price": 25,
+      "name": "Fishing rod"
+    },
+    "hammer": {
+      "kind": "tool",
+      "price": 20,
+      "name": "Hammer"
+    },
+    "hatchet": {
+      "kind": "tool",
+      "price": 25,
+      "name": "Hatchet"
+    },
+    "medkit": {
+      "kind": "medkit",
+      "price": 30,
+      "name": "Medkit"
+    },
+    "ammo": {
+      "kind": "ammo",
+      "price": 15,
+      "qty": 60,
+      "name": "Ammo (60 rounds)"
+    }
+  },
+  "towns": {
+    "Bristol": {
+      "corn": 1.3,
+      "peanuts": 1.3,
+      "cotton": 1.2,
+      "meat": 1.25,
+      "fish": 1.15,
+      "meals": 1.2,
+      "parts": 0.85,
+      "tech": 0.85
+    },
+    "Blountstown": {
+      "corn": 0.7,
+      "peanuts": 0.8,
+      "cotton": 0.8,
+      "fish": 1.25,
+      "meat": 1.1,
+      "parts": 1.2,
+      "wood": 1.2
+    },
+    "Hosford": {
+      "wood": 0.7,
+      "meat": 0.8,
+      "corn": 1.2,
+      "peanuts": 1.25,
+      "fish": 1.35,
+      "cotton": 1.2
+    },
+    "Telogia": {
+      "wood": 0.75,
+      "meat": 0.85,
+      "peanuts": 0.75,
+      "corn": 1.2,
+      "fish": 1.3
+    },
+    "Estiffanulga": {
+      "fish": 0.7,
+      "meat": 0.9,
+      "corn": 1.35,
+      "peanuts": 1.3,
+      "parts": 1.3,
+      "tech": 1.3
+    },
+    "Lake Mystic": {
+      "fish": 0.75,
+      "corn": 1.25,
+      "cotton": 1.3,
+      "parts": 1.2,
+      "stone": 1.3
+    }
+  }
+}

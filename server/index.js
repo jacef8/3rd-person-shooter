@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { biomeName } from '../shared/terrain.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
@@ -29,6 +30,8 @@ import { distText, feet } from '../shared/units.js';
 import COMBAT from '../shared/data/combat.json' with { type: 'json' };
 import GADGET_DATA from '../shared/data/gadgets.json' with { type: 'json' };
 import ACTIVITIES from '../shared/data/activities.json' with { type: 'json' };
+import HOMESTEAD from '../shared/data/homestead.json' with { type: 'json' };
+import ECONOMY from '../shared/data/economy.json' with { type: 'json' };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -48,7 +51,8 @@ const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
 const DB_VERSION = 8;
 const SQUAD_MAX = COMBAT.crewMax;
-const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone'];   // carried; all drop on death, all stealable
+const GOODS = Object.keys(HOMESTEAD.goods);   // cash, seeds, crops, fish, meat, meals
+const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone', ...GOODS];   // carried; all drop on death, all stealable
 const CAMO_REVEAL_DIST = GADGET_DATA.camoRevealDistance;
 const MARK_MS = GADGET_DATA.markMs;
 const SENSOR = GADGET_DATA.sensor;
@@ -202,7 +206,7 @@ function newCharacter(name) {
   const kit = starterLoadout();
   kit.inv.pack.push(makeTool('hammer'), makeTool('hatchet'), makeMarker());
   return {
-    name, x: 0, z: 0, yaw: 0, hp: 100, armor: 0, ...kit, parts: 60, tech: 20, wood: 20, dead: false, kills: 0, xp: 0,
+    name, x: 0, z: 0, yaw: 0, hp: 100, armor: 0, ...kit, parts: 60, tech: 20, wood: 20, cash: ECONOMY.startingCash, food: HOMESTEAD.hunger.start, dead: false, kills: 0, xp: 0,
     comms: 0, field: [], discovered: [], contracts: [], needsDeploy: true,
   };
 }
@@ -335,7 +339,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'parts', 'tech', 'intel', 'salvage', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy'];
+const PERSIST = ['name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = Object.fromEntries(PERSIST.map((k) => [k, p[k]])); }
 
 // ---------------------------------------------------------------- networking helpers
@@ -355,6 +359,7 @@ function privateState(p) {
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
+    food: Math.round(p.food ?? 0), foodMax: HOMESTEAD.hunger.max,
     downed: !!p.downed, downedUntil: p.downedUntil || 0, stunnedUntil: p.stunnedUntil || 0, stunReadyAt: p.stunReadyAt || 0, bleed: p.downed ? Math.max(0, Math.round(p.bleedHp)) : 0,
   };
 }
@@ -660,6 +665,150 @@ function throwSensor(p, msg) {
   sendSquad(p, { t: 'sensor', x, z, until: now + SENSOR.duration, radius });
   dirty(p);
 }
+// ---- living off the land: hunger, eating, farming, cooking, fishing, trading posts
+const HUNGER = HOMESTEAD.hunger;
+const CROP_SCALE = Number(process.env.CROP_GROW_SCALE || 1);   // tests speed crops up
+function tickHunger(p, now) {
+  if (p.deploying || p.downed) return;
+  const before = Math.round(p.food);
+  p.food = Math.max(0, p.food - HUNGER.perMinute / 60);
+  if (Math.round(p.food) !== before) dirty(p);
+  if (p.food < HUNGER.noRegenBelow && before >= HUNGER.noRegenBelow) toast(p, '🍽 You\'re getting hungry — armor won\'t recharge until you eat (H)');
+  if (p.food <= 0 && now - (p.starvedAt || 0) >= HUNGER.starvingEveryMs && p.hp > HUNGER.starvingFloorHp) {
+    p.starvedAt = now;
+    p.hp = Math.max(HUNGER.starvingFloorHp, p.hp - HUNGER.starvingDamage);
+    if (!p.starveWarned || now - p.starveWarned > 60_000) { p.starveWarned = now; toast(p, '⚠ Starving — find food: farm, fish, hunt, or buy a meal at a trading post'); }
+    dirty(p);
+  }
+}
+/** Eat one of a good (or the best thing you're carrying). */
+function eat(p, good) {
+  const room = HUNGER.max - p.food;
+  if (room < 3) return toast(p, 'You\'re full');
+  const foods = GOODS.filter((g) => HOMESTEAD.goods[g].food && p[g] > 0);
+  if (!foods.length) return toast(p, 'Nothing to eat — farm, fish, hunt, or buy food at a trading post');
+  // Prefer what you asked for, then whatever fills you up without wasting much.
+  const pick = good && foods.includes(good) ? good : foods.sort((a, b) => Math.abs(HOMESTEAD.goods[a].food - room) - Math.abs(HOMESTEAD.goods[b].food - room))[0];
+  p[pick]--;
+  p.food = Math.min(HUNGER.max, p.food + HOMESTEAD.goods[pick].food);
+  toast(p, `Ate ${HOMESTEAD.goods[pick].name.replace(/s$/, '')} (+${HOMESTEAD.goods[pick].food} food)`);
+  dirty(p);
+}
+/** Which crop a plot grows, from the ground it's on. */
+function cropFor(x, z) {
+  const b = biomeName(terrain.biome(x, z));
+  return Object.keys(HOMESTEAD.crops).find((k) => !k.startsWith('_') && HOMESTEAD.crops[k].biomes.includes(b)) || 'corn';
+}
+function cropState(st, now = Date.now()) {
+  if (!st.crop) return { phase: 'empty', grow: 0 };
+  const c = HOMESTEAD.crops[st.crop];
+  const grow = Math.min(1, (now - st.plantedAt) / (c.growMs * CROP_SCALE));
+  if (grow < 1) return { phase: 'growing', grow };
+  const ripeFor = now - st.plantedAt - c.growMs * CROP_SCALE;
+  return { phase: ripeFor > HOMESTEAD.ripeKeepsMs * CROP_SCALE ? 'rotten' : 'ripe', grow: 1 };
+}
+const dur = (ms) => (ms >= 3600_000 ? `${Math.floor(ms / 3600_000)}h ${Math.round((ms % 3600_000) / 60_000)}m` : `${Math.max(1, Math.round(ms / 60_000))}m`);
+function farmInteract(p, st) {
+  const now = Date.now();
+  const cs = cropState(st, now);
+  if (cs.phase === 'empty') {
+    if (!canManage(p, st)) return toast(p, `${st.ownerName}'s empty farm plot`);
+    if ((p.seeds || 0) < 1) return toast(p, 'You need a seed packet to plant (trading posts sell them; farms have them)');
+    p.seeds--;
+    st.crop = cropFor(st.x, st.z); st.plantedAt = now; st.planter = p.token;
+    toast(p, `Planted ${st.crop} — ripe in ${dur(HOMESTEAD.crops[st.crop].growMs * CROP_SCALE)}. Come back to harvest it before someone else does.`);
+    return dirty(p);
+  }
+  if (cs.phase === 'growing') return toast(p, `${st.crop[0].toUpperCase() + st.crop.slice(1)}: ${Math.round(cs.grow * 100)}% grown — ripe in ${dur(HOMESTEAD.crops[st.crop].growMs * CROP_SCALE * (1 - cs.grow))}`);
+  const crop = st.crop;
+  st.crop = null; st.plantedAt = 0;
+  if (cs.phase === 'rotten') return toast(p, `The ${crop} rotted in the field. Plant again (E with seeds).`);
+  const n = HOMESTEAD.crops[crop].yield;
+  p[crop] = (p[crop] || 0) + n;
+  const mine = canManage(p, st);
+  if (!mine) {
+    feed(`${p.name} stole a ${crop} harvest`);
+    for (const o of teamOfToken(st.owner)) { toast(o, `⚠ ${p.name} harvested your ${crop}!`); send(o.ws, { t: 'alert', x: st.x, z: st.z, text: 'Crop stolen' }); }
+  } else {
+    const c = claimOf(p);
+    if (c && Math.hypot(st.x - c.x, st.z - c.z) <= homePerks(homeLevel(c.store.hxp)).radius) addHomeXp(c, 15, 'Harvest');
+  }
+  award(p, 25, `Harvested ${crop}`);
+  toast(p, `+${n} ${crop}${mine ? '' : ' (stolen)'}`);
+  dirty(p);
+}
+function cookInteract(p, st) {
+  const raw = GOODS.filter((g) => HOMESTEAD.goods[g].cooksTo && p[g] > 0);
+  if (!raw.length) return toast(p, 'Nothing to cook — bring raw fish or meat');
+  startHack(p, 'cook', st.id);
+}
+function finishCook(p) {
+  let n = 0;
+  for (const g of GOODS) {
+    const to = HOMESTEAD.goods[g].cooksTo;
+    if (!to || !p[g]) continue;
+    p[to] = (p[to] || 0) + p[g];
+    n += p[g];
+    p[g] = 0;
+  }
+  if (n) award(p, 5 + n, 'Cooked a meal');
+  send(p.ws, { t: 'hack', done: true, text: n ? `Cooked ${n} meal${n === 1 ? '' : 's'}` : 'Nothing to cook' });
+  dirty(p);
+}
+/** Standing at the water's edge? (Something within reach is water deep enough to fish.) */
+function nearWater(x, z) {
+  const R = HOMESTEAD.fishing.waterWithin;
+  for (let a = 0; a < 8; a++) for (const r of [R * 0.5, R]) if (terrain.height(x + Math.cos(a * Math.PI / 4) * r, z + Math.sin(a * Math.PI / 4) * r) < -0.4) return true;
+  return false;
+}
+function finishFishing(p) {
+  const F = HOMESTEAD.fishing;
+  let n = F.catchMin + Math.floor(Math.random() * (F.catchMax - F.catchMin + 1));
+  if (terrain.biome(p.x, p.z).sea > 0.4) n += F.swampBonus;
+  p.fish = (p.fish || 0) + n;
+  award(p, 8, 'Caught fish');
+  send(p.ws, { t: 'hack', done: true, text: `+${n} fish` });
+  dirty(p);
+}
+// Trading posts: every Contact buys and sells, at prices set by what its town has plenty of.
+function postTown(contactId) { const c = map.contacts[contactId]; return map.towns[c.townId]?.name || ''; }
+function priceAt(contactId, good) { return Math.max(1, Math.round(ECONOMY.prices[good] * (ECONOMY.towns[postTown(contactId)]?.[good] ?? 1))); }
+function tradeView(contactId) {
+  return {
+    town: postTown(contactId),
+    sells: Object.keys(ECONOMY.prices).map((g) => ({ good: g, pays: priceAt(contactId, g), name: HOMESTEAD.goods[g]?.name || g })),
+    shop: Object.entries(ECONOMY.shop).filter(([k]) => !k.startsWith('_')).map(([k, it]) => ({ id: k, name: it.name || HOMESTEAD.goods[k]?.name || k, price: it.kind === 'good' && ECONOMY.prices[k] ? Math.max(it.price, Math.round(priceAt(contactId, k) * ECONOMY.buyMarkup)) : it.price, qty: it.qty || 1 })),
+  };
+}
+function trade(p, msg) {
+  const ct = map.contacts[msg.contactId];
+  if (!ct || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return toast(p, 'Trade at a Contact\'s trading post');
+  if (msg.action === 'sell') {
+    const g = msg.good;
+    if (!ECONOMY.prices[g]) return;
+    const have = p[g] || 0;
+    const qty = msg.qty === 'all' ? have : Math.min(have, Math.max(1, Math.floor(Number(msg.qty) || 1)));
+    if (qty < 1) return toast(p, `You have no ${HOMESTEAD.goods[g]?.name || g} to sell`);
+    const pay = qty * priceAt(msg.contactId, g);
+    p[g] -= qty; p.cash = (p.cash || 0) + pay;
+    toast(p, `Sold ${qty} ${HOMESTEAD.goods[g]?.name || g} for $${pay}`);
+  } else if (msg.action === 'buy') {
+    const it = ECONOMY.shop[msg.item];
+    if (!it || msg.item.startsWith('_')) return;
+    const price = tradeView(msg.contactId).shop.find((x) => x.id === msg.item).price;
+    if ((p.cash || 0) < price) return toast(p, `That costs $${price} — you have $${p.cash || 0}`);
+    if ((it.kind === 'tool' || it.kind === 'medkit') && p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+    p.cash -= price;
+    if (it.kind === 'good') p[msg.item] = (p[msg.item] || 0) + (it.qty || 1);
+    else if (it.kind === 'tool') p.inv.pack.push(makeTool(msg.item));
+    else if (it.kind === 'medkit') p.inv.pack.push(makeConsumable('medkit'));
+    else if (it.kind === 'ammo') p.ammo += it.qty || 60;
+    toast(p, `Bought ${it.name || HOMESTEAD.goods[msg.item]?.name || msg.item} for $${price}`);
+  }
+  dirty(p);
+  send(p.ws, contactView(p, msg.contactId));
+}
+
 // ---- stuns and data hacking (Future Soldier-style)
 // Stun an enemy (stun grenade, or a takedown from behind) or down them, then data-hack them: their
 // whole crew lights up for your crew and you learn where their stash house is.
@@ -715,7 +864,7 @@ function tickStuns(now) {
 function enemyAtReach(p, range) {
   let best = null, bd = range;
   for (const c of [...players.values(), ...bots.values()]) {
-    if (c === p || c.dead || (!c.isBot && sameSquad(c, p))) continue;
+    if (c === p || c.dead || c.animal || (!c.isBot && sameSquad(c, p))) continue;
     const d = Math.hypot(c.x - p.x, c.z - p.z);
     if (d < bd) { bd = d; best = c; }
   }
@@ -767,7 +916,7 @@ function terminalScan(p, term) {
   const now = Date.now(), key = squadKey(p), R = ACTIVITIES.terminal.scanRadius, ms = ACTIVITIES.terminal.scanMs;
   const ids = [];
   for (const c of [...players.values(), ...bots.values()]) {
-    if (c.dead || (!c.isBot && sameSquad(c, p)) || Math.hypot(c.x - term.x, c.z - term.z) > R) continue;
+    if (c.dead || c.animal || (!c.isBot && sameSquad(c, p)) || Math.hypot(c.x - term.x, c.z - term.z) > R) continue;
     expose(c, key, ms);
     ids.push(c.id);
   }
@@ -793,8 +942,8 @@ function tickSensors(now) {
 function startHack(p, kind, id, extra = {}) {
   const now = Date.now();
   let src;
-  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack') {
-    const ms = kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
+  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish') {
+    const ms = kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
     if (kind === 'datahack') toast(p, 'Hacking shows your position to enemies nearby — have your crew cover you.');
@@ -874,6 +1023,8 @@ function tickHacks(now) {
     if (h.kind === 'claim') { finishClaim(p, h.id); continue; }
     if (h.kind === 'claimBuilding') { finishClaimBuilding(p, h.id); continue; }
     if (h.kind === 'datahack') { finishDataHack(p, h.id); continue; }
+    if (h.kind === 'cook') { finishCook(p); continue; }
+    if (h.kind === 'fish') { finishFishing(p); continue; }
     if (h.kind === 'revive') {
       const t = players.get(h.id);
       if (t && t.downed && !t.dead && Math.hypot(t.x - p.x, t.z - p.z) <= DOWNED.reviveRange + 0.5) { revive(t, p); send(p.ws, { t: 'hack', done: true, text: `${t.name} is back up` }); }
@@ -1002,6 +1153,7 @@ function applyDamage(target, amount, attacker, isBot, headshot = false) {
   if (!isBot && target.armor > 0) { const absorbed = Math.min(target.armor, dmg); target.armor -= absorbed; dmg -= absorbed; }
   target.hp -= dmg;
   target.lastHit = Date.now();
+  if (target.animal) { target.hurtUntil = Date.now() + 6000; target.lastAttacker = attacker; }
   if (!isBot) { breakCamo(target, 3000); dirty(target); }
   if (target.hp <= 0) { target.hp = 0; if (isBot) killBot(target, attacker, headshot); else if (canGoDown(target)) goDown(target, attacker, headshot); else killPlayer(target, attacker, headshot); }
 }
@@ -1046,6 +1198,13 @@ function killPlayer(p, attacker, headshotKill) {
 
 function killBot(b, attacker, headshotKill) {
   b.dead = true;
+  if (b.animal) {
+    const a = HOMESTEAD.animals[b.kind];
+    dropBag(b.x, b.z, [], { meat: a.meat }, `${a.name} carcass`);
+    bots.delete(b.id);
+    if (attacker && !attacker.isBot) award(attacker, HOMESTEAD.animals.xp, `Hunted a ${a.name.toLowerCase()}`);
+    return;
+  }
   const res = b.kind === 'hvt' ? { ammo: 60, parts: 40, tech: 20, salvage: 30, intel: 2 } : { ammo: 30, parts: 15, tech: 5, salvage: 8, intel: b.serial % 2 };
   dropBag(b.x, b.z, b.serial % 3 === 0 ? [makeConsumable('medkit')] : [], res, b.kind === 'hvt' ? 'Lieutenant\'s cache' : 'Rogue cache');
   markAssist(b, attacker);
@@ -1164,6 +1323,58 @@ function spawnBot(x, z, kind = 'ambient', extra = {}) {
   return b;
 }
 
+// ---- wildlife: deer and wild hogs to hunt. They wander, and bolt when you get close.
+const ANIMALS = HOMESTEAD.animals;
+function spawnAnimal(kind, x, z) {
+  const a = ANIMALS[kind];
+  const b = { id: uid('a'), name: a.name, isBot: true, animal: true, kind, serial: botSerial++, x, z, homeX: x, homeZ: z, yaw: Math.random() * 6.28, hp: a.hp, maxHp: a.hp, dead: false, wander: null };
+  bots.set(b.id, b);
+  return b;
+}
+function manageAnimals() {
+  const alive = [...players.values()].filter((p) => !p.dead && !p.deploying);
+  for (const b of bots.values()) if (b.animal && !alive.some((p) => dist2(p, b) < ANIMALS.despawn ** 2)) bots.delete(b.id);
+  for (const p of alive) {
+    let near = 0;
+    for (const b of bots.values()) if (b.animal && dist2(p, b) < 250 * 250) near++;
+    if (near >= ANIMALS.perPlayer) continue;
+    for (let tries = 0; tries < 12; tries++) {
+      const a = Math.random() * Math.PI * 2, d = ANIMALS.spawnMin + Math.random() * (ANIMALS.spawnMax - ANIMALS.spawnMin);
+      const x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d;
+      if (Math.abs(x) > map.half - 50 || Math.abs(z) > map.half - 50 || terrain.height(x, z) < 0.5) continue;
+      if (map.towns.some((t) => x > t.rect.minX - 40 && x < t.rect.maxX + 40 && z > t.rect.minZ - 40 && z < t.rect.maxZ + 40)) continue;
+      const biome = biomeName(terrain.biome(x, z));
+      const kinds = ['deer', 'hog'].filter((k) => ANIMALS[k].biomes.includes(biome));
+      if (!kinds.length) continue;
+      spawnAnimal(kinds[Math.floor(Math.random() * kinds.length)], x, z);
+      break;
+    }
+  }
+}
+function updateAnimal(b, dt, alive) {
+  const a = ANIMALS[b.kind];
+  let threat = null, td = a.fleeRange;
+  for (const p of alive) {
+    const d = Math.hypot(p.x - b.x, p.z - b.z) * (p.crouch ? 1.6 : 1) * (camoActive(p) ? 3 : 1);   // sneak up crouched
+    if (d < td) { td = d; threat = p; }
+  }
+  if (b.hurtUntil > Date.now() && b.lastAttacker) threat = b.lastAttacker;
+  let mx = 0, mz = 0, speed = 0;
+  if (threat) {
+    mx = b.x - threat.x; mz = b.z - threat.z; speed = a.speed;
+  } else {
+    if (!b.wander || Math.hypot(b.wander.x - b.x, b.wander.z - b.z) < 1.5 || Math.random() < 0.004) b.wander = { x: b.homeX + (Math.random() - 0.5) * 60, z: b.homeZ + (Math.random() - 0.5) * 60 };
+    mx = b.wander.x - b.x; mz = b.wander.z - b.z; speed = Math.random() < 0.3 ? 0 : a.walk;
+  }
+  const l = Math.hypot(mx, mz);
+  if (l < 1e-3 || !speed) return;
+  const step = speed * dt;
+  const np = moveWithCollision(b.x, b.z, mx / l * step, mz / l * step, 0.5, solidsNear(b.x, b.z, step + 2), terrain);
+  if (Math.hypot(np.x - b.x, np.z - b.z) < step * 0.2) b.wander = null;   // blocked: pick somewhere else
+  b.x = np.x; b.z = np.z;
+  b.yaw = Math.atan2(mx, mz);
+}
+
 /** Keep a few roaming rogues around every active player; despawn ones nobody is near. */
 function manageAmbientBots() {
   const alive = [...players.values()].filter((p) => !p.dead);
@@ -1191,6 +1402,7 @@ function updateBots(dt, now) {
   const alive = [...players.values()].filter((p) => !p.dead);
   for (const b of bots.values()) {
     if (b.dead || isStunned(b, now)) continue;
+    if (b.animal) { updateAnimal(b, dt, alive); continue; }
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
     let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue).sightRange;
     for (const p of alive) {
@@ -1342,7 +1554,7 @@ function abandonContract(p, id) {
   dirty(p);
 }
 function contactView(p, contactId) {
-  return { t: 'contact', id: contactId, name: map.contacts[contactId].name, offers: contactOffers(p, contactId), active: p.contracts.map((c) => c.id), comms: p.comms };
+  return { t: 'contact', id: contactId, name: map.contacts[contactId].name, offers: contactOffers(p, contactId), active: p.contracts.map((c) => c.id), comms: p.comms, trade: tradeView(contactId) };
 }
 function requisition(p, msg) {
   const contact = map.contacts[msg.contactId];
@@ -1595,7 +1807,11 @@ function interact(p) {
   if (!it) {
     if (map.landingZones.some((l) => Math.hypot(l.x - p.x, l.z - p.z) < EXTRACT.callRange)) return callExtraction(p);
     const b = buildingAt(p.x, p.z);
-    if (b >= 0) startClaimBuilding(p, b);
+    if (b >= 0) return startClaimBuilding(p, b);
+    if (nearWater(p.x, p.z)) {
+      if (!hasTool(p, 'rod')) return toast(p, 'You need a fishing rod (trading posts sell them; craft one at your stash)');
+      return startHack(p, 'fish', 0);
+    }
     return;
   }
   if (it.kind === 'terminal') return startHack(p, 'terminal', it.ref.id);
@@ -1603,6 +1819,8 @@ function interact(p) {
   if (it.kind === 'crate') return startHack(p, 'crate', it.ref.id);
   if (it.kind === 'harvest') {
     const tool = it.res === 'wood' ? 'hatchet' : 'pickaxe';
+    // No tool for the tree or rock, but a rod at the water's edge: fish instead.
+    if (!hasTool(p, tool) && hasTool(p, 'rod') && nearWater(p.x, p.z)) return startHack(p, 'fish', 0);
     if (!hasTool(p, tool)) return toast(p, `You need a ${tool} to gather ${it.res}`);
     const hv = harvested.get(it.ref.id);
     if (hv && hv.uses >= BUILD.harvest.uses && hv.regrowAt > Date.now()) return toast(p, 'Nothing left here — it regrows in a while');
@@ -1665,6 +1883,8 @@ function interact(p) {
 function structInteract(p, st) {
   const def = PIECES[st.type];
   const stage = stageDef(st);
+  if (def.farm && !msg_upgradeIntent(p)) return farmInteract(p, st);
+  if (def.cook && !msg_upgradeIntent(p) && (canManage(p, st) || !p.buildIntent)) return cookInteract(p, st);
   if (canManage(p, st)) {
     if (def.container && st.stage >= 0 && !(msg_upgradeIntent(p))) {
       p.openContainer = { kind: 'crate', id: st.id };
@@ -1889,9 +2109,13 @@ function invAction(p, msg) {
     const idx = inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0) return;
     dropBag(p.x, p.z, [inv.pack.splice(idx, 1)[0]], {}, `${p.name}'s drop`);
+  } else if (msg.action === 'eat') {
+    return eat(p, msg.good);
   } else if (msg.action === 'use') {
+    // H: patch up if you're hurt and have a medkit, otherwise eat.
     const idx = inv.pack.findIndex((i) => i.kind === 'medkit');
-    if (idx < 0) return toast(p, 'No medkits');
+    const hurt = p.hp < maxHp(p) || p.armor < maxArmor(p);
+    if (idx < 0 || !hurt) return eat(p);
     if (p.hp >= maxHp(p) && p.armor >= maxArmor(p)) return;
     inv.pack.splice(idx, 1);
     p.hp = Math.min(maxHp(p), p.hp + COMBAT.medkitHeal);
@@ -1959,7 +2183,7 @@ function handleDeploy(p, msg) {
   } else return;
   if (!p.deploying) {
     const keepIntel = p.intel;
-    Object.assign(p, { hp: 100, armor: 0, ...starterLoadout() });
+    Object.assign(p, { hp: 100, armor: 0, ...starterLoadout(), food: HOMESTEAD.hunger.start });
     p.intel = keepIntel;
   }
   if ((msg.kind === 'house' || msg.kind === 'home') && claim.store.upg.infirmary) {
@@ -2091,6 +2315,8 @@ function handleJoin(ws, msg) {
   };
   for (const r of RESOURCES) p[r] ??= 0;
   p.comms ??= 0; p.field ??= []; p.discovered ??= []; p.contracts ??= [];
+  p.food ??= HOMESTEAD.hunger.start;
+  if (c.cash === undefined) p.cash = ECONOMY.startingCash;   // characters from before money existed
   p.houseId = ownedHouse(token);
   if (p.houseId !== null) db.houses[p.houseId].ownerName = name;
   for (const st of structs.values()) if (st.owner === token) st.ownerName = name;
@@ -2136,7 +2362,8 @@ function handleState(p, msg) {
   if (!Number.isFinite(tx) || !Number.isFinite(tz)) return;
   if ((msg.tp || 0) !== (p.tp || 0)) return;   // sent before the latest teleport
   let dx = tx - p.x, dz = tz - p.z;
-  const maxStep = isStunned(p, now) ? 0.05 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
+  const hungry = (p.food ?? 100) < HUNGER.noSprintBelow;
+  const maxStep = isStunned(p, now) ? 0.05 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
   const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain);
@@ -2271,6 +2498,7 @@ wss.on('connection', (ws) => {
       case 'acceptContract': return !p.dead && acceptContract(p, msg);
       case 'abandonContract': return abandonContract(p, msg.id);
       case 'requisition': return !p.dead && requisition(p, msg);
+      case 'trade': return !p.dead && trade(p, msg);
       case 'squad': return squadAction(p, msg);
       case 'rally': return !p.dead && rally(p);
       case 'mark': return !p.dead && markTarget(p, msg);
@@ -2323,7 +2551,7 @@ function snapshotFor(r, views, now) {
     houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0 }; }),
     terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
     objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
-    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0 })),
+    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   };
 }
@@ -2340,6 +2568,7 @@ const loop = setInterval(() => {
   if (tick % 10 === 0) tickSensors(now);
   if (tick % TICK_HZ === 0) {
     manageAmbientBots();
+    manageAnimals();
     scheduleDrop(now);
     for (const [id, d] of drops) if (d.expires < now) { drops.delete(id); sendEvents(); }
     for (const p of players.values()) {
@@ -2357,7 +2586,8 @@ const loop = setInterval(() => {
       discoverContacts(p);
       p.aliveMs += 1000;
       if (p.aliveMs >= 60_000) { p.aliveMs -= 60_000; award(p, XP.survivalPerMinute, 'Survived another minute'); }
-      if (now - (p.lastHit || 0) >= 6000 && p.armor < maxArmor(p)) { p.armor = Math.min(maxArmor(p), p.armor + 3); dirty(p); }
+      if (now - (p.lastHit || 0) >= 6000 && p.armor < maxArmor(p) && p.food >= HUNGER.noRegenBelow) { p.armor = Math.min(maxArmor(p), p.armor + 3); dirty(p); }
+      tickHunger(p, now);
       for (const c of [...p.contracts]) if (c.expires < now) { abandonContract(p, c.id); toast(p, `Contract expired: ${CONTRACT_TYPES[c.type].name}`); }
     }
     if (tick % (TICK_HZ * 5) === 0) for (const s of squads.values()) pushSquadState(s);   // squadmate positions for the map

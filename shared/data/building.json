@@ -12,6 +12,10 @@
     "pickaxe": {
       "name": "Pickaxe",
       "desc": "Mine rocks for stone. Also breaks stone walls and gates."
+    },
+    "rod": {
+      "name": "Fishing rod",
+      "desc": "Fish from any shore: stand at the water's edge and press E. Swamps bite best."
     }
   },
   "crafts": {
@@ -54,6 +58,14 @@
         "parts": 20
       },
       "desc": "Explodes 8 s after placing: wrecks walls, gates, doors and anyone standing too close."
+    },
+    "rod": {
+      "name": "Fishing rod",
+      "level": 1,
+      "cost": {
+        "wood": 4,
+        "parts": 4
+      }
     }
   },
   "pieces": {
@@ -267,6 +279,49 @@
           "hp": 2500,
           "material": "flag",
           "slots": 24
+        }
+      ]
+    },
+    "plot": {
+      "name": "Farm plot",
+      "size": [
+        3,
+        3,
+        0.35
+      ],
+      "key": "7",
+      "farm": true,
+      "_about": "Plant a seed packet (E) and the crop that suits the ground grows in real time.",
+      "stages": [
+        {
+          "name": "Farm plot",
+          "cost": {
+            "wood": 8
+          },
+          "hp": 400,
+          "material": "soil"
+        }
+      ]
+    },
+    "campfire": {
+      "name": "Campfire",
+      "size": [
+        1.2,
+        1.2,
+        0.5
+      ],
+      "key": "8",
+      "cook": true,
+      "_about": "Cook raw fish and meat into meals (E).",
+      "stages": [
+        {
+          "name": "Campfire",
+          "cost": {
+            "wood": 5,
+            "stone": 4
+          },
+          "hp": 300,
+          "material": "stone"
         }
       ]
     }

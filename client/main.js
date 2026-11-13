@@ -16,6 +16,12 @@ import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
+import HOMESTEAD from '/shared/data/homestead.json' with { type: 'json' };
+const GOODS = HOMESTEAD.goods;
+// Everything you can carry, stash and trade, in display order.
+const RES_UI = ['cash', 'parts', 'tech', 'salvage', 'ammo', 'wood', 'stone', 'intel', 'seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals'];
+const RES_LABEL = { parts: 'parts', tech: 'tech', intel: 'intel drives', ammo: 'rounds', salvage: 'salvage', wood: 'wood', stone: 'stone', ...Object.fromEntries(Object.entries(GOODS).map(([k, g]) => [k, g.name])) };
+const resText = (r, n) => (r === 'cash' ? `$${n}` : `${n} ${RES_LABEL[r] || r}`);
 
 const $ = (id) => document.getElementById(id);
 /** Terrain height under a point (0 before the world exists). */
@@ -282,6 +288,28 @@ function setLabel(s, text, color = '#fff') {
 }
 
 // ------------------------------------------------------------------ characters
+/** Simple wildlife: a body, legs and a head; hogs are low and dark, deer tall and tan. */
+function makeAnimal(kind) {
+  const g = new THREE.Group();
+  const deer = kind === 'deer';
+  const mat = new THREE.MeshStandardMaterial({ color: deer ? 0x8a6440 : 0x3a302a, roughness: 0.9 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(deer ? 0.45 : 0.55, 0.5, deer ? 1.3 : 1.1), mat);
+  body.position.y = deer ? 1.0 : 0.55;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.28, deer ? 0.4 : 0.45), mat);
+  head.position.set(0, deer ? 1.45 : 0.6, deer ? 0.75 : 0.7);
+  g.add(body, head);
+  for (const [x, z] of [[-0.15, 0.45], [0.15, 0.45], [-0.15, -0.45], [0.15, -0.45]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.09, deer ? 0.8 : 0.35, 0.09), mat);
+    leg.position.set(x, deer ? 0.4 : 0.18, z * (deer ? 1 : 0.85));
+    g.add(leg);
+  }
+  if (deer) for (const sx of [-0.1, 0.1]) { const a = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.3, 0.04), new THREE.MeshStandardMaterial({ color: 0xd8cbb0 })); a.position.set(sx, 1.72, 0.7); g.add(a); }
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  g.userData = { body, head, animal: true };
+  scene.add(g);
+  return g;
+}
+
 function makeCharacter(kind, name) {
   const g = new THREE.Group();
   const color = kind === 'self' ? 0x3a7bd5 : kind === 'bot' ? 0x3d2b4f : kind === 'contact' ? 0x2a6f7a : 0xd0602a;
@@ -557,6 +585,11 @@ function handle(m) {
       for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
         let rec = state.bots.get(b.id);
+        if (!rec && HOMESTEAD.animals[b.kind]) {
+          rec = { mesh: makeAnimal(b.kind), animal: true };
+          rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
+          state.bots.set(b.id, rec);
+        }
         if (!rec) {
           rec = { mesh: makeCharacter('bot', b.name || 'Rogue') };
           rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
@@ -744,6 +777,9 @@ function updateHud() {
   $('hptext').textContent = `${Math.ceil(me.hp)} / ${me.maxHp}`;
   $('armorbar').style.width = me.maxArmor ? `${(me.armor / me.maxArmor) * 100}%` : '0%';
   $('armortext').textContent = me.maxArmor ? `ARMOR ${Math.ceil(me.armor)} / ${me.maxArmor}` : 'NO ARMOR';
+  $('foodbar').style.width = `${(me.food / (me.foodMax || 100)) * 100}%`;
+  $('foodtext').textContent = `FOOD ${me.food}${me.food < HOMESTEAD.hunger.noRegenBelow ? ' · HUNGRY (H to eat)' : ''}`;
+  $('foodbar').parentElement.classList.toggle('low', me.food < HOMESTEAD.hunger.noRegenBelow);
   const w = me.inv[me.active];
   $('wname').textContent = w ? `${w.name}${w.parts?.muzzle === 'suppressor' ? ' · suppressed' : ''}` : 'Unarmed';
   $('mag').textContent = me.mag;
@@ -751,7 +787,8 @@ function updateHud() {
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
   $('housestatus').textContent = me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}` : 'No stash house — plant a claim marker';
-  $('resources').innerHTML = `<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades, building">⛭ ${me.salvage} salvage</span><span title="Building: chop trees with a hatchet">🪵 ${me.wood}</span><span title="Building: mine rocks with a pickaxe">⛰ ${me.stone}</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
+  const goodsHud = ['seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals'].filter((g) => me[g]).map((g) => `<span title="${GOODS[g].name}">${GOODS[g].icon} ${me[g]}</span>`).join('');
+  $('resources').innerHTML = `<span title="Cash: trade at any Contact's trading post">$${me.cash || 0}</span>${goodsHud}<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades, building">⛭ ${me.salvage} salvage</span><span title="Building: chop trees with a hatchet">🪵 ${me.wood}</span><span title="Building: mine rocks with a pickaxe">⛰ ${me.stone}</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
   const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
   $('level').textContent = `LEVEL ${me.level}`;
   $('xpbar').style.width = me.level >= MAX_LEVEL ? '100%' : `${((me.xp - lo) / (hi - lo)) * 100}%`;
@@ -817,6 +854,21 @@ function renderInventory() {
     eq.append(itemCard(inv[slot], { slot, buttons: inv[slot] ? [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [] }));
   }
   const pack = $('pack'); pack.innerHTML = '';
+  // Supplies: food (tap to eat), crops and cash.
+  const sup = RES_UI.filter((r) => GOODS[r] && me[r]);
+  if (sup.length) {
+    const row = document.createElement('div');
+    row.className = 'gsentry';
+    for (const r of sup) {
+      const b = document.createElement('button');
+      b.className = 'ghost';
+      b.textContent = `${GOODS[r].icon} ${resText(r, me[r])}${GOODS[r].food ? ` · eat (+${GOODS[r].food})` : ''}`;
+      b.disabled = !GOODS[r].food;
+      b.onclick = () => send({ t: 'inv', action: 'eat', good: r });
+      row.append(b);
+    }
+    pack.append(row);
+  }
   $('packcount').textContent = `(${inv.pack.length}/${state.packSize}) · ammo ${me.ammo} · parts ${me.parts}`;
   const c = state.container;
   if (!inv.pack.length) pack.innerHTML = '<div class="empty">Empty</div>';
@@ -852,20 +904,19 @@ function renderInventory() {
     if (c.canPut) {
       const dep = document.createElement('div');
       dep.className = 'gsentry';
-      for (const r of ['parts', 'tech', 'salvage', 'ammo']) {
+      for (const r of RES_UI.filter((x) => x !== 'intel')) {
         if (!me[r]) continue;
         const b = document.createElement('button');
-        b.className = 'ghost'; b.textContent = `Deposit ${me[r]} ${r}`;
+        b.className = 'ghost'; b.textContent = `Deposit ${resText(r, me[r])}`;
         b.onclick = () => send({ t: 'container', action: 'put', res: r });
         dep.append(b);
       }
       if (dep.children.length) box.append(dep);
     }
-    const label = { parts: 'parts', tech: 'tech', intel: 'intel drives', ammo: 'rounds', salvage: 'salvage' };
-    for (const r of ['parts', 'tech', 'salvage', 'intel', 'ammo']) {
-      if (c[r]) box.append(itemCard({ kind: r, name: `${c[r]} ${label[r]}` }, { buttons: [['← Take', () => send({ t: 'container', action: 'take', res: r })]] }));
+    for (const r of RES_UI) {
+      if (c[r]) box.append(itemCard({ kind: r, name: resText(r, c[r]) }, { buttons: [['← Take', () => send({ t: 'container', action: 'take', res: r })]] }));
     }
-    if (!c.items.length && !['parts', 'tech', 'salvage', 'intel', 'ammo'].some((r) => c[r])) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty' }));
+    if (!c.items.length && !RES_UI.some((r) => c[r])) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty' }));
     for (const item of c.items) box.append(itemCard(item, { buttons: [['← Take', () => send({ t: 'container', action: 'take', itemId: item.id })]] }));
   }
 }
@@ -884,8 +935,7 @@ function closeInventory() {
 
 // ------------------------------------------------------------------ stash house upgrades
 function costText(cost) {
-  const names = { salvage: 'salvage', parts: 'parts', tech: 'tech', comms: '★' };
-  return Object.entries(cost).map(([k, v]) => `${v} ${names[k]}`).join(' · ');
+  return Object.entries(cost).map(([k, v]) => (k === 'comms' ? `${v} ★` : resText(k, v))).join(' · ');
 }
 /** Stash house level: XP bar, current perks, what the next level unlocks, abandon. */
 function homePanel(c) {
@@ -941,9 +991,40 @@ function closeContact() {
   $('contactpanel').hidden = true;
   lockPointer();
 }
+function renderTrade(c, me) {
+  const box = $('ctTrade');
+  if (!box || !c.trade) return;
+  box.innerHTML = `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. Prices here reflect what ${c.trade.town} has plenty of — haul goods to where they're scarce.</p>`;
+  const sellable = c.trade.sells.filter((x) => me[x.good] > 0);
+  if (sellable.length) {
+    const h = document.createElement('h3'); h.textContent = 'Sell'; box.append(h);
+    for (const x of sellable) {
+      const row = document.createElement('div');
+      row.className = 'item';
+      row.innerHTML = `<div class="meta"><div class="nm">${GOODS[x.good]?.icon || ''} ${resText(x.good, me[x.good])}</div><div class="st">pays $${x.pays} each</div></div>`;
+      row.append(btn('Sell 1', () => send({ t: 'trade', contactId: c.id, action: 'sell', good: x.good, qty: 1 })), btn(`Sell all ($${x.pays * me[x.good]})`, () => send({ t: 'trade', contactId: c.id, action: 'sell', good: x.good, qty: 'all' }), ''));
+      box.append(row);
+    }
+  }
+  const h = document.createElement('h3'); h.textContent = 'Buy'; box.append(h);
+  for (const it of c.trade.shop) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">${GOODS[it.id]?.icon || ''} ${it.name}${it.qty > 1 ? ` ×${it.qty}` : ''}</div></div>`;
+    const b = btn(`$${it.price}`, () => send({ t: 'trade', contactId: c.id, action: 'buy', item: it.id }), '');
+    b.disabled = (me.cash || 0) < it.price;
+    row.append(b);
+    box.append(row);
+  }
+  const prices = document.createElement('div');
+  prices.className = 'sub'; prices.style.textAlign = 'left'; prices.style.fontSize = '11px';
+  prices.textContent = 'Pays: ' + c.trade.sells.map((x) => `${x.name} $${x.pays}`).join(' · ');
+  box.append(prices);
+}
 function renderContact() {
   const c = state.contact, me = state.me;
   if (!c || !me) return;
+  renderTrade(c, me);
   $('ctTitle').textContent = c.name;
   $('ctComms').textContent = `★ ${me.comms} commendations`;
   const offers = $('ctOffers'); offers.innerHTML = '';
@@ -1422,7 +1503,7 @@ addEventListener('keydown', (e) => {
   // Build mode: X toggles, 1-5 pick a piece.
   if (document.activeElement?.tagName === 'INPUT' || !state.me) return;
   if (e.code === 'KeyX' && !e.repeat) doAction('build');
-  if (build.on && /^Digit[1-6]$/.test(e.code)) { build.piece = Object.keys(PIECES)[Number(e.code.slice(5)) - 1]; renderBuildBar(); e.stopImmediatePropagation(); }
+  if (build.on && /^Digit[1-8]$/.test(e.code)) { const k = Object.keys(PIECES).filter((x) => !PIECES[x].auto)[Number(e.code.slice(5)) - 1]; if (k) { build.piece = k; renderBuildBar(); } e.stopImmediatePropagation(); }
 }, true);
 addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
@@ -1542,7 +1623,13 @@ function nearestInteractable() {
     let text;
     const next = def.stages[st.stage + 1];
     const hp = ` <small>${st.hp}/${st.max} HP</small>`;
-    if (st.mine) {
+    if (def.farm) {
+      const crop = st.crop ? st.crop[0].toUpperCase() + st.crop.slice(1) : '';
+      text = !st.crop ? (st.mine ? (me?.seeds ? '🌱 Plant seeds (uses 1 seed packet)' : 'Empty farm plot — needs a seed packet') : `${st.owner}'s empty plot`)
+        : st.rotten ? `${crop} rotted — clear it (E)` : st.grow >= 1 ? (st.mine ? `🌾 Harvest ${crop.toLowerCase()}` : `🌾 Steal ${st.owner}'s ${crop.toLowerCase()}`) : `${crop} — ${Math.round(st.grow * 100)}% grown`;
+    } else if (def.cook) {
+      text = me && GOODS && ['fish', 'meat'].some((g) => me[g]) ? `🔥 Cook ${['fish', 'meat'].map((g) => me[g] ? resText(g, me[g]) : '').filter(Boolean).join(' + ')} (4s)` : 'Campfire — cook raw fish or meat here';
+    } else if (st.mine) {
       if (build.on) text = next ? `Upgrade to ${next.name} (${Object.entries(next.cost).map(([k, v]) => `${v} ${k}`).join(', ')})${has('hammer') ? '' : ' — needs a hammer'}` : `${stage.name} — fully built`;
       else if (def.container) text = `Open ${stage.name.toLowerCase()}`;
       else if (def.door && stage.material !== 'frame') text = st.open ? `Close ${def.auto ? 'door' : 'gate'}` : `Open ${def.auto ? 'door' : 'gate'}`;
@@ -1550,7 +1637,7 @@ function nearestInteractable() {
     } else if (def.container) text = `Search ${st.owner}'s crate`;
     else if (stage.material === 'frame') text = `${st.owner}'s ${stage.name.toLowerCase()}`;
     else text = stage.material === 'stone' ? (has('pickaxe') ? `Break ${st.owner}'s ${stage.name.toLowerCase()} (pickaxe)` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a pickaxe or breach charge`) : (has('hatchet') || has('pickaxe') ? `Chop through ${st.owner}'s ${stage.name.toLowerCase()}` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a hatchet`);
-    consider(d, text + hp);
+    consider(d, def.farm || def.cook ? text : text + hp);
   }
   for (const [id, hs] of state.houseState) {
     const h = state.map.houses[id];
@@ -1571,9 +1658,17 @@ function nearestInteractable() {
       const wood = b.type === 'tree' || b.type === 'pine', stone = b.type === 'rock' || b.type === 'boulder';
       if (!wood && !stone) continue;
       const tool = wood ? 'hatchet' : 'pickaxe';
+      if (!has(tool) && has('rod')) continue;   // fishing takes over at the water's edge (below)
       const d = Math.hypot(Math.max(b.minX - state.x, 0, state.x - b.maxX), Math.max(b.minZ - state.z, 0, state.z - b.maxZ)) + 0.6;
       consider(d, has(tool) ? (wood ? 'Chop tree for wood (3s)' : 'Mine rock for stone (3s)') : `${wood ? 'Tree' : 'Rock'} — needs a ${tool}`);
     }
+  }
+  if (!best && me && !state.map.buildings.some((q) => state.x > q.minX && state.x < q.maxX && state.z > q.minZ && state.z < q.maxZ)) {
+    // At the water's edge: fish.
+    const R = HOMESTEAD.fishing.waterWithin, T = state.map.terrain;
+    let wet = false;
+    for (let a = 0; a < 8 && !wet; a++) for (const r of [R * 0.5, R]) if (T.height(state.x + Math.cos(a * Math.PI / 4) * r, state.z + Math.sin(a * Math.PI / 4) * r) < -0.4) wet = true;
+    if (wet) best = me.inv.pack.some((i) => i.kind === 'tool' && i.tool === 'rod') ? `🎣 Fish (${HOMESTEAD.fishing.ms / 1000}s)` : 'Water — a fishing rod would catch something here';
   }
   if (!best && me) {
     // Inside an enterable building nobody holds: it can become your stash house.
@@ -1662,7 +1757,7 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
   } else hb.hidden = true;
   // Stun flash fades out over the stun.
   const sf = $('stunfx'), sLeft = (state.stunnedUntil || 0) - performance.now();
@@ -1980,6 +2075,35 @@ function structMesh(st) {
       rail.position.y = y;
       g.add(rail);
     }
+  } else if (def.farm) {
+    // Tilled soil with crop rows that grow as the crop does.
+    const soil = new THREE.Mesh(new THREE.BoxGeometry(w, 0.18, d), new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 1 }));
+    soil.position.y = 0.09;
+    g.add(soil);
+    if (st.crop) {
+      const grow = Math.max(0.12, st.grow || 0);
+      const ripe = (st.grow || 0) >= 1;
+      const color = st.rotten ? 0x5a4a30 : !ripe ? 0x4f8a3a : st.crop === 'corn' ? 0xc9b84a : st.crop === 'cotton' ? 0xf2f2ea : 0x6b9a3c;
+      const tall = st.crop === 'corn' ? 1.9 : st.crop === 'cotton' ? 1.0 : 0.45;
+      const cm = new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
+      for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+        const hh = tall * grow;
+        const plant = new THREE.Mesh(new THREE.BoxGeometry(0.28, hh, 0.28), cm);
+        plant.position.set(-w / 2 + (i + 0.5) * w / 4, 0.18 + hh / 2, -d / 2 + (j + 0.5) * d / 4);
+        g.add(plant);
+      }
+    }
+  } else if (def.cook) {
+    // Ring of stones and a flame.
+    const stone = new THREE.MeshStandardMaterial({ color: 0x77736d, roughness: 1, flatShading: true });
+    for (let i = 0; i < 7; i++) {
+      const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.16), stone);
+      r.position.set(Math.cos(i / 7 * Math.PI * 2) * 0.45, 0.1, Math.sin(i / 7 * Math.PI * 2) * 0.45);
+      g.add(r);
+    }
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.6, 7), new THREE.MeshBasicMaterial({ color: 0xff8a2a }));
+    flame.position.y = 0.35;
+    g.add(flame);
   } else if (def.door) {
     const long = Math.max(w, d), alongX = w >= d;
     for (const f of [-0.5, 0.5]) {
@@ -2009,7 +2133,7 @@ function syncStructs(list) {
   const seen = new Set();
   for (const st of list) {
     seen.add(st.id);
-    const key = `${st.stage}`;
+    const key = `${st.stage}|${st.crop || ''}|${(st.grow || 0) >= 1 ? 'ripe' : Math.floor((st.grow || 0) * 4)}|${st.rotten || 0}`;
     let v = structVis.get(st.id);
     if (v && v.key !== key) { scene.remove(v.mesh); v = null; }
     if (!v) { v = { mesh: structMesh(st), key }; structVis.set(st.id, v); }
@@ -2096,7 +2220,7 @@ function renderBuildBar() {
   const pad = state.inputMode === 'pad';
   $('buildbar').innerHTML = `<div class="pieces">${items}</div><div class="bhint">${pad
     ? 'LB/RB piece · X rotate · RT place · A upgrade · Y dismantle · ▶ exit'
-    : '1-5 piece · R / wheel rotate · Click place · E upgrade · Q dismantle · X exit'}${me.inv.pack.some((i) => i.tool === 'hammer') ? '' : ' · <b style="color:#ff6b6b">You need a hammer</b>'}</div>`;
+    : '1-8 piece · R / wheel rotate · Click place · E upgrade · Q dismantle · X exit'}${me.inv.pack.some((i) => i.tool === 'hammer') ? '' : ' · <b style="color:#ff6b6b">You need a hammer</b>'}</div>`;
 }
 const buildWorldClient = () => ({
   terrain: state.map.terrain, towns: state.map.towns, contacts: state.map.contacts, landingZones: state.map.landingZones,
@@ -2192,7 +2316,7 @@ function frame(now) {
     // Mobility comes from the active weapon build and the armor you wear.
     const ws = weaponStats(me.inv[me.active]);
     const mobility = (ws ? ws.mobility : 1.05) + armorStats(me.inv.armor).mobility;
-    if (me.downed) state.sprint = false;
+    if (me.downed || (me.food ?? 100) < HOMESTEAD.hunger.noSprintBelow) state.sprint = false;
     const stunnedNow = performance.now() < (state.stunnedUntil || 0);
     const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
     const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
@@ -2222,7 +2346,14 @@ function frame(now) {
   // Self mesh.
   updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, dead: !alive, downed: !!state.me?.downed }, 1);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);
-  for (const [, r] of state.bots) updateCharacterMesh(r.mesh, r.data, dt);
+  for (const [, r] of state.bots) {
+    if (!r.animal) { updateCharacterMesh(r.mesh, r.data, dt); continue; }
+    // Wildlife: glide toward the latest position and face where it's going.
+    const g = r.mesh, c = r.data, k = Math.min(1, dt * 10);
+    g.position.x += (c.x - g.position.x) * k; g.position.z += (c.z - g.position.z) * k;
+    g.position.y = ground(g.position.x, g.position.z);
+    let dy = c.yaw - g.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.rotation.y += dy * k;
+  }
   for (const [, l] of state.loot) l.mesh.rotation.y += dt;
   for (const [, b] of state.bags) b.mesh.rotation.y += dt * 0.5;
 

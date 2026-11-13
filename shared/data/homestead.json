@@ -1,0 +1,125 @@
+{
+  "_about": "Living off the land: food, hunger, farming, fishing, hunting and cooking. Times in ms, distances in metres.",
+  "goods": {
+    "cash": {
+      "name": "cash",
+      "icon": "$"
+    },
+    "seeds": {
+      "name": "seed packets",
+      "icon": "🌱"
+    },
+    "corn": {
+      "name": "corn",
+      "icon": "🌽",
+      "food": 15
+    },
+    "peanuts": {
+      "name": "peanuts",
+      "icon": "🥜",
+      "food": 20
+    },
+    "cotton": {
+      "name": "cotton",
+      "icon": "☁️"
+    },
+    "fish": {
+      "name": "raw fish",
+      "icon": "🐟",
+      "food": 8,
+      "cooksTo": "meals"
+    },
+    "meat": {
+      "name": "raw meat",
+      "icon": "🥩",
+      "food": 8,
+      "cooksTo": "meals"
+    },
+    "meals": {
+      "name": "cooked meals",
+      "icon": "🍲",
+      "food": 40
+    }
+  },
+  "hunger": {
+    "_about": "food goes from max to 0 in about max/perMinute minutes of play. Low food stops armor regen and sprinting; at 0 you slowly lose health (never below starvingFloorHp).",
+    "max": 100,
+    "start": 80,
+    "perMinute": 1.1,
+    "noRegenBelow": 20,
+    "noSprintBelow": 10,
+    "starvingDamage": 2,
+    "starvingEveryMs": 10000,
+    "starvingFloorHp": 15
+  },
+  "crops": {
+    "_about": "A farm plot grows the crop that suits its ground. Ripe crops can be harvested by anyone (yes, stolen) and rot after ripeKeepsMs.",
+    "corn": {
+      "growMs": 7200000,
+      "yield": 12,
+      "biomes": [
+        "plains",
+        "forest"
+      ]
+    },
+    "peanuts": {
+      "growMs": 10800000,
+      "yield": 10,
+      "biomes": [
+        "desert"
+      ]
+    },
+    "cotton": {
+      "growMs": 14400000,
+      "yield": 8,
+      "biomes": [
+        "mountain",
+        "sea"
+      ]
+    }
+  },
+  "ripeKeepsMs": 86400000,
+  "fishing": {
+    "ms": 6000,
+    "waterWithin": 4,
+    "catchMin": 1,
+    "catchMax": 3,
+    "swampBonus": 1
+  },
+  "cooking": {
+    "ms": 4000
+  },
+  "animals": {
+    "_about": "Wildlife wanders near players and flees when you get close. Shoot it for meat.",
+    "deer": {
+      "name": "Deer",
+      "hp": 60,
+      "speed": 7.5,
+      "walk": 1.6,
+      "fleeRange": 30,
+      "meat": 6,
+      "biomes": [
+        "forest",
+        "plains",
+        "mountain"
+      ]
+    },
+    "hog": {
+      "name": "Wild hog",
+      "hp": 90,
+      "speed": 5.5,
+      "walk": 1.2,
+      "fleeRange": 18,
+      "meat": 9,
+      "biomes": [
+        "sea",
+        "forest"
+      ]
+    },
+    "perPlayer": 3,
+    "spawnMin": 60,
+    "spawnMax": 200,
+    "despawn": 400,
+    "xp": 20
+  }
+}
