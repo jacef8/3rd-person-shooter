@@ -15,6 +15,7 @@ import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks } from
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
+import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
 
 const $ = (id) => document.getElementById(id);
 /** Terrain height under a point (0 before the world exists). */
@@ -343,6 +344,9 @@ function updateCharacterMesh(g, c, dt) {
     m.position.y += (base + yShift - m.position.y) * k;
   }
   g.visible = !c.dead;
+  // Downed: lying on the ground.
+  g.rotation.order = 'YXZ';
+  g.rotation.x += ((c.downed ? 1.35 : 0) - g.rotation.x) * k;
   if (g.userData.label) {
     const near = camera.position.distanceTo(g.position) < 4;
     g.userData.label.visible = !near;
@@ -604,17 +608,19 @@ function handle(m) {
       break;
     case 'feed': feedLine(m.text); break;
     case 'squad':
-      state.squad = { id: m.id, members: m.members || [], leaderId: m.leaderId ?? null };
+      if (m.id) state.invite = null;
+      state.squad = { id: m.id, name: m.name || null, score: m.score || 0, myRank: m.myRank || null, members: m.members || [], leaderId: m.leaderId ?? null };
       if (state.panelOpen) renderSquadPanel();
       updateGadgetBar();
       break;
     case 'invite':
-      state.invite = { fromId: m.fromId, fromName: m.fromName };
-      toast(`${m.fromName} invited you to their squad — press P to respond`);
+      state.invite = { fromId: m.fromId, fromName: m.fromName, crewName: m.crewName };
+      toast(`${m.fromName} invited you to ${m.crewName ? `the crew ${m.crewName}` : 'start a crew'} — press P to respond`);
       if (state.panelOpen) renderSquadPanel();
       break;
     case 'leaderboard':
       state.leaderboard = m.rows;
+      state.crewBoard = m.crews || [];
       if (state.panelOpen) renderSquadPanel();
       break;
     case 'expose':
@@ -644,7 +650,8 @@ function handle(m) {
     case 'hack':
       if (m.cancel) { state.hack = null; toast(m.reason); }
       else if (m.done) { state.hack = null; toast(m.text); }
-      else state.hack = { start: performance.now(), total: m.total, kind: m.kind };
+      // Progress can speed up mid-way (crewmates helping), so work back from the finish time.
+      else state.hack = { start: performance.now() - Math.max(0, m.total - (m.until - Date.now())), total: m.total, kind: m.kind, helpers: m.helpers || 0 };
       break;
     case 'rally':
       toast(`${m.from} rallied the squad — armor restored, +20% damage`);
@@ -686,7 +693,7 @@ function handle(m) {
     case 'homeLevel': levelBanner(m.level, [{ name: HOME_LEVEL_TEXT[m.level - 1] }], 'STASH HOUSE LEVEL'); break;
     case 'claimed': toast('This is now your stash house. Open its stash for the gunsmith, upgrades and home level.'); break;
     case 'contractDone':
-      toast(`✔ Contract complete: ${m.name} — ${Object.entries(m.reward).map(([k, v]) => `+${v} ${k === 'comms' ? 'commendations' : k}`).join(', ')}`);
+      toast(`✔ ${m.crew ? 'Crew contract' : 'Contract'} complete: ${m.name}${m.crew ? ` (shared with ${m.crew.filter((n) => n !== state.myName).join(', ')})` : ''} — ${Object.entries(m.reward).map(([k, v]) => `+${v} ${k === 'comms' ? 'commendations' : k}`).join(', ')}`);
       break;
     case 'container':
       if (m.closed) {
@@ -1028,7 +1035,7 @@ function mapOptions() {
   }
   if (state.mapMode === 'travel') {
     const list = (state.me?.discovered || []).map((id) => ({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'travel', kind: 'contact', id }, color: '#7fd6ff' }));
-    for (const m of state.squad.members) if (m.id !== state.id) list.push({ label: `Join ${m.name}`, x: m.x, z: m.z, msg: { t: 'travel', kind: 'squad', id: m.id }, color: '#7dff9a' });
+    for (const m of state.squad.members) if (m.online && m.id !== state.id) list.push({ label: `Join ${m.name}`, x: m.x, z: m.z, msg: { t: 'travel', kind: 'squad', id: m.id }, color: '#7dff9a' });
     return list;
   }
   return [];
@@ -1066,7 +1073,7 @@ function drawMapCanvas() {
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
   for (const e of state.extracts) markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#ff2a2a', size: 8, label: `🚁 Extraction (${e.by})` });
-  for (const m of state.squad.members) if (m.id !== state.id) markers.push({ x: m.x, z: m.z, color: '#7dff9a', size: 5, label: m.name });
+  for (const m of state.squad.members) if (m.online && m.id !== state.id) markers.push({ x: m.x, z: m.z, color: '#7dff9a', size: 5, label: m.name });
   for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
   const hpos = homePos();
   if (hpos) markers.push({ x: hpos.x, z: hpos.z, color: '#4fbf6a', size: 7, label: `Home (Lv${state.me.claim.level})` });
@@ -1314,6 +1321,7 @@ function doAction(a) {
       return;
   }
   if (state.me.dead || state.invOpen || state.panelOpen || state.mapOpen || state.contactOpen) return;
+  if (state.me.downed) { if (a === 'swap') send({ t: 'giveUp' }); else if (a === 'ping') { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); } return; }
   if (a === 'build') { toggleBuild(); return; }
   if (build.on) {
     // In build mode the same buttons drive building.
@@ -1376,7 +1384,7 @@ addEventListener('mouseup', (e) => {
 addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('keydown', (e) => {
   // Build mode: X toggles, 1-5 pick a piece.
-  if (document.activeElement === $('name') || !state.me) return;
+  if (document.activeElement?.tagName === 'INPUT' || !state.me) return;
   if (e.code === 'KeyX' && !e.repeat) doAction('build');
   if (build.on && /^Digit[1-6]$/.test(e.code)) { build.piece = Object.keys(PIECES)[Number(e.code.slice(5)) - 1]; renderBuildBar(); e.stopImmediatePropagation(); }
 }, true);
@@ -1386,7 +1394,7 @@ const KEY_ACTIONS = {
   KeyQ: 'swap', Digit1: 'swap', Digit2: 'swap', KeyH: 'heal', KeyC: 'crouch', ControlLeft: 'crouch',
 };
 addEventListener('keydown', (e) => {
-  if (document.activeElement === $('name')) return;
+  if (document.activeElement?.tagName === 'INPUT') return;
   setInputMode('kb');
   if (e.code === 'KeyP') { doAction('squadPanel'); return; }
   if (e.code === 'KeyM') { doAction('map'); return; }
@@ -1474,6 +1482,7 @@ function nearestInteractable() {
   for (const [, b] of state.bags) consider(Math.hypot(b.data.x - state.x, b.data.z - state.z), `Search ${b.data.label}`);
   for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; consider(Math.hypot(t.x - state.x, t.z - state.z), ready ? 'Hack terminal (stand still 5s) — intel + tech' : 'Terminal rebooting'); }
   for (const c of state.map.contacts) if (Math.abs(c.x - state.x) < 5 && Math.abs(c.z - state.z) < 5) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.8, `Talk to ${c.name} — contracts & field gear`);
+  for (const [, r] of state.players) if (r.data.sq && r.data.downed && !r.data.dead) consider(Math.hypot(r.data.x - state.x, r.data.z - state.z) - 1.5, `✚ Revive ${r.data.name} (stand still ${COMBAT_RULES.downed.reviveMs / 1000}s)`);
   for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
   if (!best && state.me?.claim && !state.extracts.length) for (const lz of state.map.landingZones) if (Math.hypot(lz.x - state.x, lz.z - state.z) < EXTRACT.callRange) best = `Call extraction — fire a flare, hold ${feet(EXTRACT.radius)} for ${EXTRACT.holdMs / 1000}s, fly home with your loot`;
   for (const o of state.objectives) consider(Math.hypot(o.x - state.x, o.z - state.z) - 0.5, 'Recover contract crate (3s)');
@@ -1489,7 +1498,7 @@ function nearestInteractable() {
     if (st.mine) {
       if (build.on) text = next ? `Upgrade to ${next.name} (${Object.entries(next.cost).map(([k, v]) => `${v} ${k}`).join(', ')})${has('hammer') ? '' : ' — needs a hammer'}` : `${stage.name} — fully built`;
       else if (def.container) text = `Open ${stage.name.toLowerCase()}`;
-      else if (def.door && st.stage > 0) text = st.open ? 'Close gate' : 'Open gate';
+      else if (def.door && stage.material !== 'frame') text = st.open ? `Close ${def.auto ? 'door' : 'gate'}` : `Open ${def.auto ? 'door' : 'gate'}`;
       else text = `${stage.name}${next ? ' — press X for build mode to upgrade' : ''}`;
     } else if (def.container) text = `Search ${st.owner}'s crate`;
     else if (stage.material === 'frame') text = `${st.owner}'s ${stage.name.toLowerCase()}`;
@@ -1517,6 +1526,17 @@ function nearestInteractable() {
       const tool = wood ? 'hatchet' : 'pickaxe';
       const d = Math.hypot(Math.max(b.minX - state.x, 0, state.x - b.maxX), Math.max(b.minZ - state.z, 0, state.z - b.maxZ)) + 0.6;
       consider(d, has(tool) ? (wood ? 'Chop tree for wood (3s)' : 'Mine rock for stone (3s)') : `${wood ? 'Tree' : 'Rock'} — needs a ${tool}`);
+    }
+  }
+  if (!best && me) {
+    // Inside an enterable building nobody holds: it can become your stash house.
+    const b = state.map.buildings.find((q) => state.x > q.minX + 0.3 && state.x < q.maxX - 0.3 && state.z > q.minZ + 0.3 && state.z < q.maxZ - 0.3);
+    if (b) {
+      const held = [...structVis.values()].find((sv) => PIECES[sv.data.type].claim && sv.data.x > b.minX && sv.data.x < b.maxX && sv.data.z > b.minZ && sv.data.z < b.maxZ);
+      if (held) best = held.data.mine ? null : `${held.data.owner}'s building`;
+      else if (me.claim) best = `Unclaimed ${b.type === 'building' ? 'building' : b.type} (${state.squad.id ? 'your crew has' : 'you have'} a stash house)`;
+      else if (me.inv.pack.some((i) => i.kind === 'marker')) best = `Claim this ${b.type === 'building' ? 'building' : b.type}: plant your marker (8s) — stash locker + lockable doors`;
+      else best = `Unclaimed ${b.type === 'building' ? 'building' : b.type} — a claim marker makes it your stash house`;
     }
   }
   return best;
@@ -1563,7 +1583,8 @@ function drawMarkers() {
     }
     for (const [id, r] of state.players) {
       if (!r.data.sq || r.data.dead) continue;
-      marker(`s${id}`, 'squad', `▼ ${r.data.name}`, new THREE.Vector3(r.data.x, ground(r.data.x, r.data.z) + 2.6, r.data.z));
+      if (r.data.downed) marker(`s${id}`, 'alert', `✚ ${r.data.name} DOWN · ${distText(Math.hypot(r.data.x - state.x, r.data.z - state.z))}`, new THREE.Vector3(r.data.x, ground(r.data.x, r.data.z) + 1.4, r.data.z));
+      else marker(`s${id}`, 'squad', `▼ ${r.data.name}`, new THREE.Vector3(r.data.x, ground(r.data.x, r.data.z) + 2.6, r.data.z));
     }
     state.pings = state.pings.filter((p) => p.until > now);
     state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${distText(Math.hypot(p.x - state.x, p.z - state.z))}`, new THREE.Vector3(p.x, ground(p.x, p.z) + 1.5, p.z)));
@@ -1589,8 +1610,15 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = state.hack.kind === 'terminal' ? 'HACKING TERMINAL — hold still' : 'BYPASSING LOCK — hold still';
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
   } else hb.hidden = true;
+  // Downed: bleed-out timer.
+  const dbar = $('downbar');
+  if (state.me?.downed && !state.me.dead) {
+    const left = Math.max(0, Math.ceil((state.me.downedUntil - Date.now()) / 1000));
+    dbar.hidden = false;
+    dbar.innerHTML = `<b>✚ DOWN</b> — bleeding out in ${left}s<br><small>Crawl to cover. A crewmate can revive you. <kbd>${glyph('Q')}</kbd> give up</small>`;
+  } else dbar.hidden = true;
   // Extraction countdown for anyone near a flare.
   const xb = $('extractbar');
   const ex = state.extracts.find((e) => Math.hypot(e.x - state.x, e.z - state.z) < EXTRACT.radius * 3);
@@ -1642,24 +1670,50 @@ function btn(label, fn, cls = 'ghost') {
 
 function renderSquadPanel() {
   const sq = state.squad;
-  const leader = sq.id && sq.leaderId === state.id;
+  const rank = sq.myRank, leader = rank === 'leader', canInvite = !sq.id || rank !== 'member';
+  $('sqTitle').textContent = sq.id ? `Crew: ${sq.name}` : 'Crew';
   const inv = $('sqInvite'); inv.innerHTML = '';
   if (state.invite) {
     const row = document.createElement('div');
     row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${state.invite.fromName} invited you to their squad</div></div>`;
+    row.innerHTML = `<div class="meta"><div class="nm">${state.invite.fromName} invited you to ${state.invite.crewName ? `join <b>${state.invite.crewName}</b>` : 'start a crew with them'}</div><div class="st">Joining moves you out of any crew you're in now.</div></div>`;
     row.append(btn('Accept', () => { send({ t: 'squad', action: 'accept' }); state.invite = null; renderSquadPanel(); }, ''),
       btn('Decline', () => { send({ t: 'squad', action: 'decline' }); state.invite = null; renderSquadPanel(); }));
     inv.append(row);
   }
   const mem = $('sqMembers'); mem.innerHTML = '';
-  if (!sq.id) mem.innerHTML = '<div class="empty">Solo. Invite players below — squads share tags, sensors, XP and stash access, and can\'t shoot each other.</div>';
+  if (!sq.id) {
+    mem.innerHTML = '<div class="empty">No crew. Found one, or invite someone below. Crews are permanent teams: they share a stash house, revive each other, hack faster together, split contract rewards and climb the crew board.</div>';
+    const row = document.createElement('div');
+    row.className = 'item';
+    const input = Object.assign(document.createElement('input'), { placeholder: 'Crew name', maxLength: 20, id: 'crewNameIn' });
+    row.append(input, btn('Found crew', () => send({ t: 'squad', action: 'create', name: input.value }), ''));
+    mem.append(row);
+  } else {
+    const head = document.createElement('div');
+    head.className = 'sub'; head.style.textAlign = 'left';
+    head.innerHTML = `${sq.members.length} members · crew score ${sq.score} · you are ${rank === 'leader' ? 'the leader' : `${rank === 'officer' ? 'an' : 'a'} ${rank}`}`;
+    mem.append(head);
+  }
+  const RANK = { leader: '★ Leader', officer: '◆ Officer', member: 'Member' };
   for (const m of sq.members) {
     const row = document.createElement('div');
     row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${m.id === sq.leaderId ? '★ ' : ''}${m.name} <small style="color:#888">lvl ${m.level}${m.id === state.id ? ' · you' : ''}</small></div></div>`;
-    if (leader && m.id !== state.id) row.append(btn('Make leader', () => send({ t: 'squad', action: 'promote', id: m.id })), btn('Kick', () => send({ t: 'squad', action: 'kick', id: m.id })));
-    if (m.id === state.id) row.append(btn('Leave', () => send({ t: 'squad', action: 'leave' })));
+    const me = m.id === state.id && m.online;
+    row.innerHTML = `<div class="meta"><div class="nm"><span style="color:${m.online ? '#7dff9a' : '#666'}">●</span> ${m.name} <small style="color:#888">lvl ${m.level} · ${RANK[m.rank]}${me ? ' · you' : m.online ? '' : ' · offline'}</small></div></div>`;
+    if (leader && !me) {
+      row.append(btn('Make leader', () => send({ t: 'squad', action: 'leader', pid: m.pid })));
+      row.append(m.rank === 'officer' ? btn('Demote', () => send({ t: 'squad', action: 'demote', pid: m.pid })) : btn('Make officer', () => send({ t: 'squad', action: 'officer', pid: m.pid })));
+    }
+    if (!me && (leader || (rank === 'officer' && m.rank === 'member'))) row.append(btn('Remove', () => send({ t: 'squad', action: 'kick', pid: m.pid })));
+    if (me) row.append(btn('Leave crew', () => send({ t: 'squad', action: 'leave' })));
+    mem.append(row);
+  }
+  if (leader) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    const input = Object.assign(document.createElement('input'), { placeholder: 'New crew name', maxLength: 20 });
+    row.append(input, btn('Rename', () => send({ t: 'squad', action: 'rename', name: input.value })));
     mem.append(row);
   }
   const on = $('sqOnline'); on.innerHTML = '';
@@ -1669,12 +1723,19 @@ function renderSquadPanel() {
     const row = document.createElement('div');
     row.className = 'item';
     row.innerHTML = `<div class="meta"><div class="nm">${p.name} <small style="color:#888">lvl ${p.level}</small></div></div>`;
-    if (!sq.id || leader) row.append(btn('Invite', () => send({ t: 'squad', action: 'invite', id: p.id })));
+    if (canInvite) row.append(btn('Invite', () => send({ t: 'squad', action: 'invite', id: p.id })));
     on.append(row);
   }
+  renderBoards();
+}
+function renderBoards() {
   const lb = $('sqBoard');
   lb.innerHTML = `<tr><th>#</th><th>Agent</th><th>Level</th><th>XP</th><th>Kills</th></tr>` +
     (state.leaderboard || []).map((r, i) => `<tr class="${r.online ? 'online' : ''}"><td>${i + 1}</td><td>${r.name}</td><td>${r.level}</td><td>${r.xp}</td><td>${r.kills}</td></tr>`).join('');
+  const cb = $('sqCrewBoard');
+  cb.innerHTML = `<tr><th>#</th><th>Crew</th><th>Leader</th><th>Members</th><th>Home</th><th>Score</th></tr>` +
+    (state.crewBoard || []).map((r, i) => `<tr class="${r.name === state.squad.name ? 'online' : ''}"><td>${i + 1}</td><td>${r.name}</td><td>${r.leader}</td><td>${r.members}${r.online ? ` (${r.online} on)` : ''}</td><td>${r.home ? `Lv${r.home}` : '—'}</td><td>${r.score}</td></tr>`).join('') +
+    ((state.crewBoard || []).length ? '' : '<tr><td colspan="6" class="empty">No crews yet.</td></tr>');
 }
 
 // ------------------------------------------------------------------ controller (Backbone One / any standard gamepad)
@@ -1930,14 +1991,14 @@ function toggleBuild() {
   renderBuildBar();
 }
 function cyclePiece(dir) {
-  const keys = Object.keys(PIECES);
+  const keys = Object.keys(PIECES).filter((k) => !PIECES[k].auto);
   build.piece = keys[(keys.indexOf(build.piece) + dir + keys.length) % keys.length];
   renderBuildBar();
 }
 function renderBuildBar() {
   const me = state.me;
   if (!me) return;
-  const items = Object.entries(PIECES).map(([k, p]) => {
+  const items = Object.entries(PIECES).filter(([, p]) => !p.auto).map(([k, p]) => {
     const st = p.stages[0];
     const cost = p.explosive ? `${me.inv.pack.filter((i) => i.kind === 'charge').length} carried` : Object.entries(st.cost).map(([r, v]) => `${v} ${r}`).join(' ') + (p.claim ? ' + marker' : '');
     return `<div class="bpiece ${k === build.piece ? 'sel' : ''}"><kbd>${p.key}</kbd>${p.name}<small>${cost}</small></div>`;
@@ -2041,7 +2102,8 @@ function frame(now) {
     // Mobility comes from the active weapon build and the armor you wear.
     const ws = weaponStats(me.inv[me.active]);
     const mobility = (ws ? ws.mobility : 1.05) + armorStats(me.inv.armor).mobility;
-    const speed = (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
+    if (me.downed) state.sprint = false;
+    const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
     const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
     const rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
     let mx = fx * pf + rx * pr, mz = fz * pf + rz * pr;
@@ -2052,7 +2114,7 @@ function frame(now) {
       state.x = p.x; state.z = p.z;
     }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
-    else if (state.mouseDown) tryFire(now); else state.firedThisPress = false;
+    else if (state.mouseDown && !me.downed) tryFire(now); else state.firedThisPress = false;
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
@@ -2067,7 +2129,7 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, dead: !alive }, 1);
+  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, dead: !alive, downed: !!state.me?.downed }, 1);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);
   for (const [, r] of state.bots) updateCharacterMesh(r.mesh, r.data, dt);
   for (const [, l] of state.loot) l.mesh.rotation.y += dt;

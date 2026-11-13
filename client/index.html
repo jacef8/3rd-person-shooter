@@ -54,6 +54,7 @@
     <div id="markers"></div>
     <div id="hackbar" hidden><span></span><div><i></i></div></div>
     <div id="extractbar" hidden></div>
+    <div id="downbar" hidden></div>
     <div id="gadgets"></div>
     <div id="buildbar" hidden></div>
     <div id="resources"></div>
@@ -103,18 +104,21 @@
   <div id="squadpanel" class="panel" hidden>
     <div class="cols">
       <section>
-        <h2>Squad</h2>
+        <h2 id="sqTitle">Crew</h2>
         <div id="sqInvite"></div>
         <div id="sqMembers"></div>
-        <h2>Online agents</h2>
+        <h2>Online agents nearby</h2>
         <div id="sqOnline"></div>
       </section>
       <section>
-        <h2>Leaderboard</h2>
+        <h2>Crew board</h2>
+        <table id="sqCrewBoard"></table>
+        <h2>Agents</h2>
         <table id="sqBoard"></table>
-        <h2>Leader tools</h2>
-        <div class="sub" style="text-align:left">★ The leader's <b>B</b> ping becomes the squad objective. <b>T</b> Rally restores armor and gives +20% damage to everyone within 100 ft.
-        Squadmates share XP (25% within 165 ft), see each other's tags and sensor reveals, can't hurt each other, and can open each other's stash houses.</div>
+        <h2>How crews work</h2>
+        <div class="sub" style="text-align:left">Crews are permanent: you stay in yours when you log off. The leader runs it; officers can invite and remove members.
+        ★ The leader's <b>B</b> ping becomes the crew objective, and <b>T</b> Rally restores armor and gives +20% damage to everyone within 100 ft.
+        Crewmates share XP (25% within 165 ft), see each other's tags and sensor reveals, and can't hurt each other.</div>
       </section>
     </div>
     <div class="hint"><span class="kbonly">P / Esc to close</span><span class="padonly">Ⓑ back</span></div>

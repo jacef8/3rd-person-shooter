@@ -220,6 +220,55 @@
           "material": "charge"
         }
       ]
+    },
+    "door": {
+      "name": "Door",
+      "size": [
+        1.8,
+        0.3,
+        2.4
+      ],
+      "door": true,
+      "auto": true,
+      "_about": "Fitted automatically in each doorway of a claimed building. Upgrade it like a gate.",
+      "stages": [
+        {
+          "name": "Wooden door",
+          "cost": {},
+          "hp": 1200,
+          "material": "wood"
+        },
+        {
+          "name": "Steel door",
+          "cost": {
+            "salvage": 25,
+            "parts": 15
+          },
+          "hp": 3200,
+          "material": "stone"
+        }
+      ]
+    },
+    "locker": {
+      "name": "Stash locker",
+      "size": [
+        1.2,
+        0.6,
+        1.9
+      ],
+      "container": true,
+      "claim": true,
+      "auto": true,
+      "_about": "The stash of a claimed building: works like a claim flag (stash, gunsmith, upgrades, home level).",
+      "stages": [
+        {
+          "name": "Stash locker",
+          "cost": {},
+          "hp": 2500,
+          "material": "flag",
+          "slots": 24
+        }
+      ]
     }
   },
   "build": {

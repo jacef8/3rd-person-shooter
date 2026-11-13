@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
-  generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
+  SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
 } from '../shared/world.js';
 import {
@@ -45,7 +45,7 @@ const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
 const DB_VERSION = 8;
-const SQUAD_MAX = COMBAT.squadMax;
+const SQUAD_MAX = COMBAT.crewMax;
 const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone'];   // carried; all drop on death, all stealable
 const CAMO_REVEAL_DIST = GADGET_DATA.camoRevealDistance;
 const MARK_MS = GADGET_DATA.markMs;
@@ -91,9 +91,11 @@ for (const h of map.houses) {
   db.houses[h.id].upg = { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0, ...db.houses[h.id].upg };
 }
 db.structures ??= [];
+db.crews ??= {};
 
 function saveDb() {
   for (const p of players.values()) persistCharacter(p);
+  db.crews = Object.fromEntries([...squads.values()].map((s) => [s.id, { ...s, officers: [...s.officers], members: [...s.members] }]));
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
   const tmp = DATA_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db));
@@ -110,8 +112,14 @@ const terminalReadyAt = new Map(map.terminals.map((t) => [t.id, 0]));
 const objectives = new Map();     // contract crates: id -> { id, x, z, contractId, owner }
 const drops = new Map();          // supply drops: id -> { id, x, z, landsAt, expires }
 const sensors = [];
-const squads = new Map();
+const squads = new Map();        // crews: id -> { id, name, leader, officers: Set, members: Set, score, created }
 const squadOfToken = new Map();
+for (const c of Object.values(db.crews)) {
+  const s = { ...c, officers: new Set(c.officers || []), members: new Set(c.members || []) };
+  if (!s.members.size) continue;
+  squads.set(s.id, s);
+  for (const t of s.members) squadOfToken.set(t, s.id);
+}
 const invites = new Map();
 let nextId = 1;
 const uid = (p) => `${p}${nextId++}`;
@@ -206,16 +214,37 @@ const takeMarker = (p) => { const i = p.inv.pack.findIndex((x) => x.kind === 'ma
  * Your stash house claim: a home/room/vehicle (kind 'home') or a claim flag on open ground
  * (kind 'flag'). Both hold the stash, gunsmith, upgrades and home level.
  */
-function claimOfToken(token) {
-  const hid = ownedHouse(token);
-  if (hid !== null) { const h = map.houses[hid]; return { kind: 'home', id: hid, store: db.houses[hid], x: h.crate.x, z: h.crate.z, def: h }; }
-  for (const st of structs.values()) if (st.type === 'flag' && st.owner === token) return { kind: 'flag', id: st.id, store: st, x: st.x, z: st.z };
+function claimWhere(test) {
+  for (const [idStr, h] of Object.entries(db.houses)) if (h.owner && test(h)) { const hid = Number(idStr), d = map.houses[hid]; return { kind: 'home', id: hid, store: h, x: d.crate.x, z: d.crate.z, def: d }; }
+  for (const st of structs.values()) if (PIECES[st.type].claim && test(st)) return { kind: 'flag', id: st.id, store: st, x: st.x, z: st.z };
   return null;
 }
+/** The crew's shared stash house, if the crew has one. */
+function crewClaim(crewId) { return crewId ? claimWhere((st) => st.crew === crewId) : null; }
+/**
+ * The stash house a player uses: their crew's shared one if they're in a crew, otherwise their own.
+ * A claim you made before joining a crew that already had one stays yours, dormant, for if you leave.
+ */
+function claimOfToken(token) {
+  const crewId = squadOfToken.get(token);
+  if (crewId) return crewClaim(crewId);
+  return claimWhere((st) => st.owner === token && !st.crew);
+}
+/** Everyone who should hear about something happening at a stash house: its crew, or its owner. */
+function storeTeam(store) {
+  const s = store.crew && squads.get(store.crew);
+  if (s) return crewOnline(s);
+  const o = onlineByToken(store.owner);
+  return o ? [o] : [];
+}
+/** A player and their online crewmates (by login token; works when the player is offline). */
+function teamOfToken(token) { const s = squads.get(squadOfToken.get(token)); if (s) return crewOnline(s); const o = onlineByToken(token); return o ? [o] : []; }
+function notifyStore(store, text) { for (const o of storeTeam(store)) toast(o, text); }
+const storeOwnerLabel = (store) => (store.crew && squads.get(store.crew) ? squads.get(store.crew).name : store.ownerName);
 const claimOf = (p) => claimOfToken(p.token);
 function claimName(c) {
   if (!c) return null;
-  if (c.kind === 'flag') return 'Claim flag';
+  if (c.kind === 'flag') return c.store.building != null ? buildingLabel(c.store.building) : 'Claim flag';
   const h = c.def;
   const base = h.kind === 'vehicle' ? VEHICLE_TYPES[h.vtype].name : HOME_KINDS[h.kind].name;
   return `${base} — ${homeLabel(c.id).replace(/^.*? (in|near) /, '')}`;
@@ -229,22 +258,22 @@ function addHomeXp(c, n, reason) {
   const before = homeLevel(c.store.hxp || 0);
   c.store.hxp = (c.store.hxp || 0) + n;
   const after = homeLevel(c.store.hxp);
-  const owner = onlineByToken(c.store.owner);
-  if (owner) {
-    send(owner.ws, { t: 'homexp', amount: n, reason });
-    if (after > before) { send(owner.ws, { t: 'homeLevel', level: after }); feed(`${owner.name}'s stash house reached level ${after}`); }
-    dirty(owner);
+  for (const o of storeTeam(c.store)) {
+    send(o.ws, { t: 'homexp', amount: n, reason });
+    if (after > before) send(o.ws, { t: 'homeLevel', level: after });
+    dirty(o);
   }
+  if (after > before) feed(`${storeOwnerLabel(c.store)}'s stash house reached level ${after}`);
   if (after > before && c.kind === 'home') db.houses[c.id].doorHp = Math.min(doorMax(c.id), db.houses[c.id].doorHp * (homePerks(after).doorMul / homePerks(before).doorMul));
 }
 function claimSummary(p) {
   const c = claimOf(p);
   if (!c) return null;
   const xp = c.store.hxp || 0, lvl = homeLevel(xp);
-  return { kind: c.kind, id: c.id, name: claimName(c), x: c.x, z: c.z, level: lvl, xp: Math.floor(xp), perks: homePerks(lvl) };
+  return { kind: c.kind, id: c.id, name: claimName(c), x: c.x, z: c.z, level: lvl, xp: Math.floor(xp), perks: homePerks(lvl), crew: c.store.crew ? squads.get(c.store.crew)?.name || null : null };
 }
 function startClaim(p, houseId) {
-  if (claimOf(p)) return toast(p, 'You already have a stash house. Abandon it (from its stash menu) before claiming another.');
+  if (claimOf(p)) return toast(p, squadOf(p) ? 'Your crew already has a stash house. An officer can abandon it from its stash menu.' : 'You already have a stash house. Abandon it (from its stash menu) before claiming another.');
   if (!hasMarker(p)) return toast(p, 'Unclaimed — plant a claim marker here to make it your stash house (craft one, find one, or buy one from a Contact)');
   startHack(p, 'claim', houseId);
 }
@@ -253,20 +282,25 @@ function finishClaim(p, houseId) {
   if (h.owner) return send(p.ws, { t: 'hack', done: true, text: 'Someone else claimed it first' });
   if (claimOf(p) || !takeMarker(p)) return send(p.ws, { t: 'hack', done: true, text: 'Claim failed' });
   // Whatever the last owner left behind stays in the stash.
-  Object.assign(h, { owner: p.token, ownerName: p.name, hxp: 0, upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 }, doorOpen: false });
+  Object.assign(h, { owner: p.token, ownerName: p.name, crew: squadOf(p)?.id || null, hxp: 0, upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 }, doorOpen: false });
   h.doorHp = doorMax(houseId);
   p.houseId = houseId;
   feed(`${p.name} claimed a ${homeLabel(houseId)}`);
   send(p.ws, { t: 'hack', done: true, text: `Claimed! This ${claimName(claimOf(p))} is now your stash house (level 1).` });
   send(p.ws, { t: 'claimed' });
+  const crew = squadOf(p);
+  if (crew) for (const m of crewOnline(crew)) { if (m !== p) { toast(m, `${p.name} claimed a stash house for ${crew.name}`); send(m.ws, { t: 'claimed' }); } dirty(m); }
   dirty(p);
 }
 function abandonClaim(p) {
   const c = claimOf(p);
   if (!c || !atOwnStash(p)) return toast(p, 'Abandon your stash house from inside it');
-  if (c.kind === 'home') { Object.assign(c.store, { owner: null, ownerName: null, hxp: 0 }); p.houseId = null; }
+  const crew = squadOf(p);
+  if (crew && rankOf(crew, p.token) === 'member') return toast(p, 'Only the crew leader or an officer can abandon the crew stash house');
+  if (c.kind === 'home') { Object.assign(c.store, { owner: null, ownerName: null, crew: null, hxp: 0 }); p.houseId = null; }
   else removeStruct(c.store, false);
   toast(p, 'Stash house abandoned — anything left inside is up for grabs');
+  if (crew) for (const m of crewOnline(crew)) { if (m !== p) toast(m, `${p.name} abandoned the crew stash house`); dirty(m); }
   p.openContainer = null;
   send(p.ws, { t: 'container', closed: true });
   dirty(p);
@@ -287,6 +321,8 @@ function award(p, amount, reason, share = false) {
   }
   const before = level(p);
   p.xp = (p.xp || 0) + amount;
+  const crew = squadOf(p);
+  if (crew) crew.score = (crew.score || 0) + amount;   // crew score: XP members earn together
   const after = level(p);
   send(p.ws, { t: 'xp', amount, reason });
   for (let l = before + 1; l <= after; l++) {
@@ -313,13 +349,86 @@ function privateState(p) {
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
     xp: p.xp, level: level(p), ...Object.fromEntries(RESOURCES.map((r) => [r, p[r] || 0])), comms: p.comms,
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
-    reloading: p.reloadUntil > Date.now(), houseId: ownedHouse(p.token), claim: claimSummary(p),
+    reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
+    downed: !!p.downed, downedUntil: p.downedUntil || 0, bleed: p.downed ? Math.max(0, Math.round(p.bleedHp)) : 0,
   };
 }
 
-// ---------------------------------------------------------------- squads ("leadership")
+// ---------------------------------------------------------------- claiming any building
+// Plant a claim marker inside any enterable building: a stash locker goes in, and every doorway gets
+// a lockable door. It then works like a claim flag (stash, gunsmith, upgrades, home level) and the
+// doors can be shot, hacked, chopped or blown like gates.
+const buildingGrid = new SpatialGrid(map.half + 4, 64);
+map.buildings.forEach((b, i) => { b.idx = i; buildingGrid.insert(b); });
+function buildingAt(x, z) {
+  for (const b of buildingGrid.near(x, z, 1)) if (x > b.minX + 0.3 && x < b.maxX - 0.3 && z > b.minZ + 0.3 && z < b.maxZ - 0.3) return b.idx;
+  return -1;
+}
+const BUILDING_NAMES = { building: 'Building', warehouse: 'Warehouse', farmhouse: 'Farmhouse', barn: 'Barn' };
+function buildingLabel(idx) {
+  const b = map.buildings[idx], cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+  const near = map.towns.reduce((a, t) => (!a || Math.hypot(t.x - cx, t.z - cz) < Math.hypot(a.x - cx, a.z - cz) ? t : a), null);
+  const inTown = near && cx > near.rect.minX && cx < near.rect.maxX && cz > near.rect.minZ && cz < near.rect.maxZ;
+  return `${BUILDING_NAMES[b.type] || 'Building'} ${inTown ? 'in' : 'near'} ${near ? near.name : 'the wilds'}`;
+}
+const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+function buildingClaimant(idx) { for (const st of structs.values()) if (PIECES[st.type].claim && st.building === idx) return st; return null; }
+// Loot spots inside a claimed building stop restocking: it's someone's home now.
+const spawnBuilding = map.lootSpawns.map((sp) => (sp.indoor ? buildingAt(sp.x, sp.z) : -1));
+function startClaimBuilding(p, idx) {
+  const held = buildingClaimant(idx);
+  if (held) return toast(p, `${storeOwnerLabel(held)} holds this building — break in through a door`);
+  if (claimOf(p)) return toast(p, squadOf(p) ? 'Your crew already has a stash house' : 'You already have a stash house. Abandon it before claiming another.');
+  if (!hasMarker(p)) return toast(p, 'Claim this building with a claim marker (craft one, find one, or buy one from a Contact)');
+  startHack(p, 'claimBuilding', idx);
+}
+function finishClaimBuilding(p, idx) {
+  const b = map.buildings[idx];
+  if (buildingClaimant(idx)) return send(p.ws, { t: 'hack', done: true, text: 'Someone else claimed it first' });
+  if (claimOf(p) || !hasMarker(p)) return send(p.ws, { t: 'hack', done: true, text: 'Claim failed' });
+  // Find a spot for the locker: near where you stand, clear of walls and doorways.
+  const fits = (x, z) => {
+    const lb = pieceBox('locker', x, z, 0);
+    if (lb.minX < b.minX + 0.35 || lb.maxX > b.maxX - 0.35 || lb.minZ < b.minZ + 0.35 || lb.maxZ > b.maxZ - 0.35) return false;
+    if (b.doors.some((d) => Math.hypot(d.x - x, d.z - z) < 2.6)) return false;
+    return !solidsNear(x, z, 2).some((o) => (o.y0 ?? 0) < terrain.height(x, z) + 2 && lb.maxX > o.minX && lb.minX < o.maxX && lb.maxZ > o.minZ && lb.minZ < o.maxZ);
+  };
+  let spot = null;
+  for (let r = 0; r <= 8 && !spot; r += 0.75) for (let a = 0; a < 12 && !spot; a++) { const x = p.x + Math.cos(a / 12 * Math.PI * 2) * r, z = p.z + Math.sin(a / 12 * Math.PI * 2) * r; if (fits(x, z)) spot = { x, z }; }
+  if (!spot) return send(p.ws, { t: 'hack', done: true, text: 'No room for a stash locker here — try another spot inside' });
+  takeMarker(p);
+  const crew = squadOf(p)?.id || null;
+  const mk = (type, x, z, rot, extra) => {
+    const st = { id: 's' + crypto.randomBytes(5).toString('hex'), type, x, z, rot, y0: terrain.height(x, z) - 0.05, stage: 0, hp: PIECES[type].stages[0].hp, owner: p.token, ownerName: p.name, open: false, ...extra };
+    db.structures.push(st);
+    indexStruct(st, true);
+    return st;
+  };
+  const locker = mk('locker', spot.x, spot.z, 0, { building: idx, crew, hxp: 0, items: [], ...Object.fromEntries(RESOURCES.map((r) => [r, 0])), upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 } });
+  locker.hp = flagMax(locker);
+  for (const d of b.doors) mk('door', d.x, d.z, d.out[0] === 0 ? 0 : 1, { claimOf: locker.id });
+  placeAt(p, p.x, p.z);   // step out of the locker if it went in where you stood
+  locker.spawn = { x: p.x, z: p.z };
+  feed(`${p.name} claimed a ${lowerFirst(buildingLabel(idx))}`);
+  send(p.ws, { t: 'hack', done: true, text: `Claimed! This ${lowerFirst(buildingLabel(idx))} is now your stash house: stash locker inside, ${b.doors.length} lockable door${b.doors.length > 1 ? 's' : ''}.` });
+  send(p.ws, { t: 'claimed' });
+  const s = squadOf(p);
+  if (s) for (const m of crewOnline(s)) { if (m !== p) { toast(m, `${p.name} claimed a ${lowerFirst(buildingLabel(idx))} for ${s.name}`); send(m.ws, { t: 'claimed' }); } dirty(m); }
+  dirty(p);
+}
+
+// ---------------------------------------------------------------- crews ("leadership")
+// A crew is a permanent team: it's saved with the world and survives logging off. It has a name,
+// a leader, officers and members. Everything team-related keys off it: shared tags and sensors, no
+// friendly fire, the shared stash house, revives, team hacking, crew contracts and the crew board.
+// (The code still calls them squads in places; it's the same thing.)
+// Members are shown to other players by a public id derived from their secret login token.
+const pubId = (token) => crypto.createHash('sha256').update(`crew:${token}`).digest('hex').slice(0, 12);
+function crewName(raw) { return String(raw || '').replace(/[^\w '\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20); }
+function charName(token) { return onlineByToken(token)?.name || db.characters[token]?.name || 'Agent'; }
+function rankOf(s, token) { return s.leader === token ? 'leader' : s.officers.has(token) ? 'officer' : 'member'; }
 function squadOf(p) { return squads.get(squadOfToken.get(p.token)) || null; }
 function squadKey(p) { return squadOfToken.get(p.token) || `solo:${p.token}`; }
 function sameSquad(a, b) {
@@ -335,39 +444,82 @@ function squadMembersOnline(p) {
   if (!s) return [p];
   return [...s.members].map(onlineByToken).filter(Boolean);
 }
+function crewOnline(s) { return [...s.members].map(onlineByToken).filter(Boolean); }
 function sendSquad(p, msg) { for (const m of squadMembersOnline(p)) send(m.ws, msg); }
-function pushSquadState(squad) {
-  const members = [...squad.members].map(onlineByToken).filter(Boolean);
-  const leader = onlineByToken(squad.leader);
-  const view = { t: 'squad', id: squad.id, leaderId: leader?.id ?? null, members: members.map((m) => ({ id: m.id, name: m.name, level: level(m), x: Math.round(m.x), z: Math.round(m.z) })) };
-  for (const m of members) send(m.ws, view);
+function sendCrew(s, msg) { for (const m of crewOnline(s)) send(m.ws, msg); }
+function tokenByPub(s, pid) { return [...s.members].find((t) => pubId(t) === pid) || null; }
+function crewView(s) {
+  const leader = onlineByToken(s.leader);
+  return {
+    t: 'squad', id: s.id, name: s.name, leaderId: leader?.id ?? null, score: Math.round(s.score || 0),
+    members: [...s.members].map((tok) => {
+      const m = onlineByToken(tok), c = m || db.characters[tok] || {};
+      return { pid: pubId(tok), id: m?.id ?? null, online: !!m, name: charName(tok), level: levelFromXp(c.xp || 0), rank: rankOf(s, tok), x: m ? Math.round(m.x) : null, z: m ? Math.round(m.z) : null };
+    }),
+  };
 }
-function leaveSquad(p, reason = 'left') {
-  const s = squadOf(p);
-  if (!s) return;
-  s.members.delete(p.token);
-  squadOfToken.delete(p.token);
-  send(p.ws, { t: 'squad', id: null, members: [] });
-  for (const m of [...s.members].map(onlineByToken).filter(Boolean)) toast(m, `${p.name} ${reason} the squad`);
-  if (s.members.size <= 1) {
-    for (const t of s.members) { squadOfToken.delete(t); const m = onlineByToken(t); if (m) { send(m.ws, { t: 'squad', id: null, members: [] }); toast(m, 'Squad disbanded'); } }
-    squads.delete(s.id);
-    return;
+function pushSquadState(s) {
+  const view = crewView(s);
+  for (const m of crewOnline(s)) send(m.ws, { ...view, myRank: rankOf(s, m.token) });
+}
+function newCrew(founder, name) {
+  const s = { id: uid('crew') + crypto.randomBytes(3).toString('hex'), name, leader: founder.token, officers: new Set(), members: new Set([founder.token]), score: 0, created: Date.now() };
+  squads.set(s.id, s);
+  squadOfToken.set(founder.token, s.id);
+  crewCreated(s, founder);
+  dirty(founder);
+  return s;
+}
+function nameTaken(name, except) { const n = name.toLowerCase(); return [...squads.values()].some((s) => s !== except && s.name.toLowerCase() === n); }
+function freeCrewName(base) { let n = crewName(base) || 'Crew', k = 2; while (nameTaken(n)) n = `${crewName(base).slice(0, 17)} ${k++}`; return n; }
+/** Remove a member (online or not). Hands leadership on; an emptied crew is disbanded. */
+function removeMember(s, token, reason = 'left') {
+  s.members.delete(token);
+  s.officers.delete(token);
+  squadOfToken.delete(token);
+  const gone = onlineByToken(token);
+  if (gone) { send(gone.ws, { t: 'squad', id: null, members: [] }); dirty(gone); }
+  crewMemberLeft(s, token);
+  if (!s.members.size) { crewDisbanded(s); squads.delete(s.id); return; }
+  sendCrew(s, { t: 'toast', text: `${charName(token)} ${reason} the crew` });
+  if (s.leader === token) {
+    // Longest-serving officer first, then anyone.
+    s.leader = [...s.officers][0] || [...s.members][0];
+    s.officers.delete(s.leader);
+    sendCrew(s, { t: 'toast', text: `${charName(s.leader)} now leads the crew` });
   }
-  if (s.leader === p.token) { s.leader = [...s.members][0]; const nl = onlineByToken(s.leader); if (nl) toast(nl, 'You are now squad leader'); }
   pushSquadState(s);
+  for (const m of crewOnline(s)) dirty(m);
 }
+function leaveSquad(p, reason = 'left') { const s = squadOf(p); if (s) removeMember(s, p.token, reason); }
 function squadAction(p, msg) {
   const now = Date.now();
+  const s = squadOf(p);
+  const rank = s ? rankOf(s, p.token) : null;
   const target = msg.id ? players.get(msg.id) : null;
-  if (msg.action === 'invite') {
+  // Members can be named by their public id (works for offline members) or, if online, by player id.
+  const targetTok = s && (msg.pid ? tokenByPub(s, msg.pid) : target && s.members.has(target.token) ? target.token : null);
+  if (msg.action === 'create') {
+    if (s) return toast(p, 'Leave your crew first');
+    const name = crewName(msg.name);
+    if (name.length < 3) return toast(p, 'Crew names need at least 3 letters');
+    if (nameTaken(name)) return toast(p, `There's already a crew called ${name}`);
+    pushSquadState(newCrew(p, name));
+    feed(`${p.name} founded the crew ${name}`);
+  } else if (msg.action === 'rename') {
+    if (!s || rank !== 'leader') return toast(p, 'Only the crew leader can rename the crew');
+    const name = crewName(msg.name);
+    if (name.length < 3) return toast(p, 'Crew names need at least 3 letters');
+    if (nameTaken(name, s)) return toast(p, `There's already a crew called ${name}`);
+    s.name = name;
+    pushSquadState(s);
+  } else if (msg.action === 'invite') {
     if (!target || target === p) return;
-    const s = squadOf(p);
-    if (s && s.leader !== p.token) return toast(p, 'Only the squad leader can invite');
-    if (s && s.members.size >= SQUAD_MAX) return toast(p, `Squads are capped at ${SQUAD_MAX}`);
-    if (squadOf(target)) return toast(p, `${target.name} is already in a squad`);
-    invites.set(target.token, { fromToken: p.token, fromName: p.name, expires: now + 60_000 });
-    send(target.ws, { t: 'invite', fromId: p.id, fromName: p.name });
+    if (s && rank === 'member') return toast(p, 'Only the leader and officers can invite');
+    if (s && s.members.size >= SQUAD_MAX) return toast(p, `Crews are capped at ${SQUAD_MAX}`);
+    if (squadOf(target)) return toast(p, `${target.name} is already in a crew`);
+    invites.set(target.token, { fromToken: p.token, fromName: p.name, crewName: s?.name || null, expires: now + 60_000 });
+    send(target.ws, { t: 'invite', fromId: p.id, fromName: p.name, crewName: s?.name || null });
     toast(p, `Invited ${target.name}`);
   } else if (msg.action === 'accept') {
     const inv = invites.get(p.token);
@@ -375,34 +527,71 @@ function squadAction(p, msg) {
     if (!inv || inv.expires < now) return toast(p, 'Invite expired');
     const inviter = onlineByToken(inv.fromToken);
     if (!inviter) return toast(p, 'Inviter went offline');
+    let cs = squadOf(inviter);
+    if (cs === s && s) return;
+    if (cs && cs.members.size >= SQUAD_MAX) return toast(p, 'That crew is full');
     leaveSquad(p);
-    let s = squadOf(inviter);
-    if (!s) { s = { id: uid('sq'), leader: inviter.token, members: new Set([inviter.token]) }; squads.set(s.id, s); squadOfToken.set(inviter.token, s.id); }
-    if (s.members.size >= SQUAD_MAX) return toast(p, 'Squad is full');
-    s.members.add(p.token);
-    squadOfToken.set(p.token, s.id);
-    for (const m of squadMembersOnline(p)) toast(m, `${p.name} joined the squad`);
-    pushSquadState(s);
+    if (!cs) cs = newCrew(inviter, freeCrewName(`${inviter.name}'s Crew`));
+    cs.members.add(p.token);
+    squadOfToken.set(p.token, cs.id);
+    crewMemberJoined(cs, p);
+    sendCrew(cs, { t: 'toast', text: `${p.name} joined ${cs.name}` });
+    pushSquadState(cs);
+    for (const m of crewOnline(cs)) dirty(m);
   } else if (msg.action === 'decline') {
     invites.delete(p.token);
   } else if (msg.action === 'leave') {
     leaveSquad(p);
   } else if (msg.action === 'kick') {
-    const s = squadOf(p);
-    if (!s || s.leader !== p.token || !target || !s.members.has(target.token) || target === p) return;
-    leaveSquad(target, 'was removed from');
-  } else if (msg.action === 'promote') {
-    const s = squadOf(p);
-    if (!s || s.leader !== p.token || !target || !s.members.has(target.token)) return;
-    s.leader = target.token;
+    if (!s || !targetTok || targetTok === p.token) return;
+    const tr = rankOf(s, targetTok);
+    if (rank === 'member' || (rank === 'officer' && tr !== 'member')) return toast(p, 'You can\'t remove them');
+    removeMember(s, targetTok, 'was removed from');
+  } else if (msg.action === 'promote' || msg.action === 'leader') {
+    // Hand over leadership.
+    if (!s || rank !== 'leader' || !targetTok || targetTok === p.token) return;
+    s.officers.delete(targetTok);
+    s.officers.add(p.token);
+    s.leader = targetTok;
+    sendCrew(s, { t: 'toast', text: `${charName(targetTok)} now leads ${s.name}` });
+    pushSquadState(s);
+  } else if (msg.action === 'officer' || msg.action === 'demote') {
+    if (!s || rank !== 'leader' || !targetTok || targetTok === s.leader) return;
+    if (msg.action === 'officer') s.officers.add(targetTok); else s.officers.delete(targetTok);
     pushSquadState(s);
   } else if (msg.action === 'ping') {
     const x = Number(msg.x), z = Number(msg.z);
     if (!Number.isFinite(x) || !Number.isFinite(z) || now - (p.lastPing || 0) < 500) return;
     p.lastPing = now;
-    const s = squadOf(p);
     sendSquad(p, { t: 'ping', x, z, from: p.name, objective: !!s && s.leader === p.token });
   }
+}
+// ---- the shared crew stash house
+// A crew has one stash house. Every member can use its stash, gunsmith and upgrades, and it levels
+// up from everyone's effort. The claim keeps a "holder" (a current member) for bookkeeping.
+function crewCreated(s, founder) {
+  const own = claimWhere((st) => st.owner === founder.token && !st.crew);
+  if (own) own.store.crew = s.id;
+}
+function crewMemberJoined(s, p) {
+  const shared = crewClaim(s.id);
+  const own = claimWhere((st) => st.owner === p.token && !st.crew);
+  if (!shared && own) { own.store.crew = s.id; sendCrew(s, { t: 'toast', text: `${p.name}'s stash house is now the crew stash house` }); }
+  else if (shared && own) toast(p, `You now share ${s.name}'s stash house. Your own one stays yours, unused, for if you ever leave.`);
+  else if (shared) toast(p, `You now share ${s.name}'s stash house`);
+}
+function crewMemberLeft(s, token) {
+  // The stash house stays with the crew; the leaver walks away from it.
+  const c = crewClaim(s.id);
+  if (!c || c.store.owner !== token || !s.members.size) return;
+  const heir = s.leader !== token ? s.leader : [...s.members][0];
+  c.store.owner = heir;
+  c.store.ownerName = charName(heir);
+}
+function crewDisbanded(s) {
+  // The last member keeps it as their own.
+  const c = crewClaim(s.id);
+  if (c) c.store.crew = null;
 }
 function rally(p) {
   const now = Date.now();
@@ -476,14 +665,14 @@ function tickSensors(now) {
 function startHack(p, kind, id, extra = {}) {
   const now = Date.now();
   let src;
-  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim') {
-    const ms = kind === 'claim' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
-    p.hack = { kind, id, start: now, until: now + ms, x: p.x, z: p.z, ...extra };
+  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding') {
+    const ms = kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
+    p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
     if (kind === 'raid' || kind === 'gatehack') {
       const st = structs.get(id);
-      const owner = st && onlineByToken(st.owner);
-      if (owner && (!st.raidAlert || now - st.raidAlert > 20_000)) { st.raidAlert = now; toast(owner, `⚠ ${p.name} is breaking into your base!`); send(owner.ws, { t: 'alert', x: st.x, z: st.z, text: 'Base under attack' }); }
+      const team = st ? teamOfToken(st.owner) : [];
+      if (team.length && (!st.raidAlert || now - st.raidAlert > 20_000)) { st.raidAlert = now; for (const o of team) { toast(o, `⚠ ${p.name} is breaking into your base!`); send(o.ws, { t: 'alert', x: st.x, z: st.z, text: 'Base under attack' }); } }
     }
     return;
   }
@@ -502,7 +691,8 @@ function startHack(p, kind, id, extra = {}) {
     src = objectives.get(id);
     if (!src || src.owner !== p.token) return toast(p, 'Not your contract');
   }
-  p.hack = { kind, id, start: now, until: now + HACK_MS[kind], x: p.x, z: p.z };
+  p.hack = { kind, id, start: now, until: now + HACK_MS[kind], total: HACK_MS[kind], x: p.x, z: p.z };
+  if (TEAM_HACK.exposes.includes(kind)) toast(p, 'Hacking shows your position to enemies nearby — have your crew cover you. Crewmates close by speed it up.');
   send(p.ws, { t: 'hack', kind, until: p.hack.until, total: HACK_MS[kind] });
   if (kind === 'crate') return;
   const text = { terminal: 'Terminal hack detected', door: 'Stash lock bypass detected', drop: 'Someone is opening the supply drop' }[kind];
@@ -512,16 +702,47 @@ function startHack(p, kind, id, extra = {}) {
 }
 function cancelHack(p, reason) { if (!p.hack) return; p.hack = null; send(p.ws, { t: 'hack', cancel: true, reason }); }
 
+const TEAM_HACK = ACTIVITIES.teamHack;
+/** Crewmates close enough to help with a hack (up, not hacking themselves). */
+function hackHelpers(p) {
+  let n = 0;
+  for (const m of squadMembersOnline(p)) if (m !== p && !m.dead && !m.downed && !m.hack && Math.hypot(m.x - p.x, m.z - p.z) <= TEAM_HACK.helperRange) n++;
+  return Math.min(n, TEAM_HACK.maxHelpers);
+}
 function tickHacks(now) {
+  const dtMs = 1000 / TICK_HZ;
   for (const p of players.values()) {
     const h = p.hack;
     if (!h) continue;
-    if (p.dead) { cancelHack(p, 'You went down'); continue; }
+    if (TEAM_HACK.speedUp.includes(h.kind)) {
+      // Each helper takes speedPerHelper seconds off per second.
+      const helpers = hackHelpers(p);
+      h.until -= dtMs * TEAM_HACK.speedPerHelper * helpers;
+      if (helpers !== (h.helpers || 0)) { h.helpers = helpers; send(p.ws, { t: 'hack', kind: h.kind, until: h.until, total: h.total, helpers }); }
+    }
+    // Hacking broadcasts your position to enemies nearby.
+    if (TEAM_HACK.exposes.includes(h.kind) && now - (h.exposedAt || 0) >= 1000) {
+      h.exposedAt = now;
+      for (const o of players.values()) {
+        if (o === p || o.dead || sameSquad(o, p) || Math.hypot(o.x - p.x, o.z - p.z) > TEAM_HACK.exposeRange) continue;
+        expose(p, squadKey(o), 1500);
+        send(o.ws, { t: 'expose', ids: [p.id], until: now + 1500, kind: 'sensor' });
+      }
+    }
+    if (p.dead || p.downed) { cancelHack(p, 'You went down'); continue; }
+    if (h.kind === 'revive') { const t = players.get(h.id); if (!t || !t.downed || t.dead) { cancelHack(p, 'Too late'); continue; } }
     if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Interrupted — you moved'); continue; }
     if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
     if (now < h.until) continue;
     p.hack = null;
     if (h.kind === 'claim') { finishClaim(p, h.id); continue; }
+    if (h.kind === 'claimBuilding') { finishClaimBuilding(p, h.id); continue; }
+    if (h.kind === 'revive') {
+      const t = players.get(h.id);
+      if (t && t.downed && !t.dead && Math.hypot(t.x - p.x, t.z - p.z) <= DOWNED.reviveRange + 0.5) { revive(t, p); send(p.ws, { t: 'hack', done: true, text: `${t.name} is back up` }); }
+      else send(p.ws, { t: 'hack', done: true, text: 'Too late' });
+      continue;
+    }
     if (h.kind === 'harvest') {
       const hv = harvested.get(h.id) || { uses: 0, regrowAt: 0 };
       if (hv.uses >= BUILD.harvest.uses && hv.regrowAt <= now) hv.uses = 0;
@@ -598,15 +819,53 @@ function tickHacks(now) {
 }
 
 // ---------------------------------------------------------------- combat
+const DOWNED = COMBAT.downed;
+/** Can this player be revived if they drop? Only with a crewmate who is online and still up. */
+function canGoDown(p) { return squadMembersOnline(p).some((m) => m !== p && !m.dead && !m.downed); }
+function goDown(p, attacker, headshot) {
+  const now = Date.now();
+  Object.assign(p, { downed: true, downedUntil: now + DOWNED.bleedOutMs, bleedHp: DOWNED.bleedHp, downedBy: attacker || null, downedHead: !!headshot, hp: 0, camoOn: false, crouch: true });
+  cancelHack(p, 'You went down');
+  p.openContainer = null;
+  send(p.ws, { t: 'container', closed: true });
+  feed(`${attacker ? attacker.name : 'The city'} downed ${p.name}`);
+  for (const m of squadMembersOnline(p)) if (m !== p) { toast(m, `✚ ${p.name} is down — get to them and revive (E)`); send(m.ws, { t: 'alert', x: p.x, z: p.z, text: `${p.name} down` }); }
+  toast(p, 'You\'re down! Crawl to cover — a crewmate can revive you. Q / Ⓨ to give up.');
+  dirty(p);
+}
+function revive(p, by) {
+  Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null, hp: DOWNED.reviveHp });
+  p.protectedUntil = 0;
+  feed(`${by ? by.name : 'The medic'} revived ${p.name}`);
+  if (by) award(by, DOWNED.reviveXp, `Revived ${p.name}`);
+  toast(p, by ? `${by.name} got you back up` : 'Back on your feet');
+  dirty(p);
+}
+/** Downed players bleed out; a whole crew down (nobody left to revive) is a wipe. */
+function tickDowned(now) {
+  for (const p of players.values()) {
+    if (!p.downed || p.dead) continue;
+    if (now > p.downedUntil || !canGoDown(p)) killPlayer(p, p.downedBy, p.downedHead);
+  }
+}
 function applyDamage(target, amount, attacker, isBot, headshot = false) {
   if (target.dead) return;
   if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
+  if (!isBot && target.downed) {
+    // Shooting someone who's down finishes them off.
+    target.bleedHp -= amount;
+    target.lastHit = Date.now();
+    if (attacker) target.downedBy = attacker;
+    if (target.bleedHp <= 0) killPlayer(target, attacker || target.downedBy, headshot || target.downedHead);
+    dirty(target);
+    return;
+  }
   let dmg = amount;
   if (!isBot && target.armor > 0) { const absorbed = Math.min(target.armor, dmg); target.armor -= absorbed; dmg -= absorbed; }
   target.hp -= dmg;
   target.lastHit = Date.now();
   if (!isBot) { breakCamo(target, 3000); dirty(target); }
-  if (target.hp <= 0) { target.hp = 0; if (isBot) killBot(target, attacker, headshot); else killPlayer(target, attacker, headshot); }
+  if (target.hp <= 0) { target.hp = 0; if (isBot) killBot(target, attacker, headshot); else if (canGoDown(target)) goDown(target, attacker, headshot); else killPlayer(target, attacker, headshot); }
 }
 function dropBag(x, z, items, res = {}, label = 'Bag') {
   const bag = { id: 'bag' + crypto.randomBytes(6).toString('hex'), x, z, items: items.filter(Boolean), label, expires: Date.now() + BAG_LIFETIME_MS };
@@ -627,6 +886,7 @@ function markAssist(target, killer) {
  */
 function killPlayer(p, attacker, headshotKill) {
   p.dead = true;
+  Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null });
   const { primary, secondary, armor, pack } = p.inv;
   const keepIntel = hasField(p, 'pouch') ? Math.min(3, p.intel) : 0;
   dropBag(p.x, p.z, [primary, secondary, armor, ...pack], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
@@ -745,7 +1005,7 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
   const msg = JSON.stringify({ t: 'shot', from: shooter.id, sup: !!s.suppressed, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
   for (const p of players.values()) if (p.ws.readyState === 1 && Math.abs(p.x - ox) < INTEREST && Math.abs(p.z - oz) < INTEREST) p.ws.send(msg);
 }
-function notifyOwner(houseId, text) { const owner = onlineByToken(db.houses[houseId].owner); if (owner) toast(owner, text); }
+function notifyOwner(houseId, text) { notifyStore(db.houses[houseId], text); }
 
 // ---------------------------------------------------------------- AI ("Rogues")
 let botSerial = 0;
@@ -796,6 +1056,7 @@ function updateBots(dt, now) {
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
     let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue).sightRange;
     for (const p of alive) {
+      if (p.downed) continue;   // rogues move on to whoever is still fighting
       const d = Math.hypot(p.x - b.x, p.z - b.z);
       if (d >= bestD) continue;
       if (camoActive(p) && d > 6) continue;
@@ -828,8 +1089,11 @@ function updateBots(dt, now) {
 
 // ---------------------------------------------------------------- loot
 function refillLoot(now) {
+  const claimed = new Set();
+  for (const st of structs.values()) if (st.building != null && PIECES[st.type].claim) claimed.add(st.building);
   map.lootSpawns.forEach((sp, i) => {
     if (lootAtSpawn.has(i) || spawnReadyAt.get(i) > now) return;
+    if (spawnBuilding[i] >= 0 && claimed.has(spawnBuilding[i])) return;
     const id = uid('l');
     loot.set(id, { id, x: sp.x, z: sp.z, item: { ...worldSupply(i, sp.zone), id: uid('i') }, spawnIndex: i });
     lootAtSpawn.set(i, id);
@@ -906,17 +1170,29 @@ function acceptContract(p, msg) {
   dirty(p);
 }
 /** Rewards are fixed and land in your pack — the salvage still has to get home. */
+/**
+ * Crew contracts: everyone in the crew who took part (up, and near the finisher or the objective)
+ * gets the full XP and commendations, and the resources are split between them.
+ */
 function completeContract(p, c) {
   const def = CONTRACT_TYPES[c.type];
   p.contracts = p.contracts.filter((x) => x.id !== c.id);
   cleanupContract(c);
+  const R = ACTIVITIES.contracts.crewShareRange;
+  const near = (m, o) => o && Number.isFinite(o.x) && Math.hypot(m.x - o.x, m.z - o.z) <= R;
+  const team = squadMembersOnline(p).filter((m) => m === p || (!m.dead && !m.downed && (near(m, p) || near(m, c))));
   const { comms = 0, ...res } = def.reward;
-  for (const [k, v] of Object.entries(res)) p[k] += v;
-  p.comms += comms;
-  award(p, def.xp, `Contract: ${def.name}`, true);
-  send(p.ws, { t: 'contractDone', name: def.name, reward: def.reward });
+  const share = Object.fromEntries(Object.entries(res).map(([k, v]) => [k, Math.ceil(v / team.length)]));
+  const names = team.map((m) => m.name);
+  for (const m of team) {
+    for (const [k, v] of Object.entries(share)) m[k] = (m[k] || 0) + v;
+    m.comms += comms;
+    award(m, def.xp, `Contract: ${def.name}`);
+    send(m.ws, { t: 'contractDone', name: def.name, reward: { ...share, ...(comms ? { comms } : {}) }, crew: team.length > 1 ? names : null, by: p.name });
+    dirty(m);
+  }
+  if (team.length > 1) feed(`${squadOf(p)?.name || p.name} completed ${def.name}`);
   pushContracts(p);
-  dirty(p);
 }
 function abandonContract(p, id) {
   const c = p.contracts.find((x) => x.id === id);
@@ -995,7 +1271,7 @@ function handleBuild(p, msg) {
   if (!hasTool(p, 'hammer')) return toast(p, 'You need a hammer to build');
   const myClaim = claimOf(p);
   if (def.claim) {
-    if (myClaim) return toast(p, 'You already have a stash house. Abandon it before planting a claim flag.');
+    if (myClaim) return toast(p, squadOf(p) ? 'Your crew already has a stash house' : 'You already have a stash house. Abandon it before planting a claim flag.');
     if (!hasMarker(p)) return toast(p, 'A claim flag needs a claim marker');
   }
   const cap = homePerks(myClaim ? homeLevel(myClaim.store.hxp) : 1).buildCap;
@@ -1011,7 +1287,7 @@ function handleBuild(p, msg) {
   if (def.container) Object.assign(st, { items: [], ...Object.fromEntries(RESOURCES.map((r) => [r, 0])) });
   if (def.claim) {
     takeMarker(p);
-    Object.assign(st, { hxp: 0, upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 } });
+    Object.assign(st, { hxp: 0, crew: squadOf(p)?.id || null, upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 } });
     st.hp = flagMax(st);
     feed(`${p.name} planted a claim flag`);
     send(p.ws, { t: 'claimed' });
@@ -1026,7 +1302,7 @@ function handleBuild(p, msg) {
 /** Building inside your claim radius levels your home. */
 function homeBuildXp(p, st, reason) {
   const c = claimOf(p);
-  if (!c || st.type === 'flag') return;
+  if (!c || PIECES[st.type].claim) return;
   if (Math.hypot(st.x - c.x, st.z - c.z) <= homePerks(homeLevel(c.store.hxp)).radius) addHomeXp(c, HOME_XP.build, reason);
 }
 function damageStruct(st, dmg, by) {
@@ -1035,13 +1311,15 @@ function damageStruct(st, dmg, by) {
   const owner = onlineByToken(st.owner);
   if (owner && by !== owner && (!st.alertedAt || Date.now() - st.alertedAt > 20_000)) { st.alertedAt = Date.now(); toast(owner, `⚠ Your ${stageDef(st).name.toLowerCase()} is under attack${by ? ` by ${by.name}` : ''}!`); }
   if (st.hp > 0) return;
-  if (st.type === 'flag') { feed(`${st.ownerName}'s claim flag was destroyed`); if (owner) toast(owner, '⚠ Your claim flag was destroyed — you no longer have a stash house'); }
+  if (PIECES[st.type].claim) { feed(`${storeOwnerLabel(st)}'s ${stageDef(st).name.toLowerCase()} was destroyed`); notifyStore(st, '⚠ Your stash house was destroyed — you no longer have one'); }
   removeStruct(st, true);
-  if (by && !by.isBot && st.owner !== by.token) award(by, st.type === 'flag' ? 250 : 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
+  if (by && !by.isBot && st.owner !== by.token) award(by, PIECES[st.type].claim ? 250 : 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
 }
 function removeStruct(st, destroyed) {
   indexStruct(st, false);
   db.structures = db.structures.filter((o) => o !== st);
+  // A claimed building's doors go with its stash locker.
+  if (PIECES[st.type].claim && st.building != null) for (const d of [...structs.values()]) if (d.claimOf === st.id) removeStruct(d, false);
   if (PIECES[st.type].container) {
     dropBag(st.x, st.z, st.items, st, destroyed ? 'Wrecked crate' : 'Crate contents');
     for (const p of players.values()) if (p.openContainer?.kind === 'crate' && p.openContainer.id === st.id) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
@@ -1133,18 +1411,19 @@ function nearestInteractable(p) {
 function containerView(p, kind, id) {
   if (kind === 'stash') {
     const h = db.houses[id];
-    const mine = h.owner === p.token;
+    const ours = claimOf(p);
+    const mine = ours?.kind === 'home' && ours.id === id;
     const squad = !mine && !!h.owner && tokenInSquadWith(p, h.owner);
-    const title = mine ? 'Your stash' : `${h.ownerName || 'Unclaimed'}'s stash${squad ? ' (squad)' : ''}`;
+    const title = mine ? (h.crew ? `${storeOwnerLabel(h)} crew stash` : 'Your stash') : `${storeOwnerLabel(h) || 'Unclaimed'}'s stash${squad ? ' (crew)' : ''}`;
     return { t: 'container', kind, id, title, items: h.items, ...Object.fromEntries(RESOURCES.map((r) => [r, h[r] || 0])), ammo: 0, canPut: mine || squad, cap: stashCap(id), gunsmith: mine, bank: mine, craft: mine, upg: mine ? h.upg : null, home: mine ? claimSummary(p) : null };
   }
   if (kind === 'crate') {
     const st = structs.get(id);
     if (!st) return { t: 'container', closed: true };
     const mine = canManage(p, st);
-    const own = st.owner === p.token, flag = st.type === 'flag';
+    const own = claimOf(p)?.store === st, flag = !!PIECES[st.type].claim;
     const cap = flag ? claimCap({ kind: 'flag', store: st }) : stageDef(st).slots;
-    return { t: 'container', kind, id, title: flag ? (own ? 'Your claim flag (stash)' : `${st.ownerName}'s claim flag`) : `${st.ownerName}'s ${stageDef(st).name.toLowerCase()}${mine ? '' : ' (not yours)'}`, items: st.items, ...Object.fromEntries(RESOURCES.map((r) => [r, st[r] || 0])), canPut: mine, cap, craft: own, upgradable: mine && !!PIECES[st.type].stages[st.stage + 1],
+    return { t: 'container', kind, id, title: flag ? (own ? (st.crew ? `${storeOwnerLabel(st)} crew stash` : `Your ${stageDef(st).name.toLowerCase()} (stash)`) : `${storeOwnerLabel(st)}'s ${stageDef(st).name.toLowerCase()}`) : `${st.ownerName}'s ${stageDef(st).name.toLowerCase()}${mine ? '' : ' (not yours)'}`, items: st.items, ...Object.fromEntries(RESOURCES.map((r) => [r, st[r] || 0])), canPut: mine, cap, craft: own, upgradable: mine && !!PIECES[st.type].stages[st.stage + 1],
       gunsmith: flag && own, bank: flag && own, upg: flag && own ? st.upg : null, home: flag && own ? claimSummary(p) : null };
   }
   const bag = db.bags.find((b) => b.id === id);
@@ -1163,9 +1442,18 @@ function refreshContainerViewers(kind, id) {
 
 function interact(p) {
   if (p.hack) return cancelHack(p, 'Cancelled');
+  // A downed crewmate within reach comes first.
+  for (const m of squadMembersOnline(p)) {
+    if (m !== p && m.downed && !m.dead && Math.hypot(m.x - p.x, m.z - p.z) <= DOWNED.reviveRange) return startHack(p, 'revive', m.id);
+  }
   const it = nearestInteractable(p);
   // Nothing else here: at a landing zone, E calls the extraction helicopter.
-  if (!it) { if (map.landingZones.some((l) => Math.hypot(l.x - p.x, l.z - p.z) < EXTRACT.callRange)) callExtraction(p); return; }
+  if (!it) {
+    if (map.landingZones.some((l) => Math.hypot(l.x - p.x, l.z - p.z) < EXTRACT.callRange)) return callExtraction(p);
+    const b = buildingAt(p.x, p.z);
+    if (b >= 0) startClaimBuilding(p, b);
+    return;
+  }
   if (it.kind === 'terminal') return startHack(p, 'terminal', it.ref.id);
   if (it.kind === 'drop') return startHack(p, 'drop', it.ref.id);
   if (it.kind === 'crate') return startHack(p, 'crate', it.ref.id);
@@ -1238,7 +1526,7 @@ function structInteract(p, st) {
       p.openContainer = { kind: 'crate', id: st.id };
       return send(p.ws, containerView(p, 'crate', st.id));
     }
-    if (def.door && st.stage > 0 && !msg_upgradeIntent(p)) {
+    if (def.door && stage.material !== 'frame' && !msg_upgradeIntent(p)) {
       if (st.open && [...players.values(), ...bots.values()].some((c) => !c.dead && boxDist(structBox(st), c.x, c.z) < 0.5)) return toast(p, 'Gateway blocked');
       st.open = !st.open;
       return;
@@ -1279,7 +1567,7 @@ function containerAction(p, msg) {
     if (kind === 'crate' && !canManage(p, store)) return;
     if (RESOURCES.includes(msg.res)) { store[msg.res] = (store[msg.res] || 0) + p[msg.res]; p[msg.res] = 0; dirty(p); return refreshContainerViewers(kind, id); }
     const cap = kind === 'stash' ? stashCap(id) : stageDef(store).slots;
-    if (store.items.length >= (kind === 'crate' && store.type === 'flag' ? claimCap({ kind: 'flag', store }) : cap)) return toast(p, kind === 'stash' ? 'Stash full — upgrade storage or level up your home' : 'Crate full — reinforce it for more room');
+    if (store.items.length >= (kind === 'crate' && PIECES[store.type].claim ? claimCap({ kind: 'flag', store }) : cap)) return toast(p, kind === 'stash' ? 'Stash full — upgrade storage or level up your home' : 'Crate full — reinforce it for more room');
     const idx = p.inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0 || p.inv.pack[idx].kind === 'package') return;
     store.items.push(p.inv.pack.splice(idx, 1)[0]);
@@ -1391,7 +1679,7 @@ function upgradeAction(p, msg) {
 function tickHouses(now) {
   const claims = [];
   for (const [idStr, h] of Object.entries(db.houses)) if (h.owner) claims.push({ kind: 'home', id: Number(idStr), store: h, x: map.houses[idStr].x, z: map.houses[idStr].z });
-  for (const st of structs.values()) if (st.type === 'flag') claims.push({ kind: 'flag', id: st.id, store: st, x: st.x, z: st.z });
+  for (const st of structs.values()) if (PIECES[st.type].claim) claims.push({ kind: 'flag', id: st.id, store: st, x: st.x, z: st.z });
   for (const c of claims) {
     const h = c.store;
     if (c.kind === 'home') {
@@ -1416,16 +1704,16 @@ function tickHouses(now) {
     // Perimeter alarm: tells the owner (anywhere on the map) and exposes the intruder. Camo beats it.
     const radius = UPGRADES.alarm.tiers[h.upg.alarm].radius;
     if (!radius) continue;
-    const owner = onlineByToken(h.owner);
+    const team = storeTeam(h);
+    const owner = team[0];
     if (!owner) continue;
     for (const o of players.values()) {
-      if (o.dead || tokenInSquadWith(o, h.owner) || camoActive(o)) continue;
+      if (o.dead || team.some((m) => sameSquad(m, o)) || tokenInSquadWith(o, h.owner) || camoActive(o)) continue;
       if (Math.hypot(o.x - c.x, o.z - c.z) > radius) continue;
       expose(o, squadKey(owner), 5000);
       if (now - (h.lastAlarm || 0) > 20_000) {
         h.lastAlarm = now;
-        toast(owner, `🚨 Perimeter alarm: ${o.name} is at your stash house`);
-        send(owner.ws, { t: 'alert', x: c.x, z: c.z, text: 'Perimeter alarm' });
+        for (const m of team) { toast(m, `🚨 Perimeter alarm: ${o.name} is at your stash house`); send(m.ws, { t: 'alert', x: c.x, z: c.z, text: 'Perimeter alarm' }); }
       }
     }
   }
@@ -1478,7 +1766,7 @@ function homeLabel(id) {
   return `${kindName.toLowerCase()} near ${near.name}`;
 }
 function deployOptions(p) {
-  const own = ownedHouse(p.token);
+  const own = claimOf(p)?.kind === 'home' ? claimOf(p).id : null;
   const c = claimOf(p);
   return {
     houseId: own,
@@ -1504,7 +1792,7 @@ function handleDeploy(p, msg) {
     return toast(p, 'Deploy first, then plant your claim marker where you want your stash house');
   } else if (msg.kind === 'house' || msg.kind === 'home') {
     if (!claim) return;
-    at = claim.kind === 'flag' ? { x: claim.x, z: claim.z + 1.6 } : { x: claim.x, z: claim.z + 1.2 };
+    at = homeSpot(claim);
   } else if (msg.kind === 'contact') {
     // First deploy: any town. After that: Contacts you've discovered.
     if (!p.discovered.includes(msg.id) && !p.deploying) return;
@@ -1576,7 +1864,7 @@ function extractSite(p) {
   for (const l of map.landingZones) { const d = Math.hypot(l.x - p.x, l.z - p.z); if (d < bd) { bd = d; best = { x: l.x, z: l.z, name: l.name }; } }
   return best;
 }
-function homeSpot(c) { return c.kind === 'flag' ? { x: c.x, z: c.z + 1.6 } : { x: c.x, z: c.z + 1.2 }; }
+function homeSpot(c) { return c.store.spawn ? { ...c.store.spawn } : c.kind === 'flag' ? { x: c.x, z: c.z + 1.6 } : { x: c.x, z: c.z + 1.2 }; }
 function callExtraction(p) {
   if (p.dead) return;
   const now = Date.now();
@@ -1603,9 +1891,9 @@ function tickExtractions(now) {
   for (const e of [...extractions.values()]) {
     const caller = onlineByToken(e.owner);
     const inZone = (o) => o && !o.dead && Math.hypot(o.x - e.x, o.z - e.z) <= EXTRACT.radius;
-    if (!inZone(caller)) {
+    if (!inZone(caller) || caller.downed) {
       extractions.delete(e.id);
-      if (caller) { caller.extractReadyAt = now + EXTRACT.cooldownMs; toast(caller, caller.dead ? 'Extraction aborted — you went down' : 'Extraction aborted — you left the pickup zone'); }
+      if (caller) { caller.extractReadyAt = now + EXTRACT.cooldownMs; toast(caller, caller.dead || caller.downed ? 'Extraction aborted — you went down' : 'Extraction aborted — you left the pickup zone'); }
       sendEvents();
       continue;
     }
@@ -1616,6 +1904,7 @@ function tickExtractions(now) {
       const c = claimOf(o);
       if (!c) { toast(o, 'No stash house to fly to — you stay here'); continue; }
       const at = homeSpot(c);
+      if (o.downed) revive(o, null);   // the crew chief patches you up on the way
       if (o.hack) cancelHack(o, 'Boarding the helicopter');
       o.openContainer = null;
       send(o.ws, { t: 'container', closed: true });
@@ -1672,6 +1961,8 @@ function handleJoin(ws, msg) {
     else if (!p.dead) instantiateContract(p, ct);
   }
   pushContracts(p);
+  const crew = squadOf(p);
+  if (crew) { pushSquadState(crew); sendCrew(crew, { t: 'toast', text: `${name} is online` }); }
   feed(`${name} entered the zone`);
 }
 
@@ -1684,7 +1975,7 @@ function handleState(p, msg) {
   if (!Number.isFinite(tx) || !Number.isFinite(tz)) return;
   if ((msg.tp || 0) !== (p.tp || 0)) return;   // sent before the latest teleport
   let dx = tx - p.x, dz = tz - p.z;
-  const maxStep = SPRINT_SPEED * dt * 1.5 + 0.15;
+  const maxStep = (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
   const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain);
@@ -1692,7 +1983,7 @@ function handleState(p, msg) {
   p.x = np.x; p.z = np.z;
   p.yaw = Number(msg.yaw) || 0;
   p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
-  p.crouch = !!msg.crouch;
+  p.crouch = !!msg.crouch || !!p.downed;
   p.aiming = !!msg.aim;
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
   if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z });
@@ -1737,7 +2028,11 @@ function leaderboard() {
     return { name: src.name, level: levelFromXp(src.xp || 0), xp: src.xp || 0, kills: src.kills || 0, online: live.has(tok) };
   });
   rows.sort((a, b) => b.xp - a.xp);
-  return { t: 'leaderboard', rows: rows.slice(0, 15) };
+  const crews = [...squads.values()].map((s) => {
+    const home = crewClaim(s.id);
+    return { name: s.name, leader: charName(s.leader), members: s.members.size, online: crewOnline(s).length, score: Math.round(s.score || 0), home: home ? homeLevel(home.store.hxp || 0) : 0 };
+  }).sort((a, b) => b.score - a.score);
+  return { t: 'leaderboard', rows: rows.slice(0, 15), crews: crews.slice(0, 15) };
 }
 
 // ---------------------------------------------------------------- http + ws
@@ -1774,6 +2069,11 @@ wss.on('connection', (ws) => {
     try { msg = JSON.parse(raw); } catch { return; }
     const p = ws.player;
     if (!p) { if (msg.t === 'join') handleJoin(ws, msg); return; }
+    // While downed you can crawl, talk to your crew, or give up; nothing else.
+    if (p.downed && !p.dead) {
+      if (msg.t === 'giveUp') return killPlayer(p, p.downedBy, p.downedHead);
+      if (!['state', 'squad', 'leaderboard', 'closeContainer', 'dev'].includes(msg.t)) return;
+    }
     switch (msg.t) {
       case 'state': return handleState(p, msg);
       case 'shoot': return handleShoot(p, msg);
@@ -1820,6 +2120,7 @@ wss.on('connection', (ws) => {
         // Test-only helpers (teleport / die), never enabled unless the server is started with ALLOW_DEV=1.
         if (process.env.ALLOW_DEV !== '1') return;
         if (msg.kill) return !p.dead && killPlayer(p, null);
+        if (Number.isFinite(msg.damage)) return applyDamage(p, msg.damage, null, false);
         if (Number.isFinite(msg.x) && Number.isFinite(msg.z)) placeAt(p, msg.x, msg.z);
         return;
     }
@@ -1828,8 +2129,9 @@ wss.on('connection', (ws) => {
     const p = ws.player;
     if (!p) return;
     persistCharacter(p);
-    leaveSquad(p);
     players.delete(p.id);
+    const crew = squadOf(p);
+    if (crew) pushSquadState(crew);   // stays in the crew, shown offline
     feed(`${p.name} left the zone`);
   });
 });
@@ -1852,7 +2154,7 @@ function snapshotFor(r, views, now) {
     houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0 }; }),
     terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
     objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
-    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(st.type === 'flag' ? flagMax(st) : stageDef(st).hp), hl: st.type === 'flag' ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0 })),
+    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0 })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   };
 }
@@ -1863,7 +2165,7 @@ const loop = setInterval(() => {
   const dt = 1 / TICK_HZ;
   updateBots(dt, now);
   tickHacks(now);
-  if (tick % 5 === 0) tickExtractions(now);
+  if (tick % 5 === 0) { tickExtractions(now); tickDowned(now); }
   for (const c of [...charges.values()]) if (c.detAt <= now) explode(c, now);
   if (tick % 10 === 0) tickSensors(now);
   if (tick % TICK_HZ === 0) {
@@ -1893,7 +2195,7 @@ const loop = setInterval(() => {
   if (tick % SNAPSHOT_EVERY === 0 && players.size) {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
-      crouch: p.crouch, dead: p.dead, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
+      crouch: p.crouch, dead: p.dead, downed: p.downed ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
     }]));
@@ -1903,7 +2205,7 @@ const loop = setInterval(() => {
   tick++;
 }, 1000 / TICK_HZ);
 
-const saver = setInterval(saveDb, 10_000);
+const saver = setInterval(saveDb, Number(process.env.SAVE_EVERY_MS || 10_000));
 function shutdown() { clearInterval(loop); clearInterval(saver); saveDb(); process.exit(0); }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

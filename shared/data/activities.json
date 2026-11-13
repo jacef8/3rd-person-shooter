@@ -45,7 +45,9 @@
       }
     },
     "maxActive": 2,
-    "durationMs": 3600000
+    "durationMs": 3600000,
+    "crewShareRange": 150,
+    "_crew": "Crewmates within crewShareRange metres of the finisher or the objective take part: everyone gets the full XP and commendations; resources are split evenly."
   },
   "supplyDrop": {
     "contents": {
@@ -343,5 +345,25 @@
     "alertRange": 800,
     "cooldownMs": 300000,
     "xp": 30
+  },
+  "teamHack": {
+    "_about": "Crewmates standing near a hacker speed the hack up. While hacking, the hacker's position shows to enemies nearby, so someone has to cover them.",
+    "helperRange": 10,
+    "speedPerHelper": 0.5,
+    "maxHelpers": 2,
+    "exposeRange": 80,
+    "speedUp": [
+      "terminal",
+      "door",
+      "gatehack",
+      "drop",
+      "crate"
+    ],
+    "exposes": [
+      "terminal",
+      "door",
+      "gatehack",
+      "drop"
+    ]
   }
 }

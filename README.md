@@ -24,9 +24,11 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
 - **Tech, Future Soldier-style.** Tag targets for your squad (F), sensor grenades that reveal
   everyone nearby, cloaked players included (G), optical camo (V), hack data terminals for intel and tech
   (E), and at higher levels hack enemy stash locks silently.
-- **Squads and leadership, Division-style.** Squads of up to 4 with no friendly fire, shared tags and
-  sensor reveals, shared XP and shared stash access. The leader sets the squad objective with a ping
-  and can Rally the squad. A server leaderboard ranks everyone (P).
+- **Crews: a team game.** Permanent crews of up to 6 (leader, officers, members) that survive
+  logging off. They share one stash house, revive each other when downed, hack faster together
+  (while the hacker shows up to enemies nearby), split contract rewards and climb a crew board.
+  There's no friendly fire, and tags and sensor reveals are shared. The leader sets the crew objective
+  with a ping and can Rally the crew. See [docs/DESIGN.md](docs/DESIGN.md#crews-playing-as-a-team-division-style).
 - **What loot is for:** parts build guns and armor, tech powers gadgets, and intel is XP, but only
   once you get it home to your stash. See [docs/DESIGN.md](docs/DESIGN.md) for the full loop.
 - Combat: headshots, damage falloff, armor that regenerates out of combat, crouch behind cover.
@@ -44,7 +46,8 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
 - **Units:** distances, ranges and radii are shown in feet and miles.
 - **Enterable buildings:** town buildings, houses, warehouses, farmhouses, barns and ranger stations
   have doorways, a ceiling and loot inside. Bigger ones have an interior wall, so you can fight room
-  to room. Only the ground floor is open for now; upper storeys are solid.
+  to room. Only the ground floor is open for now; upper storeys are solid. **Any of them can be
+  claimed** as a stash house: plant a marker inside for a stash locker and lockable doors.
 - **Building:** chop trees (hatchet) and mine rocks (pickaxe) for wood and stone, then place
   frames and upgrade them into wooden or stone walls, gates, barricades and stash crates, anywhere
   in the wild. Raid other bases with hatchets, pickaxes, gate hacks or breach charges.
@@ -102,7 +105,7 @@ npm start                                    # picks up data/real/ automatically
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
 H medkit · Tab inventory · F tag · G sensor grenade · V optical camo · T rally (squad leader) ·
-B squad ping · P squad panel and leaderboard · M map · X build mode (1-5 piece, R rotate, click
+B crew ping · P crew panel and leaderboards · M map · X build mode (1-5 piece, R rotate, click
 place, E upgrade, Q dismantle). Controller layout below. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
 
 ## Playing on a phone with a Backbone One (or any controller)

@@ -49,6 +49,7 @@ in it. That's an 8-second action, and moving or taking fire interrupts it. You c
 | Hollow cypress | Forest and river swamps |
 | Fish camp | River and lake banks, with a jetty |
 | **Abandoned vehicle**: RV, school bus, box truck, houseboat | Along the highways; houseboats moored on the rivers |
+| **Any enterable building** | Every town building, house, warehouse, farmhouse, barn and ranger station (~2,200). Planting the marker inside puts a **stash locker** in the room and fits a **lockable door** in every doorway. It works like a claim flag, and its doors can be shot, hacked, chopped or blown like gates. Loot inside stops restocking once it's someone's home. |
 | **Open ground**: claim flag | Anywhere you can build. Place the marker as a flag (build mode, piece 6), and the flag holds your stash |
 
 - New characters start with one marker. More are crafted (10 wood, 10 salvage), found in town
@@ -233,18 +234,40 @@ So the loot loop is:
 Camo is enforced by the server: cloaked enemies are left out of your network updates unless
 they're within 9 m or a tag or sensor has exposed them, so it can't be beaten by reading traffic.
 
-## Squads and leadership (Division-style)
+## Crews: playing as a team (Division-style)
 
-- Up to 4 players. The leader invites, kicks and promotes.
-- **No friendly fire.** Tags and sensor reveals are shared. Squadmates show green on the minimap
-  and through walls.
-- The **leader's ping is the squad objective** (★ on everyone's HUD for 2 minutes). Members' pings
-  are short callouts.
-- **Rally** is the leader's own ability.
-- **Shared stash access:** squadmates can open each other's stash house doors and deposit or take
-  items. Only the owner can use the gunsmith or upload intel there.
-- XP is shared at 25% within 50 m, so playing together levels everyone faster.
-- The **leaderboard** (P) ranks every character on the server by XP, online or offline.
+This is a team game, and the crew is the team.
+
+- **Crews are permanent.** They're saved with the world: you stay in your crew when you log off,
+  and offline members still show (greyed) in the crew panel (P). Up to 6 members.
+- **Ranks:** the **leader** invites, removes, promotes, renames and hands over leadership.
+  **Officers** can invite and remove ordinary members. If the leader leaves, the longest-serving
+  officer takes over. Members are shown to each other by a public id, never their login token.
+- **No friendly fire.** Tags and sensor reveals are shared. Crewmates show green on the minimap
+  and through walls. The **leader's ping is the crew objective** (★ on everyone's HUD), and
+  **Rally** is the leader's ability.
+- **One shared stash house per crew.** Every member uses its stash, gunsmith and upgrades and
+  levels it up. Alarms and raid alerts go to every member online. Only the leader or an officer can
+  abandon it. If the member who planted the claim leaves, the house stays with the crew. A claim
+  you had before joining a crew that already has one stays yours, unused, for if you ever leave.
+- **Downed, not dead.** At 0 HP, while a crewmate is online and still up, you go **down**: you
+  crawl at about 4 ft/s and bleed out over 30 s. Enemy fire drains a separate 120-point bleed pool,
+  so you can be finished off. A crewmate stands still next to you for 4 s to **revive** you (35 HP,
+  +75 XP to them). If nobody in the crew is left standing, it's a wipe and everyone down dies.
+  Solo players die at 0 HP. You can give up (Q / Ⓨ) to respawn sooner. Rogues ignore downed players,
+  and an extraction helicopter patches up downed crewmates who ride it.
+- **Team hacking.** Each crewmate within ~30 ft of a hacker takes half a second off every second
+  (up to two helpers, so a 5 s terminal takes 2.5 s). While you hack a terminal, door, gate or
+  supply drop, **your position shows to enemies within ~260 ft**, so someone has to cover you.
+- **Crew contracts.** When a contract is completed, every crewmate who is up and within ~500 ft of
+  the finisher or the objective takes part: everyone gets the full XP and commendations, and parts,
+  salvage, tech and intel are split evenly.
+- **Crew board.** The leaderboard (P) ranks crews by **crew score** (all XP members earn while in
+  the crew), alongside the agent board.
+- XP is still shared at 25% with crewmates within 165 ft.
+
+Numbers live in `shared/data/combat.json` (`crewMax`, `downed`) and `activities.json`
+(`teamHack`, `contracts.crewShareRange`).
 
 ## Open questions to tune next
 

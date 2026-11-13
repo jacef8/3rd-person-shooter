@@ -3,7 +3,6 @@
   "packSize": 12,
   "doorHp": 1500,
   "bagLifetimeMs": 1800000,
-  "squadMax": 4,
   "spawnProtectMs": 10000,
   "headshotMul": 1.5,
   "falloff": {
@@ -32,5 +31,16 @@
       "sightRange": 45,
       "weapon": "dmr"
     }
+  },
+  "crewMax": 6,
+  "downed": {
+    "_about": "At 0 HP you go down instead of dying while a crewmate is online and up. Enemy fire drains bleedHp; at 0, or after bleedOutMs, you die.",
+    "bleedOutMs": 30000,
+    "bleedHp": 120,
+    "crawlSpeed": 1.2,
+    "reviveMs": 4000,
+    "reviveRange": 2.2,
+    "reviveHp": 35,
+    "reviveXp": 75
   }
 }
