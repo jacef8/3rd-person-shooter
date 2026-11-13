@@ -30,6 +30,10 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   players are on. There's freight hauling, market stalls that sell while you're offline, and
   face-to-face trades. Tripwires, motion alarms, sentry guns and guard dogs protect your place while
   you're away, and an away log tells you what happened.
+- **The river.** Buy or build a jon boat or an airboat at a river landing and run the Apalachicola:
+  river freight between landings, swamp camps reachable only by water, where you can trade tupelo
+  honey, moonshine and gator hides, and boats that can be hotwired or sunk. See `docs/STORY.md` for how
+  the county ended up like this.
 - **Crews: a team game.** Permanent crews of up to 6 (leader, officers, members) that survive
   logging off. They share one stash house, revive each other when downed, hack faster together
   (while the hacker shows up to enemies nearby), split contract rewards and climb a crew board.

@@ -15,11 +15,12 @@ import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks } from
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
+import { BOATS, BOAT_RULES, stepBoat, seatPos } from '/shared/boats.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
 import HOMESTEAD from '/shared/data/homestead.json' with { type: 'json' };
 const GOODS = HOMESTEAD.goods;
 // Everything you can carry, stash and trade, in display order.
-const RES_UI = ['cash', 'parts', 'tech', 'salvage', 'ammo', 'wood', 'stone', 'intel', 'seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals'];
+const RES_UI = ['cash', 'parts', 'tech', 'salvage', 'ammo', 'wood', 'stone', 'intel', 'seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals', 'honey', 'shine', 'hide'];
 const RES_LABEL = { parts: 'parts', tech: 'tech', intel: 'intel drives', ammo: 'rounds', salvage: 'salvage', wood: 'wood', stone: 'stone', ...Object.fromEntries(Object.entries(GOODS).map(([k, g]) => [k, g.name])) };
 const resText = (r, n) => (r === 'cash' ? `$${n}` : `${n} ${RES_LABEL[r] || r}`);
 
@@ -100,6 +101,30 @@ function initWorld(m) {
     g.rotation.y = Math.PI / 4;
     setLabel(g.userData.label, `✦ ${c.name}`, '#7fd6ff');
     g.userData.bars.visible = false;
+    state.contactMeshes.push(g);
+  }
+  // River landings: a post with a sign at the head of each jetty; swamp camps get a sign overhead.
+  for (const d of map.docks) {
+    const g = new THREE.Group();
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 2.2, 8), new THREE.MeshStandardMaterial({ color: 0x5a4330 }));
+    post.position.y = 1.1;
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.5, 0.06), new THREE.MeshStandardMaterial({ color: 0x2b5d7a }));
+    sign.position.y = 2.0;
+    const label = makeLabel(`⚓ ${d.name}`, 0.006, '#7fd6ff');
+    label.position.y = 2.8;
+    g.add(post, sign, label);
+    g.position.set(d.x, ground(d.x, d.z), d.z);
+    g.rotation.y = Math.atan2(d.nx, d.nz);
+    scene.add(g);
+    state.contactMeshes.push(g);
+  }
+  for (const c of map.camps) {
+    const g = new THREE.Group();
+    const label = makeLabel(`🏕 ${c.name} · no fighting`, 0.009, '#9fe39f');
+    label.position.y = 7;
+    g.add(label);
+    g.position.set(c.x, ground(c.x, c.z), c.z);
+    scene.add(g);
     state.contactMeshes.push(g);
   }
 }
@@ -307,6 +332,18 @@ function makeTruck() {
 /** Simple wildlife: a body, legs and a head; hogs are low and dark, deer tall and tan, dogs small. */
 function makeAnimal(kind) {
   const g = new THREE.Group();
+  if (kind === 'gator') {
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2f3a24, roughness: 0.95 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.28, 1.9), mat); body.position.y = 0.2;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.75), mat); head.position.set(0, 0.17, 1.3);
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.18, 1.4), mat); tail.position.set(0, 0.15, -1.6);
+    g.add(body, head, tail);
+    for (const [x, z] of [[-0.38, 0.6], [0.38, 0.6], [-0.38, -0.6], [0.38, -0.6]]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.22), mat); leg.position.set(x, 0.07, z); g.add(leg); }
+    g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    g.userData = { body, head, animal: true };
+    scene.add(g);
+    return g;
+  }
   if (kind === 'boar') { const m = makeAnimal('hog'); m.scale.setScalar(1.8); return m; }
   const deer = kind === 'deer', dog = kind === 'dog';
   const mat = new THREE.MeshStandardMaterial({ color: deer ? 0x8a6440 : dog ? 0x6b5236 : 0x3a302a, roughness: 0.9 });
@@ -334,6 +371,80 @@ function makeAnimal(kind) {
   g.userData = { body, head, animal: true };
   scene.add(g);
   return g;
+}
+
+// ------------------------------------------------------------------ boats
+const boatVis = new Map();   // id -> { mesh, data }
+function makeBoat(type) {
+  const def = BOATS[type], g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: type === 'airboat' ? 0x46705c : 0x6b6f5a, roughness: 0.6, metalness: 0.3 });
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(def.wid, 0.12, def.len), mat); floor.position.y = 0.05;
+  const sideL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.45, def.len), mat); sideL.position.set(-def.wid / 2, 0.28, 0);
+  const sideR = sideL.clone(); sideR.position.x = def.wid / 2;
+  const bow = new THREE.Mesh(new THREE.BoxGeometry(def.wid, 0.5, 0.1), mat); bow.position.set(0, 0.32, def.len / 2);
+  const stern = bow.clone(); stern.position.z = -def.len / 2;
+  g.add(floor, sideL, sideR, bow, stern);
+  let prop = null;
+  if (type === 'airboat') {
+    const cage = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.05, 6, 20), new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.6 }));
+    cage.position.set(0, 1.15, -def.len / 2 + 0.25);
+    prop = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.14, 0.04), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+    prop.position.copy(cage.position);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.9, 0.5), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+    seat.position.set(0, 0.55, -def.len / 2 + 1.1);
+    g.add(cage, prop, seat);
+  } else {
+    const motor = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.65, 0.4), new THREE.MeshStandardMaterial({ color: 0x1c1c1c }));
+    motor.position.set(0, 0.45, -def.len / 2 - 0.18);
+    g.add(motor);
+  }
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  const label = makeLabel('', 0.0042, '#ffd27a');
+  label.position.y = 1.9;
+  g.add(label);
+  g.userData = { label, prop };
+  scene.add(g);
+  return g;
+}
+function syncBoats(list) {
+  const seen = new Set();
+  for (const b of list) {
+    seen.add(b.id);
+    let v = boatVis.get(b.id);
+    if (!v) { v = { mesh: makeBoat(b.type) }; v.mesh.position.set(b.x, 0, b.z); v.mesh.rotation.y = b.yaw; boatVis.set(b.id, v); }
+    v.data = b;
+    const name = BOATS[b.type].name.toLowerCase();
+    setLabel(v.mesh.userData.label, `${b.mine ? '◆ ' : ''}${b.owner ? `${b.owner}'s ${name}` : `Abandoned ${name}`}  ${b.hp}/${b.max}`, b.mine ? '#7dff9a' : '#ffd27a');
+  }
+  for (const [id, v] of boatVis) if (!seen.has(id)) { scene.remove(v.mesh); boatVis.delete(id); }
+}
+function animateBoats(dt, now) {
+  for (const [id, v] of boatVis) {
+    const local = state.boat && state.boat.id === id ? state.boat : null;
+    const t = local || v.data, g = v.mesh, k = Math.min(1, dt * 10);
+    if (local) { g.position.x = t.x; g.position.z = t.z; g.rotation.y = t.yaw; } else {
+      g.position.x += (t.x - g.position.x) * k; g.position.z += (t.z - g.position.z) * k;
+      let dy = t.yaw - g.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.rotation.y += dy * k;
+    }
+    g.position.y = Math.sin(now / 700 + g.position.x) * 0.04;
+    if (g.userData.prop) g.userData.prop.rotation.z += dt * ((local ? Math.abs(local.speed) > 0.5 : v.data.fast) ? 40 : 2);
+    g.userData.label.visible = state.me?.boat?.id !== id && camera.position.distanceTo(g.position) > 5;
+  }
+}
+/** Where you'd be sitting: your own boat is predicted locally, anyone else's follows the server. */
+function boatSeat(me) {
+  if (state.boat && me.boat.seat === 0) return seatPos(state.boat, 0);
+  const v = boatVis.get(me.boat.id);
+  return v ? seatPos({ type: v.data.type, x: v.mesh.position.x, z: v.mesh.position.z, yaw: v.mesh.rotation.y }, me.boat.seat) : null;
+}
+const canStepOut = () => { for (let r = 2; r <= BOAT_RULES.exitRange; r += 2) for (let a = 0; a < 16; a++) if (ground(state.x + Math.cos(a * Math.PI / 8) * r, state.z + Math.sin(a * Math.PI / 8) * r) > -0.6) return true; return false; };
+function boatHud() {
+  const me = state.me;
+  if (!me?.boat) return '';
+  const v = boatVis.get(me.boat.id);
+  if (!v) return '';
+  const mph = Math.round(Math.abs((state.boat && me.boat.seat === 0 ? state.boat.speed : 0) || 0) * 2.237);
+  return `🚤 ${BOATS[v.data.type].name}${me.boat.seat === 0 ? ` · ${mph} mph` : ' · passenger'} · hull ${v.data.hp}/${v.data.max} <small>${me.boat.seat === 0 ? 'W/S throttle · A/D steer · ' : ''}${glyph('Tab')} hold · steer to the bank and E to get out</small>`;
 }
 
 function makeCharacter(kind, name) {
@@ -385,13 +496,13 @@ function updateCharacterMesh(g, c, dt) {
   const k = Math.min(1, dt * 12);
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
-  g.position.y = ground(g.position.x, g.position.z);
+  g.position.y = c.boat ? 0.15 : ground(g.position.x, g.position.z);
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
-  const crouchScale = c.crouch ? 0.68 : 1;
+  const crouchScale = c.crouch || c.boat ? 0.68 : 1;
   g.userData.body.scale.y += (crouchScale - g.userData.body.scale.y) * k;
-  const yShift = c.crouch ? -0.55 : 0;
+  const yShift = c.crouch || c.boat ? -0.55 : 0;
   for (const part of ['head', 'visor', 'gun', 'pack']) {
     const base = { head: 1.58, visor: 1.6, gun: 1.25, pack: 1.05 }[part];
     const m = g.userData[part];
@@ -544,6 +655,8 @@ function drawMinimap() {
   for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
   for (const e of state.extracts) edge(e.x, e.z, '#ff2a2a', 8);
   for (const e of state.worldEvents || []) edge(e.x, e.z, '#c77dff', 8);
+  for (const d of state.map.docks) if (Math.abs(d.x - state.x) < view * 1.5 && Math.abs(d.z - state.z) < view * 1.5) dot(d.x, d.z, '#7fd6ff', 5);
+  for (const [, v] of boatVis) dot(v.mesh.position.x, v.mesh.position.z, v.data.mine ? '#7dff9a' : '#ffd27a', 5);
   if (state.enemyStash && state.enemyStash.untilPerf > performance.now()) edge(state.enemyStash.x, state.enemyStash.z, '#ff8a2a', 8);
   for (const [id, e] of state.exposed) { if (e.until < performance.now()) continue; const c = state.players.get(id)?.data; if (c && !c.dead && !c.sq) edge(c.x, c.z, '#ff4d4d', 6); }
   const hp0 = homePos();
@@ -612,10 +725,10 @@ function handle(m) {
       for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
         let rec = state.bots.get(b.id);
-        if (!rec && (b.kind === 'merchant' || b.kind === 'settler')) {
+        if (!rec && (b.kind === 'merchant' || b.kind === 'settler' || b.kind === 'trader')) {
           rec = { mesh: makeCharacter('contact', b.name) };
           rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
-          setLabel(rec.mesh.userData.label, `${b.kind === 'merchant' ? '🛒' : '🌾'} ${b.name}`, '#9fe39f');
+          setLabel(rec.mesh.userData.label, `${b.kind === 'merchant' ? '🛒' : b.kind === 'trader' ? (b.name === 'Dockhand' ? '⚓' : '🏕') : '🌾'} ${b.name}`, '#9fe39f');
           state.bots.set(b.id, rec);
         }
         if (!rec && b.kind === 'convoy') {
@@ -645,11 +758,14 @@ function handle(m) {
       syncTerminals(m.terminals || []);
       syncObjectives(m.objectives || []);
       syncStructs(m.structs || []);
+      syncBoats(m.boats || []);
       syncCharges(m.charges || []);
       break;
     }
     case 'you': {
       const wasDead = state.me?.dead;
+      if (m.boat && !state.me?.boat) state.crouch = false;
+      if (!m.boat || m.boat.seat !== 0 || (state.boat && state.boat.id !== m.boat.id)) state.boat = null;
       state.me = m;
       if (m.houseId !== state.houseId) { state.houseId = m.houseId; state.view?.setOwnHouse(m.houseId); }
       if (state.mapMode && state.mapOpen) renderMapScreen();
@@ -664,6 +780,13 @@ function handle(m) {
       setCharacterGun(selfMesh, m.inv[m.active] ? { a: m.inv[m.active].archetype, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
       break;
     }
+    case 'boatFix':
+      if (state.boat) Object.assign(state.boat, { x: m.x, z: m.z, yaw: m.yaw, speed: 0 });
+      break;
+    case 'dock':
+      state.contact = { ...m, dock: true, offers: [], active: [] };
+      openContact();
+      break;
     case 'correct':
       state.x = m.x; state.z = m.z;
       if (m.force) { state.tp = m.tp || 0; selfMesh.position.set(m.x, ground(m.x, m.z), m.z); state.view?.update(m.x, m.z); }
@@ -1046,13 +1169,14 @@ function closeContact() {
 function renderTrade(c, me) {
   const box = $('ctTrade');
   if (!box) return;
-  const solo = !!(c.npc || c.stall);
+  const solo = !!(c.npc || c.stall || c.dock);
   $('ctColContracts').hidden = solo; $('ctColQm').hidden = solo;
-  $('ctTradeTitle').textContent = c.stall ? 'Stall' : c.npc ? 'Trade' : 'Trading post';
+  $('ctTradeTitle').textContent = c.dock ? 'Landing' : c.stall ? 'Stall' : c.npc ? 'Trade' : 'Trading post';
+  if (c.dock) return renderDock(c, me, box);
   if (c.stall) return renderStall(c, me, box);
   if (!c.trade) return;
   const tsend = (m) => send({ t: 'trade', contactId: c.id, npcId: c.npc || undefined, ...m });
-  box.innerHTML = c.npc ? `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. ${c.trade.who === 'Travelling merchant' ? 'Merchants pay close to the best price anywhere, and roam between towns.' : 'Settlers sell what they grow or catch, cheap.'}</p>`
+  box.innerHTML = c.npc ? `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. ${c.trade.who === 'Travelling merchant' ? 'Merchants pay close to the best price anywhere, and roam between towns.' : c.trade.who === 'Camp trader' ? 'River people sell tupelo honey, moonshine and gator hides cheap, and pay well for what they can\'t make out here. Towns far from the river pay most for swamp goods.' : c.trade.who === 'Dockhand' ? 'Buys at nine-tenths of town prices, right at the water.' : 'Settlers sell what they grow or catch, cheap.'}</p>`
     : `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. Prices here reflect what ${c.trade.town} has plenty of — haul goods to where they're scarce.</p>`;
   // County fair: hand in meat for the hunting contest.
   const fair = c.fair && (state.worldEvents || []).find((e) => e.type === 'fair');
@@ -1111,6 +1235,43 @@ function renderTrade(c, me) {
     row.innerHTML = `<div class="meta"><div class="nm">${GOODS[r.res]?.icon || ''} ${r.qty} ${r.name} · $${r.price} each</div><div class="st">${r.seller}'s stall near ${r.near} · ${distText(r.dist)}</div></div>`;
     row.append(btn('Mark', () => { state.pings.push({ x: r.x, z: r.z, from: `${r.seller}'s stall`, objective: false, until: performance.now() + 600_000 }); toast(`Marked ${r.seller}'s stall`); }));
     box.append(row);
+  }
+}
+function renderDock(c, me, box) {
+  const row = (html) => { const r = document.createElement('div'); r.className = 'item'; r.innerHTML = `<div class="meta">${html}</div>`; box.append(r); return r; };
+  const head = (t) => box.append(Object.assign(document.createElement('div'), { className: 'nm', style: 'margin:12px 0 4px;color:#ffa64d;font-weight:700', textContent: t }));
+  box.innerHTML = `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. ${c.camp ? `The landing for ${c.camp}. ` : ''}The river is the one road the Rogues don't own. You own ${c.owned} of ${c.maxOwned} boats.</p>`;
+  head('Boats');
+  for (const s of c.shop) {
+    const r = row(`<div class="nm">🚤 ${s.name}</div><div class="st">${s.about} Seats ${s.seats} · hold ${s.hold} loads.</div>`);
+    const col = Object.assign(document.createElement('div'), { style: 'display:flex;flex-direction:column;gap:4px;flex:none' });
+    const b = btn(`Buy $${s.price}`, () => send({ t: 'dock', id: c.id, action: 'buy', type: s.type }), '');
+    b.disabled = (me.cash || 0) < s.price || c.owned >= c.maxOwned;
+    col.append(b);
+    if (s.craft) {
+      const cb = btn(`Build: ${costText(s.craft)}`, () => send({ t: 'dock', id: c.id, action: 'buy', type: s.type, pay: 'craft' }), '');
+      cb.disabled = c.owned >= c.maxOwned || Object.entries(s.craft).some(([k, v]) => (me[k] || 0) < v);
+      col.append(cb);
+    }
+    r.append(col);
+  }
+  if (c.boats.length) {
+    head('Your boats at this landing');
+    for (const b of c.boats) {
+      const r = row(`<div class="nm">${b.name} · hull ${b.hp}/${b.max}</div><div class="st">Hold: ${b.free} free${b.cargo.length ? ` · carrying ${b.cargo.map((x) => x.name).join(', ')}` : ''}</div>`);
+      if (b.repair) { const rb = btn(`Repair $${b.repair}`, () => send({ t: 'dock', id: c.id, action: 'repair', boat: b.id }), ''); rb.disabled = (me.cash || 0) < b.repair; r.append(rb); }
+    }
+  }
+  head('River freight');
+  box.append(Object.assign(document.createElement('p'), { className: 'sub', style: 'text-align:left;margin:0 0 6px', textContent: 'Bulk loads that only fit in a boat\'s hold. Moor at this landing with room in the hold, load up, and deliver at the other landing. Sink and it\'s lost.' }));
+  if (!c.freight.length) row('<div class="st">No loads waiting. Check back later.</div>');
+  const room = c.boats.some((b) => b.free > 0);
+  for (const j of c.freight) {
+    const r = row(`<div class="nm">📦 ${j.label} → ${j.toName}</div><div class="st">${distText(j.km * 1000)} · pays $${j.pay}</div>`);
+    const b = btn('Load it', () => send({ t: 'dock', id: c.id, action: 'freight', job: j.id }), '');
+    b.disabled = !room;
+    if (!room) b.title = 'Moor a boat of yours here with room in its hold';
+    r.append(b);
   }
 }
 function renderStall(c, me, box) {
@@ -1281,7 +1442,7 @@ function renderMapScreen() {
     first: 'Pick where to start. Then find a place to call home and plant your claim marker in it: a town house or apartment room, a limestone cave, rock outcrop, hollow cypress, river fish camp, an abandoned RV, bus, box truck or houseboat — or plant it as a claim flag on open ground.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
-    view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad. Call extraction at any Contact or landing zone.',
+    view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
@@ -1306,6 +1467,9 @@ function drawMapCanvas() {
   for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: '#cfcfcf', size: 4, label: state.mapMode === 'redeploy' ? lz.name : '' });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
+  for (const d of map.docks) markers.push({ x: d.x, z: d.z, color: '#7fd6ff', size: 4, label: d.campId != null ? '' : `⚓ ${d.name}` });
+  for (const c of map.camps) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: '#9fe39f', size: 6, label: `🏕 ${c.name}` });
+  for (const [, v] of boatVis) if (v.data.mine) markers.push({ x: v.mesh.position.x, z: v.mesh.position.z, color: '#7dff9a', size: 5, label: `🚤 ${BOATS[v.data.type].name}` });
   for (const e of state.worldEvents || []) {
     markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#c77dff', size: 9, label: `📣 ${e.name}` });
     if (e.radius) markers.push({ x: e.x, z: e.z, kind: 'ring', radius: e.radius, color: '#c77dff' });
@@ -1563,6 +1727,7 @@ function doAction(a) {
       return;
     case 'inventory':
       if (state.me.dead) return;
+      if (!state.invOpen && state.me.boat) { send({ t: 'boatHold' }); return; }
       if (state.invOpen) { state.gunsmithOpen = false; $('gunsmith').hidden = true; closeInventory(); lockPointer(); } else openInventory();
       return;
   }
@@ -1675,7 +1840,7 @@ function lookDir() {
   return new THREE.Vector3(Math.sin(state.yaw) * Math.cos(state.pitch), Math.sin(state.pitch), Math.cos(state.yaw) * Math.cos(state.pitch));
 }
 
-function eyeHeight() { return ground(state.x, state.z) + (state.crouch ? CROUCH_EYE : STAND_EYE); }
+function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : ground(state.x, state.z) + (state.crouch ? CROUCH_EYE : STAND_EYE); }
 
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
@@ -1721,8 +1886,23 @@ function tryFire(now) {
 }
 
 function nearestInteractable() {
+  if (state.me?.boat) return canStepOut() ? '🚤 Get out onto the bank' : null;
   let best = null, bestD = INTERACT_RANGE;
   const consider = (d, text) => { if (d < bestD) { bestD = d; best = text; } };
+  // Boats and landing posts (boats are boarded from a little further off: they sit in the water).
+  for (const [, v] of boatVis) {
+    const b = v.data, d = Math.hypot(b.x - state.x, b.z - state.z) - 1.5;
+    if (d >= BOAT_RULES.boardRange) continue;
+    const name = BOATS[b.type].name.toLowerCase(), full = b.seats.every(Boolean), crewed = b.seats.some(Boolean);
+    const text = b.mine ? (full ? `Your ${name} is full` : b.seats[0] ? `🚤 Ride in the ${name}` : `🚤 Take the helm of your ${name}`)
+      : !b.owner ? `🚤 Take the abandoned ${name}` : crewed ? `${b.owner}'s ${name} (crewed)` : `🔧 Hotwire ${b.owner}'s ${name} (${BOAT_RULES.hotwireMs / 1000}s, they'll be warned)`;
+    if (d < bestD) { bestD = Math.max(0, d - 1); best = text; }
+  }
+  for (const dk of state.map.docks) {
+    if (Math.abs(dk.x - state.x) > 4 || Math.abs(dk.z - state.z) > 4) continue;
+    const d = Math.hypot(dk.x - state.x, dk.z - state.z) - 0.4;
+    if (d < 2.5) consider(Math.max(0, d - 1), `⚓ ${dk.name}: buy a boat, repairs, river freight`);
+  }
   for (const [, l] of state.loot) consider(Math.hypot(l.data.x - state.x, l.data.z - state.z), `Pick up ${l.data.name}${l.data.amount ? ` (+${l.data.amount})` : ''}`);
   for (const [, b] of state.bags) consider(Math.hypot(b.data.x - state.x, b.data.z - state.z), `Search ${b.data.label}`);
   for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; consider(Math.hypot(t.x - state.x, t.z - state.z), ready ? 'Hack terminal (stand still 5s) — intel + tech' : 'Terminal rebooting'); }
@@ -1740,7 +1920,7 @@ function nearestInteractable() {
   }
   for (const [, r] of state.bots) {
     const c = r.data;
-    if (c && (c.kind === 'merchant' || c.kind === 'settler')) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.3, `🛒 Trade with the ${c.name.toLowerCase()}`);
+    if (c && (c.kind === 'merchant' || c.kind === 'settler' || c.kind === 'trader')) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.3, `🛒 Trade with the ${c.name.toLowerCase()}`);
   }
   for (const [, r] of state.players) if (r.data.sq && r.data.downed && !r.data.dead) consider(Math.hypot(r.data.x - state.x, r.data.z - state.z) - 1.5, `✚ Revive ${r.data.name} (stand still ${COMBAT_RULES.downed.reviveMs / 1000}s)`);
   for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
@@ -1896,7 +2076,7 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
   } else hb.hidden = true;
   // Stun flash fades out over the stun.
   const sf = $('stunfx'), sLeft = (state.stunnedUntil || 0) - performance.now();
@@ -2478,8 +2658,24 @@ function frame(now) {
   const me = state.me;
   const alive = me && !me.dead;
 
+  // In a boat: the driver steers it (predicted here, checked by the server); passengers ride along.
+  const inBoat = alive && me.boat;
+  if (inBoat) {
+    const k = state.keys;
+    const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0), r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
+    const free = !state.invOpen && !state.contactOpen && !state.mapOpen && !state.panelOpen;
+    if (me.boat.seat === 0) {
+      const v = boatVis.get(me.boat.id);
+      if (!state.boat && v) state.boat = { id: me.boat.id, type: v.data.type, x: v.data.x, z: v.data.z, yaw: v.data.yaw, speed: 0 };
+      if (state.boat) Object.assign(state.boat, stepBoat(state.map.terrain, state.boat, free ? { throttle: f + pad.moveY + touch.moveY, steer: r + pad.moveX + touch.moveX } : {}, dt));
+    }
+    const seat = boatSeat(me);
+    if (seat) { state.x = seat.x; state.z = seat.z; }
+    state.sprint = false; state.crouch = false;
+    if (state.mouseDown && free && !build.on) tryFire(now); else if (!state.mouseDown) state.firedThisPress = false;
+  }
   // Local movement (client-side prediction; server re-validates every step).
-  if (alive && !state.invOpen) {
+  if (alive && !state.invOpen && !inBoat) {
     const k = state.keys;
     const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
@@ -2506,7 +2702,7 @@ function frame(now) {
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: state.yaw, pitch: state.pitch, crouch: state.crouch, aim: state.aiming, sprint: state.sprint });
+    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: state.yaw, pitch: state.pitch, crouch: state.crouch, aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
   }
 
   // Recoil recovers smoothly.
@@ -2517,7 +2713,8 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, dead: !alive, downed: !!state.me?.downed }, 1);
+  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat }, 1);
+  animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);
   for (const [, r] of state.bots) {
     if (!r.animal) { updateCharacterMesh(r.mesh, r.data, dt); continue; }
@@ -2534,8 +2731,9 @@ function frame(now) {
   const d = lookDir();
   const right = new THREE.Vector3(-Math.cos(state.yaw), 0, Math.sin(state.yaw));
   const aim = state.aiming && alive;
-  const dist = aim ? 1.8 : 4.2, shoulder = aim ? 0.6 : 0.85;
-  const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.2 : 0.45), state.z).addScaledVector(right, shoulder);
+  const afloat = !!me?.boat;
+  const dist = aim ? 1.8 : afloat ? 6.5 : 4.2, shoulder = aim ? 0.6 : afloat ? 0.3 : 0.85;
+  const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.2 : afloat ? 0.9 : 0.45), state.z).addScaledVector(right, shoulder);
   const want = pivot.clone().addScaledVector(d, -dist);
   const toCam = want.clone().sub(pivot);
   const tl = toCam.length();
@@ -2575,7 +2773,7 @@ function frame(now) {
   }
 
   const prompt = alive && !state.invOpen ? nearestInteractable() : null;
-  $('prompt').innerHTML = prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : '';
+  $('prompt').innerHTML = prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : boatHud();
   drawMinimap();
   renderer.render(scene, camera);
   drawGunsmith(dt);
@@ -2586,7 +2784,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { state, send };
+window.__dz = { state, send, boatVis };
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere

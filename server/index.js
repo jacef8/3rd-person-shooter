@@ -13,7 +13,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { biomeName } from '../shared/terrain.js';
+import { biomeName, DEEP_WATER } from '../shared/terrain.js';
+import { BOATS, floats, seatPos } from '../shared/boats.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
@@ -33,6 +34,7 @@ import ACTIVITIES from '../shared/data/activities.json' with { type: 'json' };
 import HOMESTEAD from '../shared/data/homestead.json' with { type: 'json' };
 import ECONOMY from '../shared/data/economy.json' with { type: 'json' };
 import LIVING from '../shared/data/world.json' with { type: 'json' };
+import RIVER_DATA from '../shared/data/river.json' with { type: 'json' };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -74,7 +76,7 @@ const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.ro
 const REAL_INFO = (realFiles.structures || realFiles.roads) ? { structures: !!realFiles.structures, roads: !!realFiles.roads } : null;
 const grid = map.grid;
 const terrain = map.terrain;
-const gy = (c) => terrain.height(c.x, c.z);   // ground height under a character
+const gy = (c) => (c.boat ? 0.25 : terrain.height(c.x, c.z));   // ground height under a character (or the boat deck)
 const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
@@ -98,6 +100,7 @@ for (const h of map.houses) {
   db.houses[h.id].upg = { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0, ...db.houses[h.id].upg };
 }
 db.structures ??= [];
+db.boats ??= [];
 db.crews ??= {};
 
 function saveDb() {
@@ -361,6 +364,7 @@ function privateState(p) {
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
     food: Math.round(p.food ?? 0), foodMax: HOMESTEAD.hunger.max,
+    boat: p.boat ? { id: p.boat, seat: p.seat } : null,
     downed: !!p.downed, downedUntil: p.downedUntil || 0, stunnedUntil: p.stunnedUntil || 0, stunReadyAt: p.stunReadyAt || 0, bleed: p.downed ? Math.max(0, Math.round(p.bleedHp)) : 0,
   };
 }
@@ -677,6 +681,7 @@ function npcDown(b, attacker) {
 }
 /** What a friendly NPC buys and sells. Merchants pay near the best price anywhere; settlers sell their produce cheap. */
 function npcTradeView(b) {
+  if (b.kind === 'trader') return traderView(b);
   const best = (g) => Math.max(...map.contacts.map((c) => priceAt(c.id, g)));
   if (b.kind === 'merchant') {
     return { town: 'travelling', who: b.name,
@@ -689,11 +694,274 @@ function npcTradeView(b) {
     shop: produce.map((g) => ({ id: g, name: HOMESTEAD.goods[g].name, price: Math.max(1, Math.round((ECONOMY.prices[g] || 3) * NPC.settler.sellRate * ECONOMY.buyMarkup)), qty: 1 })) };
 }
 function friendlyNpcNear(p) {
-  for (const b of bots.values()) if (b.npc && !b.dead && (b.kind === 'merchant' || b.kind === 'settler') && Math.hypot(b.x - p.x, b.z - p.z) < 2.6) return b;
+  for (const b of bots.values()) if (b.npc && !b.dead && (b.kind === 'merchant' || b.kind === 'settler' || b.kind === 'trader') && Math.hypot(b.x - p.x, b.z - p.z) < 2.6) return b;
   return null;
 }
 function npcView(p, b) {
   return { t: 'contact', id: null, npc: b.id, name: b.name, offers: [], active: [], comms: p.comms, trade: npcTradeView(b) };
+}
+
+
+// ---- the river trade (phase 2): boats, landings, river freight, river traders and swamp camps
+const RV = RIVER_DATA;
+const boatRt = new Map();   // boat id -> { speed, seats: [playerId | null] } (runtime only)
+function rtOf(b) { let r = boatRt.get(b.id); if (!r) { r = { speed: 0, seats: Array(BOATS[b.type].seats).fill(null) }; boatRt.set(b.id, r); } return r; }
+const boatById = (id) => db.boats.find((b) => b.id === id);
+const canUseBoat = (p, b) => !!b.owner && tokenInSquadWith(p, b.owner);
+const boatName = (b) => `${b.ownerName ? `${b.ownerName}'s ` : ''}${BOATS[b.type].name.toLowerCase()}`;
+const boatOccupants = (b) => rtOf(b).seats.map((id) => id && players.get(id)).filter(Boolean);
+function inCamp(x, z) { for (const c of map.camps) if (Math.hypot(x - c.x, z - c.z) <= c.radius) return c; return null; }
+function newBoat(type, x, z, yaw, owner) {
+  const b = { id: `boat${crypto.randomBytes(4).toString('hex')}`, type, owner: owner?.token || null, ownerName: owner?.name || null, x, z, yaw, hp: BOATS[type].hp, items: [] };
+  db.boats.push(b);
+  return b;
+}
+const nearestDock = (x, z) => map.docks.reduce((a, d) => (!a || Math.hypot(d.x - x, d.z - z) < Math.hypot(a.x - x, a.z - z) ? d : a), null);
+/** Somewhere dry to step out onto, near (x, z). */
+function landingSpot(x, z, maxR = RV.rules.exitRange) {
+  for (let r = 1.5; r <= maxR; r += 1) for (let a = 0; a < 16; a++) {
+    const px = x + Math.cos(a * Math.PI / 8) * r, pz = z + Math.sin(a * Math.PI / 8) * r;
+    if (terrain.height(px, pz) < DEEP_WATER + 0.3) continue;
+    const fixed = resolveCircle(px, pz, PLAYER_RADIUS, solidsNear(px, pz, 3), terrain.height(px, pz));
+    if (Math.hypot(fixed.x - px, fixed.z - pz) < 0.3) return { x: px, z: pz };
+  }
+  return null;
+}
+function placeOccupants(b) { rtOf(b).seats.forEach((id, i) => { const o = id && players.get(id); if (o) { const q = seatPos(b, i); o.x = q.x; o.z = q.z; } }); }
+function boardBoat(p, b) {
+  const rt = rtOf(b);
+  const seat = rt.seats[0] == null ? 0 : rt.seats.findIndex((x) => x == null);
+  if (seat < 0) return toast(p, 'The boat is full');
+  cancelHack(p, 'Cancelled');
+  rt.seats[seat] = p.id; p.boat = b.id; p.seat = seat; p.crouch = false;
+  const q = seatPos(b, seat);
+  p.x = q.x; p.z = q.z;
+  p.tp = (p.tp || 0) + 1;
+  send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true, tp: p.tp });
+  toast(p, seat === 0 ? `At the helm of the ${BOATS[b.type].name.toLowerCase()}. E to get out at the bank, BAG for the hold.` : `Riding in ${boatName(b)}. E to get out at the bank.`);
+  dirty(p);
+}
+function unseat(p) {
+  const b = p.boat && boatById(p.boat);
+  if (b) { const rt = rtOf(b); if (rt.seats[p.seat] === p.id) rt.seats[p.seat] = null; if (p.seat === 0) rt.speed = 0; }
+  p.boat = null; p.seat = null;
+  if (p.openContainer?.kind === 'boat') { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
+  dirty(p);
+}
+function leaveBoat(p, force = false) {
+  const b = boatById(p.boat);
+  if (!b) { unseat(p); return true; }
+  let spot = landingSpot(b.x, b.z);
+  if (!spot && force) { spot = landingSpot(b.x, b.z, 90); if (!spot) { const d = nearestDock(b.x, b.z); spot = { x: d.x, z: d.z }; } }
+  if (!spot) { toast(p, 'Steer in to the bank to get out'); return false; }
+  unseat(p);
+  placeAt(p, spot.x, spot.z);
+  return true;
+}
+/** Driver input: the client predicts the boat; the server keeps it on the water and in speed. */
+function boatState(p, msg) {
+  const b = boatById(p.boat);
+  if (!b) return unseat(p);
+  p.yaw = Number(msg.yaw) || 0;
+  p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
+  p.aiming = !!msg.aim; p.crouch = false;
+  const rt = rtOf(b), now = Date.now();
+  if (p.seat === 0 && msg.boat && [msg.boat.x, msg.boat.z, msg.boat.yaw].every(Number.isFinite)) {
+    const dt = Math.min(0.25, (now - (b.lastMove || now - 50)) / 1000);
+    b.lastMove = now;
+    let dx = msg.boat.x - b.x, dz = msg.boat.z - b.z;
+    const max = BOATS[b.type].speed * dt * 1.5 + 0.3, d = Math.hypot(dx, dz);
+    if (d > max) { dx *= max / d; dz *= max / d; }
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.5));
+    let x = b.x, z = b.z, ok = true;
+    for (let i = 0; i < steps; i++) { const nx = x + dx / steps, nz = z + dz / steps; if (!floats(terrain, nx, nz)) { ok = false; break; } x = nx; z = nz; }
+    rt.speed = dt > 0 ? Math.hypot(x - b.x, z - b.z) / dt : 0;
+    b.x = x; b.z = z; b.yaw = msg.boat.yaw;
+    if (!ok || Math.hypot(x - msg.boat.x, z - msg.boat.z) > 1) send(p.ws, { t: 'boatFix', x, z, yaw: b.yaw });
+    placeOccupants(b);
+  }
+  p.speed = rt.speed;
+}
+/** Boats and landing posts within reach, as an interactable: { d, run }. */
+function riverInteractable(p) {
+  let best = null;
+  for (const b of db.boats) {
+    const d = Math.hypot(b.x - p.x, b.z - p.z) - 1.5;
+    if (d < RV.rules.boardRange && (!best || d < best.d)) best = { d, run: () => boatInteract(p, b) };
+  }
+  for (const dk of map.docks) {
+    const d = Math.hypot(dk.x - p.x, dk.z - p.z) - 0.4;
+    if (d < 2.5 && (!best || d < best.d)) best = { d, run: () => send(p.ws, dockView(p, dk)) };
+  }
+  return best;
+}
+function boatInteract(p, b) {
+  if (canUseBoat(p, b)) return boardBoat(p, b);
+  if (rtOf(b).seats.some(Boolean)) return toast(p, `${boatName(b)} is crewed. Not yours to board.`);
+  if (!b.owner) { b.owner = p.token; b.ownerName = p.name; return boardBoat(p, b); }
+  warnTeam(b.owner, `⚠ ${p.name} is hotwiring your ${BOATS[b.type].name.toLowerCase()}`, b.x, b.z, 'Boat theft');
+  return startHack(p, 'hotwire', b.id);
+}
+function finishHotwire(p, id) {
+  const b = boatById(id);
+  if (!b || Math.hypot(b.x - p.x, b.z - p.z) > RV.rules.boardRange + 2) return toast(p, 'The boat drifted off');
+  if (rtOf(b).seats.some(Boolean)) return toast(p, 'Someone got in first');
+  const was = b.owner;
+  warnTeam(was, `⚠ ${p.name} stole your ${BOATS[b.type].name.toLowerCase()}`, b.x, b.z, 'Boat stolen');
+  b.owner = p.token; b.ownerName = p.name;
+  award(p, 60, 'Hotwired a boat');
+  send(p.ws, { t: 'hack', done: true, text: 'Engine running' });
+  boardBoat(p, b);
+}
+function openHold(p) {
+  const b = p.boat ? boatById(p.boat) : db.boats.find((x) => canUseBoat(p, x) && Math.hypot(x.x - p.x, x.z - p.z) < RV.rules.boardRange + 1);
+  if (!b || !canUseBoat(p, b)) return toast(p, 'No boat of yours here');
+  p.openContainer = { kind: 'boat', id: b.id };
+  send(p.ws, containerView(p, 'boat', b.id));
+}
+function damageBoat(b, dmg, by) {
+  b.hp -= dmg;
+  if (b.owner && !(by && tokenInSquadWith(by, b.owner)) && (!b.alertedAt || Date.now() - b.alertedAt > 20_000)) {
+    b.alertedAt = Date.now();
+    warnTeam(b.owner, `⚠ ${by?.name || 'Someone'} is shooting your ${BOATS[b.type].name.toLowerCase()}`, b.x, b.z, 'Boat under fire');
+  }
+  if (b.hp <= 0) sinkBoat(b, by);
+}
+function sinkBoat(b, by) {
+  const spot = landingSpot(b.x, b.z, 90) || (() => { const d = nearestDock(b.x, b.z); return { x: d.x, z: d.z }; })();
+  for (const o of boatOccupants(b)) { unseat(o); placeAt(o, spot.x, spot.z); toast(o, 'The boat went down. You swam for the bank.'); }
+  // Bulk freight goes down with her; everything else washes up on the bank.
+  const items = b.items.filter((i) => !i.bulk);
+  if (items.length || RESOURCES.some((r) => b[r])) dropBag(spot.x, spot.z, items, Object.fromEntries(RESOURCES.map((r) => [r, b[r] || 0])), `Wreck of ${boatName(b)}`);
+  db.boats = db.boats.filter((x) => x !== b);
+  boatRt.delete(b.id);
+  if (b.owner) warnTeam(b.owner, `⚠ Your ${BOATS[b.type].name.toLowerCase()} was sunk${by ? ` by ${by.name}` : ''}`, b.x, b.z, 'Boat sunk');
+  feed(by ? `${by.name} sank ${boatName(b)}` : `${boatName(b)} sank`);
+  if (by && !by.isBot && b.owner !== by.token) award(by, 150, 'Sank a boat', true);
+}
+
+// Landings: buy, build and repair boats; river freight runs landing to landing.
+const dockFreight = new Map();   // dock id -> { refreshAt, jobs: [{ id, to, toName, label, pay, km }] }
+function dockJobs(d, now = Date.now()) {
+  let e = dockFreight.get(d.id);
+  if (!e || now >= e.refreshAt) {
+    const others = map.docks.filter((o) => o.id !== d.id);
+    e = { refreshAt: now + RV.freight.refreshMs, jobs: others.length ? Array.from({ length: RV.freight.perDock }, () => {
+      const to = pick(others), km = Math.hypot(to.x - d.x, to.z - d.z) / 1000;
+      return { id: uid('rf'), to: to.id, toName: to.name, label: pick(RV.freight.labels), pay: Math.round(RV.freight.base + km * RV.freight.perKm), km: +km.toFixed(1) };
+    }) : [] };
+    dockFreight.set(d.id, e);
+  }
+  return e.jobs;
+}
+const mooredAt = (b, d) => Math.hypot(b.x - d.wx, b.z - d.wz) < RV.rules.mooredAt;
+function deliverRiverFreight(p, d) {
+  let paid = 0, n = 0;
+  for (const b of db.boats) {
+    if (!canUseBoat(p, b) || !mooredAt(b, d)) continue;
+    const here = b.items.filter((i) => i.bulk && i.dest === d.id);
+    if (!here.length) continue;
+    b.items = b.items.filter((i) => !here.includes(i));
+    for (const c of here) { paid += c.pay; n++; }
+  }
+  if (!n) return;
+  p.cash = (p.cash || 0) + paid;
+  award(p, RV.freight.xp * n, `River freight delivered (${n})`, true);
+  toast(p, `Delivered ${n} load${n > 1 ? 's' : ''} of river freight: $${paid}`);
+  dirty(p);
+}
+function dockView(p, d) {
+  deliverRiverFreight(p, d);
+  const here = db.boats.filter((b) => canUseBoat(p, b) && mooredAt(b, d));
+  return {
+    t: 'dock', id: d.id, name: d.name, camp: d.campId != null ? map.camps[d.campId].name : null, cash: p.cash || 0,
+    shop: Object.entries(BOATS).map(([k, v]) => ({ type: k, name: v.name, price: v.price, craft: v.craft || null, about: v._about, seats: v.seats, hold: v.hold })),
+    boats: here.map((b) => ({ id: b.id, name: BOATS[b.type].name, hp: Math.round(b.hp), max: BOATS[b.type].hp, repair: Math.ceil((BOATS[b.type].hp - b.hp) * RV.rules.repairPerHp), free: BOATS[b.type].hold - b.items.length,
+      cargo: b.items.filter((i) => i.bulk).map((i) => ({ name: i.name, dest: i.destName })) })),
+    freight: dockJobs(d), owned: db.boats.filter((b) => b.owner === p.token).length, maxOwned: RV.rules.maxBoatsEach,
+  };
+}
+function launchSpot(d) {
+  const tx = -d.nz, tz = d.nx;   // along the bank
+  for (const k of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+    const x = d.wx + tx * k * 6, z = d.wz + tz * k * 6;
+    if (floats(terrain, x, z) && !db.boats.some((b) => Math.hypot(b.x - x, b.z - z) < 5)) return { x, z };
+  }
+  return { x: d.wx, z: d.wz };
+}
+function dockAction(p, msg) {
+  const d = map.docks[msg.id];
+  if (!d || Math.hypot(d.x - p.x, d.z - p.z) > 6) return;
+  if (msg.action === 'buy') {
+    const def = BOATS[msg.type];
+    if (!def) return;
+    if (db.boats.filter((b) => b.owner === p.token).length >= RV.rules.maxBoatsEach) return toast(p, `You can own ${RV.rules.maxBoatsEach} boats at a time`);
+    if (msg.pay === 'craft') {
+      if (!def.craft) return;
+      if (!payCarried(p, def.craft)) return toast(p, `Building one takes ${costText(def.craft)}`);
+    } else {
+      if ((p.cash || 0) < def.price) return toast(p, `A ${def.name.toLowerCase()} costs $${def.price}`);
+      p.cash -= def.price;
+    }
+    const at = launchSpot(d);
+    newBoat(msg.type, at.x, at.z, Math.atan2(-d.nx, -d.nz), p);
+    toast(p, `Your ${def.name.toLowerCase()} is in the water at the end of the jetty`);
+  } else if (msg.action === 'repair') {
+    const b = boatById(msg.boat);
+    if (!b || !canUseBoat(p, b) || !mooredAt(b, d)) return;
+    const cost = Math.ceil((BOATS[b.type].hp - b.hp) * RV.rules.repairPerHp);
+    if (!cost) return;
+    if ((p.cash || 0) < cost) return toast(p, `Repairs cost $${cost}`);
+    p.cash -= cost; b.hp = BOATS[b.type].hp;
+    toast(p, `Patched up for $${cost}`);
+  } else if (msg.action === 'freight') {
+    const e = dockFreight.get(d.id);
+    const job = e?.jobs.find((j) => j.id === msg.job);
+    if (!job) return toast(p, 'That job is gone');
+    const boats = db.boats.filter((b) => canUseBoat(p, b) && mooredAt(b, d) && b.items.length < BOATS[b.type].hold).sort((a, b) => (b.id === p.boat) - (a.id === p.boat));
+    if (!boats.length) return toast(p, 'Bring a boat with room in its hold to this landing first');
+    const b = boats[0];
+    b.items.push({ id: uid('freight'), kind: 'cargo', bulk: true, name: `${job.label} → ${job.toName}`, dest: job.to, destName: job.toName, pay: job.pay, from: d.id });
+    e.jobs = e.jobs.filter((j) => j !== job);
+    toast(p, `${job.label} loaded into your ${BOATS[b.type].name.toLowerCase()}. Take it to ${job.toName}.`);
+  }
+  dirty(p);
+  send(p.ws, dockView(p, d));
+}
+
+// River traders: a dockhand at every town landing, a camp trader at every swamp camp.
+const traderPosts = map.docks.map((d) => {
+  const camp = d.campId != null ? map.camps[d.campId] : null;
+  const x = camp ? camp.x : d.x - d.nz * 4 + d.nx * 2, z = camp ? camp.z : d.z + d.nx * 4 + d.nz * 2;
+  const at = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3), terrain.height(x, z));
+  return { dock: d, camp, x: at.x, z: at.z, bot: null };
+});
+function keepTraders() {
+  const alive = [...players.values()].filter((p) => !p.dead && !p.deploying);
+  traderPosts.forEach((t, i) => {
+    const b = t.bot && bots.get(t.bot);
+    const near = (r) => alive.some((p) => Math.abs(p.x - t.x) < r && Math.abs(p.z - t.z) < r);
+    if (b && !near(600)) { bots.delete(b.id); t.bot = null; return; }
+    if (!b && near(400)) {
+      const n = { id: uid('t'), name: t.camp ? 'Camp trader' : 'Dockhand', isBot: true, npc: true, kind: 'trader', post: i, serial: botSerial++, x: t.x, z: t.z, homeX: t.x, homeZ: t.z, yaw: Math.atan2(t.dock.wx - t.x, t.dock.wz - t.z), hp: 500, maxHp: 500, dead: false };
+      bots.set(n.id, n);
+      t.bot = n.id;
+    }
+  });
+}
+function traderView(b) {
+  const t = traderPosts[b.post];
+  const G = (g) => HOMESTEAD.goods[g]?.name || g;
+  if (t.camp) {
+    const T = RV.camps.trader;
+    return { town: t.camp.name, who: b.name,
+      sells: Object.entries(T.pays).filter(([g, m]) => m > 0 && ECONOMY.prices[g]).map(([g, m]) => ({ good: g, pays: Math.max(1, Math.round(ECONOMY.prices[g] * m)), name: G(g) })),
+      shop: [...Object.entries(T.sellsCheap).map(([g, price]) => ({ id: g, name: G(g), price, qty: 1 })), ...Object.entries(T.shop).map(([k, price]) => ({ id: k, name: ECONOMY.shop[k]?.name || G(k), price, qty: ECONOMY.shop[k]?.qty || 1 }))] };
+  }
+  const town = map.towns[t.dock.townId]?.name;
+  return { town: `${town} landing`, who: b.name,
+    sells: Object.keys(ECONOMY.prices).map((g) => ({ good: g, pays: Math.max(1, Math.floor(ECONOMY.prices[g] * (ECONOMY.towns[town]?.[g] ?? 1) * 0.9)), name: G(g) })),
+    shop: ['ammo', 'rod', 'medkit'].map((k) => ({ id: k, name: ECONOMY.shop[k].name || k, price: ECONOMY.shop[k].price, qty: ECONOMY.shop[k].qty || 1 })) };
 }
 
 // ---- commerce: freight (haul jobs), player stalls, the market board, player-to-player trades
@@ -1516,8 +1784,8 @@ function tickSensors(now) {
 function startHack(p, kind, id, extra = {}) {
   const now = Date.now();
   let src;
-  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish') {
-    const ms = kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
+  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire') {
+    const ms = kind === 'hotwire' ? RV.rules.hotwireMs : kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
     if (kind === 'datahack') toast(p, 'Hacking shows your position to enemies nearby — have your crew cover you.');
@@ -1599,6 +1867,7 @@ function tickHacks(now) {
     if (h.kind === 'datahack') { finishDataHack(p, h.id); continue; }
     if (h.kind === 'cook') { finishCook(p); continue; }
     if (h.kind === 'fish') { finishFishing(p); continue; }
+    if (h.kind === 'hotwire') { finishHotwire(p, h.id); continue; }
     if (h.kind === 'revive') {
       const t = players.get(h.id);
       if (t && t.downed && !t.dead && Math.hypot(t.x - p.x, t.z - p.z) <= DOWNED.reviveRange + 0.5) { revive(t, p); send(p.ws, { t: 'hack', done: true, text: `${t.name} is back up` }); }
@@ -1713,7 +1982,8 @@ function tickDowned(now) {
 }
 function applyDamage(target, amount, attacker, isBot, headshot = false) {
   if (target.dead) return;
-  if (!isBot && attacker && !attacker.isBot && (inFair(target.x, target.z) || inFair(attacker.x, attacker.z))) return;   // the fairgrounds are a safe zone
+  if (!isBot && attacker && !attacker.isBot && (inFair(target.x, target.z) || inFair(attacker.x, attacker.z) || inCamp(target.x, target.z) || inCamp(attacker.x, attacker.z))) return;   // the fairgrounds and swamp camps are safe zones
+  if (target.npc && target.kind === 'trader') return;   // river traders are left alone by everyone
   if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
   if (!isBot && target.downed) {
     // Shooting someone who's down finishes them off.
@@ -1751,6 +2021,7 @@ function markAssist(target, killer) {
  * You keep your level, unlocks, commendations, field gear and everything in your stash house.
  */
 function killPlayer(p, attacker, headshotKill) {
+  if (p.boat) unseat(p);
   p.dead = true;
   Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null });
   const { primary, secondary, armor, pack } = p.inv;
@@ -1785,7 +2056,7 @@ function killBot(b, attacker, headshotKill) {
   }
   if (b.animal) {
     const a = HOMESTEAD.animals[b.kind];
-    dropBag(b.x, b.z, [], { meat: a.meat }, `${a.name} carcass`);
+    dropBag(b.x, b.z, [], { meat: a.meat, ...(a.hide ? { hide: a.hide } : {}) }, `${a.name} carcass`);
     bots.delete(b.id);
     if (attacker && !attacker.isBot) award(attacker, HOMESTEAD.animals.xp, `Hunted a ${a.name.toLowerCase()}`);
     return;
@@ -1826,6 +2097,14 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
     const t = rayBox(ox, oy, oz, dx, dy, dz, d.minX, d.y0, d.minZ, d.maxX, d.y0 + d.h, d.maxZ);
     if (t < best) { best = t; target = h.id; kind = 'door'; }
   }
+  for (const b of db.boats) {
+    if (Math.abs(b.x - ox) > range + 6 || Math.abs(b.z - oz) > range + 6) continue;
+    if (rtOf(b).seats.includes(shooterId)) continue;
+    const def = BOATS[b.type], sn = Math.abs(Math.sin(b.yaw)), cs = Math.abs(Math.cos(b.yaw));
+    const ex = (sn * def.len / 2 + cs * def.wid / 2) * 0.8, ez = (cs * def.len / 2 + sn * def.wid / 2) * 0.8;
+    const t = rayBox(ox, oy, oz, dx, dy, dz, b.x - ex, -0.3, b.z - ez, b.x + ex, 0.8, b.z + ez);
+    if (t < best) { best = t; target = b; kind = 'boat'; }
+  }
   const check = (c, k) => {
     if (c.dead || c.id === shooterId || Math.abs(c.x - ox) > best + 1 || Math.abs(c.z - oz) > best + 1) return;
     const b = characterBounds(c.x, c.z, c.crouch, gy(c));
@@ -1862,6 +2141,7 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
     if (hit.headshot) dmg *= COMBAT.headshotMul;
     if (!isBot && (shooter.buffUntil || 0) > Date.now()) dmg *= 1.2;
     if (hit.kind === 'player' && !isBot && sameSquad(shooter, hit.target)) continue;
+    if (hit.kind === 'boat') { damageBoat(hit.target, dmg * 0.5, isBot ? null : shooter); continue; }
     if (hit.kind === 'struct') {
       damageStruct(hit.target, dmg * (BUILD.bulletMul[stageDef(hit.target).material] ?? 0.1), isBot ? null : shooter);
       continue;
@@ -1929,26 +2209,35 @@ function manageAnimals() {
       if (Math.abs(x) > map.half - 50 || Math.abs(z) > map.half - 50 || terrain.height(x, z) < 0.5) continue;
       if (map.towns.some((t) => x > t.rect.minX - 40 && x < t.rect.maxX + 40 && z > t.rect.minZ - 40 && z < t.rect.maxZ + 40)) continue;
       const biome = biomeName(terrain.biome(x, z));
-      const kinds = ['deer', 'hog'].filter((k) => ANIMALS[k].biomes.includes(biome));
+      let kinds = ['deer', 'hog'].filter((k) => ANIMALS[k].biomes.includes(biome));
+      if (biome === 'sea' && nearDeepWater(x, z, ANIMALS.gator.nearWater) && Math.random() < 0.6) kinds = ['gator'];
       if (!kinds.length) continue;
       spawnAnimal(kinds[Math.floor(Math.random() * kinds.length)], x, z);
       break;
     }
   }
 }
+function nearDeepWater(x, z, r) {
+  for (let k = 0; k < 8; k++) for (const f of [0.5, 1]) if (terrain.height(x + Math.cos(k * Math.PI / 4) * r * f, z + Math.sin(k * Math.PI / 4) * r * f) < DEEP_WATER) return true;
+  return false;
+}
 function updateAnimal(b, dt, alive) {
   const a = ANIMALS[b.kind];
-  if (b.aggressive) {
-    // The hog-hunt boar charges whoever is closest.
-    let prey = null, pd = 30;
+  // The hog-hunt boar charges whoever is closest; a gator lunges at anyone who gets too close.
+  const aggro = b.aggressive ? 30 : a.aggroRange ? a.aggroRange * (b.hunting ? 1.6 : 1) : 0;
+  if (aggro) {
+    let prey = null, pd = aggro;
     for (const p of alive) { const d = Math.hypot(p.x - b.x, p.z - b.z); if (d < pd && !p.downed) { pd = d; prey = p; } }
     if (prey) {
       const dx = prey.x - b.x, dz = prey.z - b.z, step = a.speed * dt;
       const np = moveWithCollision(b.x, b.z, dx / pd * step, dz / pd * step, 0.6, solidsNear(b.x, b.z, step + 2), terrain);
       b.x = np.x; b.z = np.z; b.yaw = Math.atan2(dx, dz);
-      if (pd < 2.2 && Date.now() >= (b.nextBite || 0)) { b.nextBite = Date.now() + 1000; applyDamage(prey, EV.hoghunt.boarBite, b, false); }
+      if (pd < 2.2 && Date.now() >= (b.nextBite || 0)) { b.nextBite = Date.now() + 1000; applyDamage(prey, a.bite || EV.hoghunt.boarBite, b, false); }
+      b.hunting = true;
       return;
     }
+    b.hunting = false;
+    if (a.aggroRange) return;   // a gator lies still until something comes close
   }
   let threat = null, td = a.fleeRange;
   for (const p of alive) {
@@ -2363,6 +2652,11 @@ function nearestInteractable(p) {
   return best;
 }
 function containerView(p, kind, id) {
+  if (kind === 'boat') {
+    const b = boatById(id);
+    if (!b) return { t: 'container', closed: true };
+    return { t: 'container', kind, id, title: `${b.owner === p.token ? `Your ${BOATS[b.type].name.toLowerCase()}` : boatName(b)}: the hold`, items: b.items, ...Object.fromEntries(RESOURCES.map((r) => [r, b[r] || 0])), canPut: canUseBoat(p, b), cap: BOATS[b.type].hold };
+  }
   if (kind === 'stash') {
     const h = db.houses[id];
     const ours = claimOf(p);
@@ -2384,6 +2678,7 @@ function containerView(p, kind, id) {
   return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ...Object.fromEntries(RESOURCES.map((r) => [r, bag[r] || 0])), canPut: false, cap: 0 } : { t: 'container', closed: true };
 }
 function nearContainer(p, kind, id) {
+  if (kind === 'boat') { const b = boatById(id); return !!b && canUseBoat(p, b) && (p.boat === id || Math.hypot(b.x - p.x, b.z - p.z) < RV.rules.boardRange + 1.5); }
   if (kind === 'stash') { const h = map.houses[id]; return h && Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6; }
   if (kind === 'crate') { const st = structs.get(id); return st && boxDist(structBox(st), p.x, p.z) < INTERACT_RANGE + 0.6; }
   if (kind === 'stash' && !map.houses[id]) return false;
@@ -2396,6 +2691,7 @@ function refreshContainerViewers(kind, id) {
 
 function interact(p) {
   if (p.hack) return cancelHack(p, 'Cancelled');
+  if (p.boat) return leaveBoat(p);
   // A downed crewmate within reach comes first.
   for (const m of squadMembersOnline(p)) {
     if (m !== p && m.downed && !m.dead && Math.hypot(m.x - p.x, m.z - p.z) <= DOWNED.reviveRange) return startHack(p, 'revive', m.id);
@@ -2406,6 +2702,12 @@ function interact(p) {
   if (npc) {
     const near = nearestInteractable(p);
     if (!near || Math.hypot(npc.x - p.x, npc.z - p.z) < near.d) return send(p.ws, npcView(p, npc));
+  }
+  // Boats and landing posts.
+  const rv = riverInteractable(p);
+  if (rv) {
+    const near = nearestInteractable(p);
+    if (!near || rv.d < near.d) return rv.run();
   }
   // Then an enemy at arm's length: data-hack them if they're stunned or down, take them down from behind.
   const foe = enemyAtReach(p, DATAHACK.range);
@@ -2529,13 +2831,15 @@ function msg_upgradeIntent(p) { return !!p.buildIntent; }
 function containerAction(p, msg) {
   const { kind, id } = p.openContainer || {};
   if (!kind || !nearContainer(p, kind, id)) { p.openContainer = null; return send(p.ws, { t: 'container', closed: true }); }
-  const store = kind === 'stash' ? db.houses[id] : kind === 'crate' ? structs.get(id) : db.bags.find((b) => b.id === id);
+  const store = kind === 'stash' ? db.houses[id] : kind === 'crate' ? structs.get(id) : kind === 'boat' ? boatById(id) : db.bags.find((b) => b.id === id);
   if (!store) return;
+  if (kind === 'boat' && !canUseBoat(p, store)) return;
   if (msg.action === 'take') {
     if (RESOURCES.includes(msg.res)) { p[msg.res] += store[msg.res] || 0; store[msg.res] = 0; }
     else {
       const idx = store.items.findIndex((i) => i.id === msg.itemId);
       if (idx < 0) return;
+      if (store.items[idx].bulk) return toast(p, 'Bulk freight is too heavy to carry. It stays in the hold until you deliver it at the landing.');
       if (!addToPack(p, store.items[idx])) return toast(p, 'Backpack full');
       store.items.splice(idx, 1);
     }
@@ -2544,8 +2848,8 @@ function containerAction(p, msg) {
     if (kind === 'stash') { const h = db.houses[id]; if (!(h.owner === p.token || (h.owner && tokenInSquadWith(p, h.owner)))) return; }
     if (kind === 'crate' && !canManage(p, store)) return;
     if (RESOURCES.includes(msg.res)) { store[msg.res] = (store[msg.res] || 0) + p[msg.res]; p[msg.res] = 0; dirty(p); return refreshContainerViewers(kind, id); }
-    const cap = kind === 'stash' ? stashCap(id) : stageDef(store).slots;
-    if (store.items.length >= (kind === 'crate' && PIECES[store.type].claim ? claimCap({ kind: 'flag', store }) : cap)) return toast(p, kind === 'stash' ? 'Stash full — upgrade storage or level up your home' : 'Crate full — reinforce it for more room');
+    const cap = kind === 'stash' ? stashCap(id) : kind === 'boat' ? BOATS[store.type].hold : stageDef(store).slots;
+    if (store.items.length >= (kind === 'crate' && PIECES[store.type].claim ? claimCap({ kind: 'flag', store }) : cap)) return toast(p, kind === 'boat' ? 'The hold is full' : kind === 'stash' ? 'Stash full — upgrade storage or level up your home' : 'Crate full — reinforce it for more room');
     const idx = p.inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0 || p.inv.pack[idx].kind === 'package') return;
     store.items.push(p.inv.pack.splice(idx, 1)[0]);
@@ -2761,6 +3065,7 @@ function deployOptions(p) {
   };
 }
 function placeAt(p, x, z) {
+  if (p.boat) unseat(p);
   const fixed = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3), terrain.height(x, z));
   p.x = fixed.x; p.z = fixed.z;
   // Number each teleport: movement the client sent before it saw this one is stale and ignored.
@@ -2979,6 +3284,7 @@ function handleState(p, msg) {
   const tx = Number(msg.x), tz = Number(msg.z);
   if (!Number.isFinite(tx) || !Number.isFinite(tz)) return;
   if ((msg.tp || 0) !== (p.tp || 0)) return;   // sent before the latest teleport
+  if (p.boat) return boatState(p, msg);
   let dx = tx - p.x, dz = tz - p.z;
   const hungry = (p.food ?? 100) < HUNGER.noSprintBelow;
   const maxStep = isStunned(p, now) ? 0.05 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
@@ -3121,6 +3427,8 @@ wss.on('connection', (ws) => {
       case 'stall': return !p.dead && stallAction(p, msg);
       case 'ptrade': return !p.dead && playerTrade(p, msg);
       case 'fairSubmit': return !p.dead && fairSubmit(p);
+      case 'boatHold': return !p.dead && openHold(p);
+      case 'dock': return !p.dead && dockAction(p, msg);
       case 'squad': return squadAction(p, msg);
       case 'rally': return !p.dead && rally(p);
       case 'mark': return !p.dead && markTarget(p, msg);
@@ -3143,6 +3451,8 @@ wss.on('connection', (ws) => {
         if (msg.event) { const e = startEvent(msg.event); if (e && Number.isFinite(msg.x)) { e.x = msg.x; e.z = msg.z; } return; }
         if (msg.endEvent) { const e = [...worldEvents.values()].find((x) => x.type === msg.endEvent); if (e) endEvent(e, 'expired'); return; }
         if (msg.give && typeof msg.give === 'object') { for (const [k, v] of Object.entries(msg.give)) if (RESOURCES.includes(k) && Number.isFinite(v)) p[k] = (p[k] || 0) + v; dirty(p); return; }
+        if (Number.isInteger(msg.boatTo) && p.boat && map.docks[msg.boatTo]) { const b = boatById(p.boat), d = map.docks[msg.boatTo]; b.x = d.wx; b.z = d.wz; placeOccupants(b); return send(p.ws, { t: 'boatFix', x: b.x, z: b.z, yaw: b.yaw }); }
+        if (Number.isFinite(msg.boatDamage) && msg.boatId) { const b = boatById(msg.boatId); if (b) damageBoat(b, msg.boatDamage, p); return; }
         if (msg.killEventBots) { for (const b of [...bots.values()]) if (b.eventId && !b.dead && (!msg.only || b.kind === msg.only)) { applyDamage(b, 99999, p, true); } return; }
         if (Number.isFinite(msg.x) && Number.isFinite(msg.z)) placeAt(p, msg.x, msg.z);
         return;
@@ -3151,6 +3461,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     const p = ws.player;
     if (!p) return;
+    if (p.boat) leaveBoat(p, true);   // nobody logs off in the middle of the river
     persistCharacter(p);
     players.delete(p.id);
     const crew = squadOf(p);
@@ -3178,6 +3489,7 @@ function snapshotFor(r, views, now) {
     terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
     objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
     structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
+    boats: db.boats.filter((b) => near(b) || (BOATS[b.type].loud && rtOf(b).speed > 1 && Math.hypot(b.x - r.x, b.z - r.z) < BOATS[b.type].loud)).map((b) => ({ id: b.id, type: b.type, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), max: BOATS[b.type].hp, owner: b.ownerName, mine: canUseBoat(r, b) ? 1 : 0, seats: rtOf(b).seats, fast: rtOf(b).speed > 1 ? 1 : 0 })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   };
 }
@@ -3199,6 +3511,7 @@ const loop = setInterval(() => {
     manageAnimals();
     keepMerchants(now);
     keepSettlers(now);
+    keepTraders();
     scheduleDrop(now);
     for (const [id, d] of drops) if (d.expires < now) { drops.delete(id); sendEvents(); }
     for (const p of players.values()) {
@@ -3226,7 +3539,7 @@ const loop = setInterval(() => {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
-      level: level(p), camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now,
+      level: level(p), camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
     }]));
     for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(JSON.stringify(snapshotFor(r, views, now)));

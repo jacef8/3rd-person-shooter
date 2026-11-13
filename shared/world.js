@@ -7,6 +7,7 @@
 
 import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE } from './terrain.js';
 import { polyDist, lakeDepth, segDist, project, REAL_SIZE } from './geography.js';
+import RIVER from './data/river.json' with { type: 'json' };
 export { WATER_LEVEL } from './terrain.js';
 
 export const DEFAULT_WORLD_SIZE = REAL_SIZE;   // 30 x 30 km of the real Bristol, FL area at 1:1
@@ -132,6 +133,7 @@ export const HOME_KINDS = {
   rockfort:  { name: 'Rock outcrop', wall: 'rockwall' },
   treehut:   { name: 'Hollow cypress', wall: 'logwall' },
   boathouse: { name: 'Fish camp', wall: 'plankwall' },
+  shack:     { name: 'River shack', wall: 'plankwall' },
   vehicle:   { name: 'Abandoned vehicle', wall: 'vehiclebody' },
 };
 export const VEHICLE_TYPES = {
@@ -353,7 +355,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     const door = { minX: cx - gap / 2, minZ: cz + hs - thick, maxX: cx + gap / 2, maxZ: cz + hs, h: 2.6, y0: terrain.exact(cx, cz + hs) - 0.3 };
     houses.push({ id, kind, townId, x: cx, z: cz, crate: { x: cx, z: cz - 3.1 }, door, biome: biomeName(terrain.biome(cx, cz)), ...extra });
     reserve({ minX: cx - hs - 5, minZ: cz - hs - 5, maxX: cx + hs + 5, maxZ: cz + hs + 16, home: 1 });
-    lootSpawns.push({ x: cx + 9, z: cz + 9, zone: kind === 'house' || kind === 'room' ? 'town' : kind === 'boathouse' ? 'lake' : biomeName(terrain.biome(cx, cz)) });
+    lootSpawns.push({ x: cx + 9, z: cz + 9, zone: kind === 'house' || kind === 'room' ? 'town' : kind === 'boathouse' || kind === 'shack' ? 'lake' : biomeName(terrain.biome(cx, cz)) });
     return id;
   }
 
@@ -614,6 +616,90 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (!inTown(sx, sz, 80) && dry(sx, sz, 1.5)) campSites.push({ x: sx, z: sz });
     }
   }
+  // ---- the river trade (phase 2): a landing for each river town and each swamp camp.
+  // Uses its own random stream so the rest of the map doesn't shift.
+  const docks = [], camps = [];
+  const river = geo.rivers.find((r) => r.pts.some(([x, z]) => Math.abs(x) < half && Math.abs(z) < half));
+  if (river) {
+    const rr = mulberry32((seed ^ 0x51ab0a7) >>> 0);
+    /** Nearest point on the river's centreline, with the unit normal pointing toward (tx,tz). */
+    const onRiver = (tx, tz) => {
+      let best = null;
+      for (let i = 0; i < river.pts.length - 1; i++) {
+        const [ax, az] = river.pts[i], [bx, bz] = river.pts[i + 1];
+        const s = segDist(tx, tz, ax, az, bx, bz);
+        if (!best || s.d < best.d) {
+          const l = Math.hypot(bx - ax, bz - az) || 1, ux = (bx - ax) / l, uz = (bz - az) / l;
+          const cx = ax + (bx - ax) * s.t, cz = az + (bz - az) * s.t;
+          let nx = -uz, nz = ux;
+          if ((tx - cx) * nx + (tz - cz) * nz < 0) { nx = -nx; nz = -nz; }
+          best = { d: s.d, x: cx, z: cz, nx, nz, ux, uz };
+        }
+      }
+      return best;
+    };
+    /** Walk out from the channel to the bank on the normal's side. */
+    const bankFrom = (c) => {
+      let k = 0;
+      while (k < 400 && terrain.exact(c.x + c.nx * k, c.z + c.nz * k) < 1.0) k += 2;
+      if (k >= 400) return null;
+      // Mooring: back toward the channel until it's deep enough to float.
+      let w = k;
+      while (w > 0 && terrain.exact(c.x + c.nx * w, c.z + c.nz * w) > RIVER.rules.minDepth - 0.5) w -= 0.5;
+      return { bx: c.x + c.nx * k, bz: c.z + c.nz * k, wx: c.x + c.nx * w, wz: c.z + c.nz * w };
+    };
+    const addDock = (name, c, extra) => {
+      const b = bankFrom(c);
+      if (!b || Math.abs(b.bx) > half - 60 || Math.abs(b.bz) > half - 60) return null;
+      const px = b.bx + c.nx * 5, pz = b.bz + c.nz * 5;   // the landing post, on dry ground
+      // The jetty: from the post out over the water.
+      const len = Math.hypot(b.wx - px, b.wz - pz);
+      for (let k = 0; k < len; k += 3) {
+        const jx = px + (b.wx - px) * (k / len), jz = pz + (b.wz - pz) * (k / len);
+        box(jx - 1.6, jz - 1.6, jx + 1.6, jz + 1.6, 0.3, 'jetty', { y0: Math.max(0.05, terrain.exact(jx, jz) + 0.05) });
+      }
+      reserve({ minX: Math.min(px, b.wx) - 6, minZ: Math.min(pz, b.wz) - 6, maxX: Math.max(px, b.wx) + 6, maxZ: Math.max(pz, b.wz) + 6 });
+      const d = { id: docks.length, name, x: px, z: pz, wx: b.wx, wz: b.wz, nx: c.nx, nz: c.nz, ...extra };
+      docks.push(d);
+      return d;
+    };
+    for (const t of towns) {
+      const c = onRiver(t.x, t.z);
+      if (c.d < RIVER.docks.maxFromTown) addDock(`${t.name} Landing`, c, { townId: t.id });
+    }
+    // Swamp camps: out in the floodplain, away from towns and roads.
+    const C = RIVER.camps;
+    const cands = [];
+    for (let i = 0; i < river.pts.length - 1; i++) {
+      const [ax, az] = river.pts[i], [bx, bz] = river.pts[i + 1];
+      const l = Math.hypot(bx - ax, bz - az);
+      for (let s = 0; s < l; s += 250) cands.push([ax + (bx - ax) * s / l, az + (bz - az) * s / l]);
+    }
+    for (let i = cands.length - 1; i > 0; i--) { const j = Math.floor(rr() * (i + 1)); [cands[i], cands[j]] = [cands[j], cands[i]]; }
+    const roadAway = (x, z, r) => roads.every((s) => segDist(x, z, s.x1, s.z1, s.x2, s.z2).d - s.width / 2 > r);
+    for (const [x, z] of cands) {
+      if (camps.length >= C.count) break;
+      if (Math.abs(x) > half - 1500 || Math.abs(z) > half - 1500) continue;
+      if (towns.some((t) => Math.hypot(t.x - x, t.z - z) < C.minFromTown)) continue;
+      if (docks.some((d) => Math.hypot(d.x - x, d.z - z) < C.minApart * 0.7) || camps.some((c) => Math.hypot(c.x - x, c.z - z) < C.minApart)) continue;
+      const side = rr() < 0.5 ? 1 : -1;
+      const c0 = onRiver(x, z);
+      const c = { ...c0, nx: c0.nx * side, nz: c0.nz * side };
+      const b = bankFrom(c);
+      if (!b) continue;
+      const cx = b.bx + c.nx * 30, cz = b.bz + c.nz * 30;
+      if (terrain.biome(cx, cz).sea < 0.5 || !roadAway(cx, cz, C.minFromRoad)) continue;
+      // Room for the shacks along the bank.
+      const spots = [-24, 0, 24].map((o) => [cx + c.ux * o + c.nx * 12, cz + c.uz * o + c.nz * 12]);
+      if (!spots.every(([sx, sz]) => freeRect(sx - 12, sz - 12, sx + 12, sz + 22, 2) && terrain.exact(sx, sz) > 1 && span4(sx, sz, 7, terrain.exact).hi - span4(sx, sz, 7, terrain.exact).lo < 3)) continue;
+      const id = camps.length, name = `${C.names[id % C.names.length]} camp`;
+      const dock = addDock(`${C.names[id % C.names.length]} Landing`, c, { campId: id });
+      if (!dock) continue;
+      const shackIds = spots.slice(0, C.shacks).map(([sx, sz]) => addHome('shack', sx, sz, null, { campId: id }));
+      camps.push({ id, name, x: cx, z: cz, dockId: dock.id, shacks: shackIds, radius: C.safeRadius });
+      reserve({ minX: cx - 8, minZ: cz - 8, maxX: cx + 8, maxZ: cz + 8 });
+    }
+  }
   // Landing zones, named after the nearest town.
   const lzGrid = Math.max(2, Math.round(size / 6000));
   for (let i = 0; i < lzGrid; i++) {
@@ -708,6 +794,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   return {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
+    docks, camps, river: river ? river.pts : null,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },
     roadsNear: (x, z, r) => roadGrid.near(x, z, r),
   };

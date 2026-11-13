@@ -39,6 +39,19 @@
       "name": "cooked meals",
       "icon": "🍲",
       "food": 40
+    },
+    "honey": {
+      "name": "tupelo honey",
+      "icon": "🍯",
+      "food": 12
+    },
+    "shine": {
+      "name": "moonshine",
+      "icon": "🫙"
+    },
+    "hide": {
+      "name": "gator hide",
+      "icon": "🐊"
     }
   },
   "hunger": {
@@ -130,6 +143,20 @@
       "meat": 20,
       "biomes": [],
       "_about": "Hog-hunt event boss: never spawns on its own."
+    },
+    "gator": {
+      "name": "Alligator",
+      "hp": 160,
+      "speed": 6,
+      "walk": 0.7,
+      "fleeRange": 0,
+      "aggroRange": 9,
+      "bite": 18,
+      "meat": 8,
+      "hide": 2,
+      "biomes": [],
+      "nearWater": 40,
+      "_about": "Lives along the river banks in the swamp. Lies still until you get close, then lunges. Meat and a hide."
     }
   }
 }

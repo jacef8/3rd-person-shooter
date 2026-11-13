@@ -200,9 +200,38 @@ they don't come back for a while.
 - **Away log:** everything that happened while you were offline (who tripped what, who got shot,
   who raided) is waiting for you when you log back in. Crewmates online get warned as it happens.
 
-Coming next: boats and the river trade (phase 2), prices that move with what players sell, player
-jobs and bounties, land upkeep and outlaw reputation (phase 3), then more regions, day/night and
-weather (phase 4).
+## The river (phase 2): boats, landings, river freight and swamp camps
+
+The Apalachicola runs the length of the map and it's the one road the Rogues don't own (see
+`docs/STORY.md`). All the numbers are in `shared/data/river.json`.
+
+- **Landings.** Every river town (Bristol, Blountstown, Estiffanulga, Lake Mystic) has a landing on
+  the bank, with a post and a jetty. At the post you buy or build a boat, repair it, and take river
+  freight. A **dockhand** there buys goods at 90% of town prices, right at the water.
+- **Boats.** A **jon boat** ($220, or build one from 40 wood and 30 parts) is slow and sturdy, with 3
+  seats and a 6-load hold. An **airboat** ($650) is fast but loud: everyone within 2,000 ft sees it
+  on their minimap. It has 2 seats and a 3-load hold. You can own two. Boats float only on the river
+  and pass under the SR 20 bridge. Your crew can ride and use the hold.
+- **Driving.** Walk up to your boat and press E to take the helm: W/S is throttle, A/D steers, and
+  passengers can shoot. Steer up to the bank and press E to step out. Tab (BAG on a phone) opens the hold.
+- **Risk.** Boats stay where you leave them. Anyone else can **hotwire** an unattended boat in 10
+  seconds; the owner's crew is warned, and once it's done the boat is theirs. Shots damage boats and a
+  sunk boat washes its hold up on the nearest bank, except bulk freight, which is lost. Logging off in
+  the middle of the river puts you on the nearest bank.
+- **River freight.** Bulk loads (lumber, fuel drums, feed, generators, honey barrels) that only fit in
+  a boat's hold. Moor at a landing, load up, run it to the other landing. They pay more than foot
+  freight: $60 plus $22 a km, plus XP.
+- **Swamp camps.** Three river-people camps (Moccasin Bend, Cypress Hole, Gator Slough) out in the
+  floodplain, far from roads. Each has a landing, three **river shacks** you can claim as a stash
+  house, and a **camp trader**. Camps are **neutral ground**: no player can hurt another inside one.
+  The trader sells **tupelo honey, moonshine and gator hides** cheap and pays well for what the swamp
+  can't make (parts, tech, salvage, seeds, crops). Towns far from the river (Hosford, Telogia) pay
+  the most for swamp goods. That's the trade loop.
+- **Gators** lie along the banks in the swamp. They don't move until you get close, then lunge. Kill
+  one for meat and a hide.
+
+Coming next: prices that move with what players sell, player jobs and bounties, land upkeep and
+outlaw reputation (phase 3), then more regions, day/night and weather (phase 4).
 
 ## Units
 

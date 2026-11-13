@@ -1,0 +1,108 @@
+{
+  "_about": "Phase 2: boats and the river trade. The Apalachicola is the one road the Rogues don't own. Times in ms, distances in metres, speeds in m/s.",
+  "boats": {
+    "jonboat": {
+      "name": "Jon boat",
+      "price": 220,
+      "craft": {
+        "wood": 40,
+        "parts": 30
+      },
+      "speed": 12,
+      "reverse": 3,
+      "accel": 4,
+      "turn": 1.3,
+      "hp": 260,
+      "seats": 3,
+      "hold": 6,
+      "len": 4.6,
+      "wid": 1.7,
+      "_about": "Flat-bottomed workhorse: slow, sturdy, room for three and a big hold."
+    },
+    "airboat": {
+      "name": "Airboat",
+      "price": 650,
+      "speed": 20,
+      "reverse": 4,
+      "accel": 7,
+      "turn": 1.7,
+      "hp": 180,
+      "seats": 2,
+      "hold": 3,
+      "len": 4.2,
+      "wid": 2.2,
+      "loud": 600,
+      "_about": "Fast but loud: everyone within 2,000 ft sees it on their minimap. Small hold."
+    }
+  },
+  "rules": {
+    "_about": "minDepth: how deep the water must be to float a boat. Boats left unattended can be hotwired by anyone (hotwireMs); your crew just gets in. Shots hit boats; a sunk boat drops its hold on the nearest bank.",
+    "minDepth": -0.6,
+    "boardRange": 7,
+    "exitRange": 14,
+    "hotwireMs": 10000,
+    "repairPerHp": 0.6,
+    "maxBoatsEach": 2,
+    "mooredAt": 30
+  },
+  "docks": {
+    "_about": "A landing on the river bank for each river town (within maxFromTown of the river) and each swamp camp. Buy, repair and launch boats here; river freight runs between landings.",
+    "maxFromTown": 4500
+  },
+  "camps": {
+    "_about": "River-people camps in the swamp, away from roads and towns: a landing, a few claimable shacks and a camp trader. No fighting inside safeRadius.",
+    "names": [
+      "Gator Slough",
+      "Cypress Hole",
+      "Moccasin Bend",
+      "Tupelo Landing"
+    ],
+    "count": 3,
+    "safeRadius": 45,
+    "shacks": 3,
+    "minFromTown": 2500,
+    "minFromRoad": 500,
+    "minApart": 3000,
+    "trader": {
+      "_about": "sellsCheap: what the camp produces, at price per unit. pays: what the camp pays for what it can't make (multiple of the base price).",
+      "sellsCheap": {
+        "honey": 5,
+        "shine": 8,
+        "hide": 7,
+        "fish": 3
+      },
+      "pays": {
+        "ammo": 0,
+        "parts": 1.4,
+        "tech": 1.5,
+        "salvage": 1.3,
+        "seeds": 2.5,
+        "meals": 1.3,
+        "corn": 1.5,
+        "peanuts": 1.4
+      },
+      "shop": {
+        "rod": 18,
+        "medkit": 30,
+        "ammo": 14
+      }
+    }
+  },
+  "freight": {
+    "_about": "River freight: bulk cargo that only fits in a boat's hold (one slot each). Pays more than foot freight. pay = base + km * perKm.",
+    "perDock": 2,
+    "base": 60,
+    "perKm": 22,
+    "xp": 120,
+    "refreshMs": 600000,
+    "labels": [
+      "Lumber",
+      "Fuel drums",
+      "Feed sacks",
+      "Medical crates",
+      "Salvaged generator",
+      "Barrels of tupelo honey",
+      "Fertilizer"
+    ]
+  }
+}

@@ -54,6 +54,16 @@ The living world:
 - Guard your place: BUILD → **Tripwire**, **Motion alarm**, **Sentry gun** (E to load ammo) and **Dog kennel**
   (E to feed meat). Log off, have a friend walk in, then log back on and read the **away log**.
 
+The river:
+- Go to **Bristol Landing**, on the river about 2 miles west of Bristol (⚓ on the map). E at the post:
+  buy or build a **jon boat**, and take a **river freight** load.
+- Walk to your boat at the end of the jetty and press E to take the helm. W/S throttle, A/D steer,
+  Tab for the hold, steer up to the bank and press E to get out.
+- Run the freight to the other landing and deliver it at the post.
+- Head downriver to a **swamp camp** (🏕 on the map). No fighting there. Buy honey or moonshine from the
+  camp trader and sell it in Hosford or Telogia. Claim a river shack. Watch for gators on the banks.
+- With a friend: one drives, one rides and shoots. Try hotwiring each other's boats, and shooting a boat until it sinks.
+
 Solo:
 1. **Claim a home.** You start with a claim marker. Walk into any building (or a house, cave, RV…)
    with nothing else around and press E. Take your time picking: it's your base.
