@@ -13,7 +13,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { biomeName, DEEP_WATER } from '../shared/terrain.js';
+import { biomeName, DEEP_WATER, parseElevation } from '../shared/terrain.js';
+import zlib from 'node:zlib';
+import { serveStatic } from './static.js';
 import { BOATS, floats, seatPos } from '../shared/boats.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
@@ -52,7 +54,7 @@ const PACK_SIZE = COMBAT.packSize;
 const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
-const DB_VERSION = 8;
+const DB_VERSION = 9;   // 9: real ground, river course and buildings (the map changed under every save)
 const SQUAD_MAX = COMBAT.crewMax;
 const GOODS = Object.keys(HOMESTEAD.goods);   // cash, seeds, crops, fish, meat, meals
 const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone', ...GOODS];   // carried; all drop on death, all stealable
@@ -67,13 +69,14 @@ const CONTRACT_MS = ACTIVITIES.contracts.durationMs;
 const SUPPLY_EVERY_MS = Number(process.env.SUPPLY_EVERY_MS || ACTIVITIES.supplyDrop.everyMs);
 const SUPPLY_FALL_MS = Number(process.env.SUPPLY_FALL_MS || ACTIVITIES.supplyDrop.fallMs);
 
-// Optional real-world data (tools/import-real-data.mjs): every real building / road becomes a map object.
+// Real-world data (tools/import_real_world.py): real ground elevation, and every real building and road as a map object.
 const REAL_DIR = process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real');
 const readReal = (name) => { try { return JSON.parse(fs.readFileSync(path.join(REAL_DIR, name), 'utf8')); } catch { return null; } };
-const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json') };
-const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.rows, roads: realFiles.roads?.rows });
+const readElevation = () => { try { return parseElevation(zlib.gunzipSync(fs.readFileSync(path.join(REAL_DIR, 'elevation.bin.gz')))); } catch { return null; } };
+const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json'), elevation: readElevation() };
+const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.rows, roads: realFiles.roads?.rows, elevation: realFiles.elevation });
 // Clients fetch the same files so they generate the identical world.
-const REAL_INFO = (realFiles.structures || realFiles.roads) ? { structures: !!realFiles.structures, roads: !!realFiles.roads } : null;
+const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation } : null;
 const grid = map.grid;
 const terrain = map.terrain;
 const gy = (c) => (c.boat ? 0.25 : terrain.height(c.x, c.z));   // ground height under a character (or the boat deck)
@@ -379,11 +382,12 @@ function buildingAt(x, z) {
   for (const b of buildingGrid.near(x, z, 1)) if (x > b.minX + 0.3 && x < b.maxX - 0.3 && z > b.minZ + 0.3 && z < b.maxZ - 0.3) return b.idx;
   return -1;
 }
-const BUILDING_NAMES = { building: 'Building', warehouse: 'Warehouse', farmhouse: 'Farmhouse', barn: 'Barn' };
+const BUILDING_NAMES = { building: 'Building', warehouse: 'Warehouse', farmhouse: 'Farmhouse', barn: 'Barn', home: 'House', civic: 'Hall' };
 function buildingLabel(idx) {
   const b = map.buildings[idx], cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
   const near = map.towns.reduce((a, t) => (!a || Math.hypot(t.x - cx, t.z - cz) < Math.hypot(a.x - cx, a.z - cz) ? t : a), null);
   const inTown = near && cx > near.rect.minX && cx < near.rect.maxX && cz > near.rect.minZ && cz < near.rect.maxZ;
+  if (b.name) return b.name;   // a real landmark keeps its real name
   return `${BUILDING_NAMES[b.type] || 'Building'} ${inTown ? 'in' : 'near'} ${near ? near.name : 'the wilds'}`;
 }
 const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
@@ -3364,17 +3368,7 @@ const handler = (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ world: WORLD_ID, name: WORLD_NAME, online: players.size, names: [...players.values()].map((p) => p.name) }));
   }
-  for (const [prefix, dir] of STATIC) {
-    if (!url.startsWith(prefix)) continue;
-    const rel = url.slice(prefix.length) || 'index.html';
-    const file = path.join(dir, rel);
-    if (!file.startsWith(dir)) break;
-    return fs.readFile(file, (err, data) => {
-      if (err) { res.writeHead(404); return res.end('Not found'); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-      res.end(data);
-    });
-  }
+  if (serveStatic(req, res, url, STATIC)) return;
   res.writeHead(404); res.end('Not found');
 };
 const server = TLS ? https.createServer(TLS, handler) : http.createServer(handler);

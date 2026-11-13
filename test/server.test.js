@@ -27,7 +27,7 @@ const relic = makeWeapon('carbine', { optic: 'holo' }, 'desert');
 const lmg = makeWeapon('lmg', { magazine: 'drum' });
 const seed = {
   seed: 1337,
-  version: 8, size: 30000,
+  version: 9, size: 30000,
   characters: {
     [TOK_A]: character('Alice', h.x + 3, h.crate.z + 2, { primary: null, secondary: makeWeapon('sidearm', 'scrap'), armor: null, pack: [] }, { active: 'secondary' }),
     [TOK_B]: character('Bob', h.x, h.door.maxZ + 3, { primary: lmg, secondary: null, armor: null, pack: [] }, { mags: { [lmg.id]: 80 } }),
@@ -175,7 +175,7 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   const lvl10 = 4000;
   const frankKit = { primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] };
   const kit = () => ({ primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] });
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 8, size: 30000, houses, bags: [], characters: {
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 9, size: 30000, houses, bags: [], characters: {
     [TOK_C]: character('Carol', tx, tz, kit(), { xp: lvl10, tech: 100 }),
     [TOK_D]: character('Dave', tx + 2, tz + 1, kit()),
     [TOK_E]: character('Eve', tx + 6, tz + 4, kit()),

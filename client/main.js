@@ -8,14 +8,15 @@ import {
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS,
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
-import { createWorldView } from '/worldview.js';
-import { buildMapBase, drawMap, mapGroundColor } from '/mapview.js';
+import { createWorldView, SKY_HORIZON } from '/worldview.js';
+import { buildMapBase, drawMap, mapGroundColor, sampleLand } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, placementProblem } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
 import { BOATS, BOAT_RULES, stepBoat, seatPos } from '/shared/boats.js';
+import { parseElevation, biomeName } from '/shared/terrain.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
 import HOMESTEAD from '/shared/data/homestead.json' with { type: 'json' };
 const GOODS = HOMESTEAD.goods;
@@ -37,14 +38,29 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, MOBILE ? 1.25 : 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9aa4ad);
-scene.fog = new THREE.Fog(0x9aa4ad, MOBILE ? 45 : 60, MOBILE ? 170 : 230);
-const camera = new THREE.PerspectiveCamera(70, 1, 0.1, MOBILE ? 260 : 360);
+// No fog. The distance is a second scene (sky, the county's ground, far-off buildings and woods,
+// see worldview.js) drawn first through a long-range camera; the near world is drawn over it.
+renderer.autoClear = false;
+renderer.setClearColor(SKY_HORIZON);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 800);
+const farCamera = new THREE.PerspectiveCamera(70, 1, 20, 130000);
+function renderWorld() {
+  renderer.clear();
+  if (state.view) {
+    farCamera.position.copy(camera.position);
+    farCamera.quaternion.copy(camera.quaternion);
+    if (farCamera.fov !== camera.fov || farCamera.aspect !== camera.aspect) { farCamera.fov = camera.fov; farCamera.aspect = camera.aspect; farCamera.updateProjectionMatrix(); }
+    renderer.render(state.view.far, farCamera);
+    renderer.clearDepth();
+  }
+  renderer.render(scene, camera);
+}
 scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 1.1));
 const sun = new THREE.DirectionalLight(0xfff1dc, 1.6);
 sun.castShadow = true;
 sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 70, bottom: -70, near: 1, far: 220 });
+sun.shadow.normalBias = 0.35;   // keeps sloped roofs and siding from shadowing themselves in speckles
 scene.add(sun, sun.target);
 
 function resize() {
@@ -80,19 +96,28 @@ const objVis = new Map();       // contract crate id -> mesh
 const doorMat = new THREE.MeshStandardMaterial({ color: 0x5a5f66, metalness: 0.4, roughness: 0.5 });
 const termGeo = new THREE.BoxGeometry(0.8, 1.5, 0.35);
 
-/** Real buildings / roads imported by tools/import-real-data.mjs, served by the game server. */
+/** The real-world data (buildings, roads, elevation) from tools/import_real_world.py, served by the game server. */
 async function loadRealData(info) {
   const get = async (name) => { try { const r = await fetch(`/data/real/${name}`); return r.ok ? (await r.json()).rows : undefined; } catch { return undefined; } };
-  return { structures: info.structures ? await get('structures.json') : undefined, roads: info.roads ? await get('roads.json') : undefined };
+  const elevation = async () => {
+    try {
+      const r = await fetch('/data/real/elevation.bin');   // served from elevation.bin.gz, unpacked by the browser
+      return r.ok ? parseElevation(new Uint8Array(await r.arrayBuffer())) || undefined : undefined;
+    } catch { return undefined; }
+  };
+  return { structures: info.structures ? await get('structures.json') : undefined, roads: info.roads ? await get('roads.json') : undefined, elevation: info.elevation ? await elevation() : undefined };
 }
 
 function initWorld(m) {
   const map = generateMap(m.seed, m.size, m.realData || {});
   if (mapChecksum(map) !== m.mapSum) toast('⚠ World mismatch with server — update your client');
   state.map = map;
-  state.view = createWorldView(scene, map, { viewRange: MOBILE ? 230 : 320, mobile: MOBILE });
+  // One coarse pass over the whole county, shared by the far landscape and the map screen.
+  const land = sampleLand(map, MOBILE ? 120 : 75);
+  state.view = createWorldView(scene, map, { viewRange: MOBILE ? 230 : 320, farRange: MOBILE ? 700 : 1500, mobile: MOBILE, land });
   state.view.setOwnHouse(m.houseId);
-  state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000);
+  state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000, land);
+  state.landmarks = map.buildings.filter((b) => b.name);
   buildLandingPads();
   // Contacts: friendly NPCs standing in each town square.
   for (const c of map.contacts) {
@@ -607,7 +632,7 @@ function feedLine(text) {
 }
 
 // ------------------------------------------------------------------ minimap
-const MM_COLORS = { roomwall: '#8a8a86', vehiclebody: '#d6c79a', dam: '#999', scrub: '#55603a', pine: '#1f3a24', boulder: '#6a6560', adobe: '#a88a64', cactus: '#3f6a33', cavewall: '#5a5550', caveroof: 'rgba(0,0,0,0)', rockwall: '#8c7258', logwall: '#5a3d24', plankwall: '#7a5e3e', canopy: 'rgba(0,0,0,0)', jetty: '#7a5e3e', building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
+const MM_COLORS = { home: '#9a9186', civic: '#a65f4b', rail: 'rgba(0,0,0,0)', roomwall: '#8a8a86', vehiclebody: '#d6c79a', dam: '#999', scrub: '#55603a', pine: '#1f3a24', boulder: '#6a6560', adobe: '#a88a64', cactus: '#3f6a33', cavewall: '#5a5550', caveroof: 'rgba(0,0,0,0)', rockwall: '#8c7258', logwall: '#5a3d24', plankwall: '#7a5e3e', canopy: 'rgba(0,0,0,0)', jetty: '#7a5e3e', building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
 const mmTerrain = { canvas: null, x: 0, z: 0, span: 1 };
 function drawMinimap() {
   const c = $('minimap'), g = c.getContext('2d');
@@ -666,6 +691,43 @@ function drawMinimap() {
   g.fillStyle = '#5aa8ff';
   g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 6); g.lineTo(-5, 6); g.closePath(); g.fill();
   g.restore();
+}
+
+// ------------------------------------------------------------------ where am I: the road underfoot and the nearest town
+const AREA = { plains: 'Farmland', forest: 'Pine flatwoods', desert: 'Sandhills', mountain: 'Hill country', sea: 'River swamp' };
+const where = { at: 0, place: null, town: null };
+function updateWhere(now) {
+  if (now - where.at < 400) return;
+  where.at = now;
+  const map = state.map, x = state.x, z = state.z;
+  // A landmark you're in or right beside comes first, then the road underfoot.
+  let place = '';
+  for (const b of state.landmarks || []) if (x > b.minX - 12 && x < b.maxX + 12 && z > b.minZ - 12 && z < b.maxZ + 12) { place = b.name; break; }
+  if (!place) {
+    let best = null, bd = 5;
+    for (const r of map.roadsNear(x, z, 18)) {
+      if (!r.name) continue;
+      const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2));
+      // Distance past the road's edge. A street's own name beats the highway line drawn along it.
+      const d = Math.hypot(r.x1 + dx * t - x, r.z1 + dz * t - z) - (r.width || 8) / 2 + (r.hw ? 3 : 0);
+      if (d < bd) { bd = d; best = r; }
+    }
+    if (best) place = best.name;
+  }
+  if (!place) {
+    const camp = map.camps.find((c) => Math.hypot(c.x - x, c.z - z) < c.radius);
+    if (camp) place = camp.name; else if (map.terrain.channel(x, z)) place = 'Apalachicola River';
+  }
+  const t = map.towns.reduce((a, q) => (!a || Math.hypot(q.x - x, q.z - z) < Math.hypot(a.x - x, a.z - z) ? q : a), null);
+  const d = t ? Math.hypot(t.x - x, t.z - z) : Infinity;
+  const inTown = d < 1600;
+  // Somewhere with a name: say which town it's in or how far out. Nowhere in particular: the town
+  // itself if you're in one, else what kind of country this is.
+  let town = !t ? '' : inTown ? t.name : `${distText(d)} from ${t.name}`;
+  if (!place) { place = inTown ? t.name : AREA[biomeName(map.terrain.biome(x, z))] || 'Open country'; if (inTown) town = `${t.county} County`; }
+  if (place !== where.place) { where.place = place; $('wherePlace').textContent = place; }
+  if (town !== where.town) { where.town = town; $('whereTown').textContent = town; }
 }
 
 // ------------------------------------------------------------------ networking
@@ -1909,7 +1971,7 @@ function nearestInteractable() {
   for (const c of state.map.contacts) if (Math.abs(c.x - state.x) < 5 && Math.abs(c.z - state.z) < 5) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.8, `Talk to ${c.name} — contracts & field gear`);
   // Enemies at arm's length: data-hack the stunned or downed, take down from behind.
   for (const c of [...[...state.players.values()].map((r) => r.data).filter((d) => !d.sq), ...[...state.bots.values()].map((r) => r.data)]) {
-    if (!c || c.dead) continue;
+    if (!c || c.dead || c.kind === 'merchant' || c.kind === 'settler' || c.kind === 'trader') continue;   // traders are for trading
     const d = Math.hypot(c.x - state.x, c.z - state.z);
     if (d > 2.2) continue;
     if (c.stun || c.downed) consider(d - 2, `⚡ Data hack ${c.name} (2s) — ${state.bots.has(c.id) ? 'reveals Rogues nearby' : 'lights up their whole crew + their stash'}`);
@@ -1993,10 +2055,12 @@ function nearestInteractable() {
     const b = state.map.buildings.find((q) => state.x > q.minX + 0.3 && state.x < q.maxX - 0.3 && state.z > q.minZ + 0.3 && state.z < q.maxZ - 0.3);
     if (b) {
       const held = [...structVis.values()].find((sv) => PIECES[sv.data.type].claim && sv.data.x > b.minX && sv.data.x < b.maxX && sv.data.z > b.minZ && sv.data.z < b.maxZ);
-      if (held) best = held.data.mine ? null : `${held.data.owner}'s building`;
-      else if (me.claim) best = `Unclaimed ${b.type === 'building' ? 'building' : b.type} (${state.squad.id ? 'your crew has' : 'you have'} a stash house)`;
-      else if (me.inv.pack.some((i) => i.kind === 'marker')) best = `Claim this ${b.type === 'building' ? 'building' : b.type}: plant your marker (8s) — stash locker + lockable doors`;
-      else best = `Unclaimed ${b.type === 'building' ? 'building' : b.type} — a claim marker makes it your stash house`;
+      const what = b.name || ({ building: 'building', home: 'house', civic: 'hall' }[b.type] || b.type);
+      const it = b.name ? `the ${b.name}` : `this ${what}`;
+      if (held) best = held.data.mine ? null : `${held.data.owner}'s ${b.name || 'building'}`;
+      else if (me.claim) best = `${b.name || `Unclaimed ${what}`} (${state.squad.id ? 'your crew has' : 'you have'} a stash house)`;
+      else if (me.inv.pack.some((i) => i.kind === 'marker')) best = `Claim ${it}: plant your marker (8s) — stash locker + lockable doors`;
+      else best = `${b.name || `Unclaimed ${what}`} — a claim marker makes it your stash house`;
     }
   }
   return best;
@@ -2654,7 +2718,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   pollPad(dt, now);   // also drives the login and death screens
-  if (!state.map) { renderer.render(scene, camera); return; }
+  if (!state.map) { renderWorld(); return; }
   const me = state.me;
   const alive = me && !me.dead;
 
@@ -2775,7 +2839,8 @@ function frame(now) {
   const prompt = alive && !state.invOpen ? nearestInteractable() : null;
   $('prompt').innerHTML = prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : boatHud();
   drawMinimap();
-  renderer.render(scene, camera);
+  updateWhere(now);
+  renderWorld();
   drawGunsmith(dt);
   drawMarkers();
   updateBuildGhost();

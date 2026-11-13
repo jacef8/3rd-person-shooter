@@ -33,7 +33,14 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 #feed { position: absolute; top: 12px; left: 12px; font-size: 13px; text-shadow: 0 0 3px #000; }
 #feed div { opacity: 0.9; margin-bottom: 3px; }
 #minimap { position: absolute; top: 12px; right: 12px; border: 1px solid #ff7a1a66; border-radius: 50%; background: #0d1014; }
-#housestatus { position: absolute; top: 222px; right: 12px; width: 200px; font-size: 12px; text-align: center; text-shadow: 0 0 3px #000; }
+/* Colours for new HUD pieces are tokens; text sits on solid panels with no glow or shadow. */
+:root { --hud-surface: #171a21; --hud-line: #2a2f3a; --hud-ink: #ffffff; --hud-ink-2: rgba(255, 255, 255, 0.84); --hud-accent: #ff7a1a; }
+/* Where you are: the road underfoot (or the place) and the nearest town. */
+#where { position: absolute; top: 222px; right: 12px; width: 200px; box-sizing: border-box; padding: 7px 10px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 12px; text-align: center; }
+#where b { display: block; font-size: 15px; font-weight: 700; line-height: 1.25; color: var(--hud-ink); }
+#where span { display: block; margin-top: 2px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--hud-ink-2); }
+#where span:empty { display: none; }
+#housestatus { position: absolute; top: 298px; right: 12px; width: 200px; font-size: 12px; text-align: center; text-shadow: 0 0 3px #000; }
 
 #vitals { position: absolute; bottom: 24px; left: 24px; width: 300px; }
 .bar { position: relative; height: 14px; background: rgba(0,0,0,0.55); margin-top: 5px; border: 1px solid #333; }
@@ -145,7 +152,9 @@ input { -webkit-user-select: text; user-select: text; }
 /* Phone in landscape (e.g. iPhone in a Backbone One): shrink the HUD and let panels fill the screen. */
 @media (max-height: 520px) {
   #minimap { width: 110px; height: 110px; top: 8px; right: calc(8px + env(safe-area-inset-right)); }
-  #housestatus { top: 122px; right: calc(8px + env(safe-area-inset-right)); width: 110px; font-size: 10px; }
+  #where { top: 122px; right: calc(8px + env(safe-area-inset-right)); width: 170px; padding: 5px 8px; }
+  #where b { font-size: 14px; }
+  #housestatus { top: 190px; right: calc(8px + env(safe-area-inset-right)); width: 170px; font-size: 10px; }
   #feed { font-size: 10px; top: 6px; left: calc(8px + env(safe-area-inset-left)); }
   #vitals { width: 190px; bottom: 10px; left: calc(10px + env(safe-area-inset-left)); }
   .bar { height: 10px; } .bar span { font-size: 8px; line-height: 10px; }
@@ -248,7 +257,11 @@ body.touchui #weapon { right: auto; left: 50%; transform: translateX(-50%); bott
 body.touchui #weapon #wname, body.touchui #weapon #wextra { display: inline-block; margin: 0 6px; }
 body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); bottom: 88px; white-space: nowrap; }
 @media (max-height: 520px) {
-  body.touchui #housestatus { top: 32px; right: auto; left: 50%; transform: translateX(-50%); width: auto; }
+  /* Touch: the thumb buttons own the space under the minimap, so the place name goes top centre on one line. */
+  body.touchui #where { top: 32px; right: auto; left: 50%; transform: translateX(-50%); width: auto; max-width: 62vw; white-space: nowrap; padding: 4px 10px; }
+  body.touchui #where b, body.touchui #where span { display: inline; }
+  body.touchui #where span:not(:empty)::before { content: ' · '; }
+  body.touchui #housestatus { top: 64px; right: auto; left: 50%; transform: translateX(-50%); width: auto; }
   .ttop { top: 4px; gap: 4px; } .tbtn.tiny { height: 24px; padding: 0 7px; font-size: 9px; }
   .tbtn.big { width: 74px; height: 74px; right: calc(16px + env(safe-area-inset-right)); bottom: 20px; font-size: 13px; }
   .tbtn.mid { width: 54px; height: 54px; }

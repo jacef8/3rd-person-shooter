@@ -27,7 +27,7 @@ function character(name, x, z, extra = {}) {
 async function server(name, characters, env = {}) {
   const port = portBase++;
   const file = path.join(dir, `${name}.json`);
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 8, size: 30000, houses: {}, bags: [], structures: [], characters }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 9, size: 30000, houses: {}, bags: [], structures: [], characters }));
   const proc = spawn(process.execPath, ['server/index.js'], {
     env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999', SAVE_EVERY_MS: '300', ...env },
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -49,6 +49,15 @@ function conn(port, name, token) {
   c.tp = async (x, z) => { c.send({ t: 'dev', x, z }); await sleep(150); };
   c.close = () => new Promise((r) => { ws.once('close', r); ws.close(); });
   return new Promise((r) => ws.on('open', () => { c.send({ t: 'join', name, token }); r(c); }));
+}
+/** Press E until something happens (a stray loot item at your feet can take the first press). */
+async function press(c, done, ms = 9000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    c.send({ t: 'interact' });
+    for (let k = 0; k < 28; k++) { const v = done(); if (v) return v; await sleep(25); }
+  }
+  throw new Error('timed out pressing E');
 }
 /** A dry spot right by a landing's mooring, to step into a boat from. */
 const bankBy = (d) => ({ x: d.wx + d.nx * 3, z: d.wz + d.nz * 3 });
@@ -85,8 +94,7 @@ test('buy a boat, drive it, haul river freight landing to landing', async (t) =>
   const a = await conn(srv.port, 'Skipper', A);
   await until(() => a.you);
   // The landing post: boats for sale, freight on offer.
-  a.send({ t: 'interact' });
-  const view = await until(() => a.dock);
+  const view = await press(a, () => a.dock);
   assert.equal(view.name, 'Bristol Landing');
   assert.ok(view.shop.some((s) => s.type === 'jonboat') && view.shop.some((s) => s.type === 'airboat'));
   assert.ok(view.freight.length >= 1);
@@ -102,8 +110,7 @@ test('buy a boat, drive it, haul river freight landing to landing', async (t) =>
   // Step into the boat from the bank.
   const bank = bankBy(home);
   await a.tp(bank.x, bank.z);
-  a.send({ t: 'interact' });
-  await until(() => a.you.boat?.id === boat.id && a.you.boat.seat === 0);
+  await press(a, () => a.you.boat?.id === boat.id && a.you.boat.seat === 0);
   // The hold: bulk freight can't be carried off by hand.
   a.send({ t: 'boatHold' });
   const hold = await until(() => a.container?.kind === 'boat' && a.container);
@@ -131,13 +138,11 @@ test('buy a boat, drive it, haul river freight landing to landing', async (t) =>
   const dest = map.docks[job.to];
   a.send({ t: 'dev', boatTo: dest.id });
   await until(() => { const s = myBoat(a); return s && Math.hypot(s.x - dest.wx, s.z - dest.wz) < 1; });
-  a.send({ t: 'interact' });
-  await until(() => !a.you.boat);
+  await press(a, () => !a.you.boat);
   await sleep(200);
   const cash = a.you.cash;
   await a.tp(dest.x, dest.z);
-  a.send({ t: 'interact' });
-  await a.toast(/Delivered 1 load of river freight/);
+  await press(a, () => a.msgs.find((m) => m.t === 'toast' && /Delivered 1 load of river freight/.test(m.text)));
   await until(() => a.you.cash === cash + job.pay);
 });
 
@@ -152,8 +157,7 @@ test('boats get stolen and sunk; swamp camps trade and are safe ground', async (
   let o = await conn(srv.port, 'Owner', O);
   await until(() => o.you);
   // Buy an airboat at the camp landing and walk away (log off).
-  o.send({ t: 'interact' });
-  await until(() => o.dock);
+  await press(o, () => o.dock);
   assert.equal(o.dock.camp, camp.name);
   o.send({ t: 'dock', id: cd.id, action: 'buy', type: 'airboat' });
   await o.toast(/airboat is in the water/);
@@ -163,8 +167,7 @@ test('boats get stolen and sunk; swamp camps trade and are safe ground', async (
   const th = await conn(srv.port, 'Thief', T);
   await until(() => th.you);
   await th.tp(bank.x, bank.z);
-  th.send({ t: 'interact' });
-  await th.got((m) => m.t === 'hack' && m.kind === 'hotwire');
+  await press(th, () => th.msgs.find((m) => m.t === 'hack' && m.kind === 'hotwire'));
   await until(() => th.you.boat?.id === boat.id, 14000);
   // The owner hears about it on the way back in.
   o = await conn(srv.port, 'Owner', O);
@@ -176,8 +179,7 @@ test('boats get stolen and sunk; swamp camps trade and are safe ground', async (
   await until(() => sh.you && sh.snap);
   const tr = await until(() => sh.snap?.bots?.find((b) => b.kind === 'trader'), 6000);
   await sh.tp(tr.x + 1.2, tr.z);
-  sh.send({ t: 'interact' });
-  const tv = await until(() => sh.contact?.npc && sh.contact);
+  const tv = await press(sh, () => sh.contact?.npc && sh.contact);
   assert.equal(tv.trade.town, camp.name);
   const honey = tv.trade.shop.find((x) => x.id === 'honey');
   assert.ok(honey && tv.trade.shop.some((x) => x.id === 'shine'));

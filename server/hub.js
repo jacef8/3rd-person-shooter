@@ -19,6 +19,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { serveStatic } from './static.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -251,7 +252,6 @@ hubWss.on('connection', (ws) => {
 });
 
 // ---------------------------------------------------------------- http: static files + routing
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml' };
 const STATIC = [
   ['/vendor/', path.join(ROOT, 'node_modules', 'three', 'build')],
   ['/shared/', path.join(ROOT, 'shared')],
@@ -264,16 +264,7 @@ const handler = (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(WORLDS.map((w) => ({ id: w.id, name: w.name, online: w.online, up: w.up }))));
   }
-  for (const [prefix, dir] of STATIC) {
-    if (!url.startsWith(prefix)) continue;
-    const file = path.join(dir, url.slice(prefix.length) || 'index.html');
-    if (!file.startsWith(dir)) break;
-    return fs.readFile(file, (err, data) => {
-      if (err) { res.writeHead(404); return res.end('Not found'); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-      res.end(data);
-    });
-  }
+  if (serveStatic(req, res, url, STATIC)) return;
   res.writeHead(404); res.end('Not found');
 };
 const TLS = process.env.TLS_CERT && process.env.TLS_KEY ? { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) } : null;

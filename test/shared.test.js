@@ -1,7 +1,9 @@
+import fs from 'node:fs';
+import zlib from 'node:zlib';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateMap, mapChecksum, moveWithCollision, rayBox, rayAgainstBoxes, circleOverlapsBox, PLAYER_RADIUS } from '../shared/world.js';
-import { biomeName, DEEP_WATER } from '../shared/terrain.js';
+import { biomeName, DEEP_WATER, parseElevation } from '../shared/terrain.js';
 import { PIECES, placementProblem, pieceBox, investedCost } from '../shared/building.js';
 import { makeWeapon, weaponStats, levelFromXp, xpForLevel, unlocksAt, PARTS, ARCHETYPES, MAX_LEVEL, partFits, UPGRADES, CONTRACT_TYPES, isUnlocked } from '../shared/items.js';
 
@@ -77,10 +79,13 @@ test('imported real structures and roads become map objects', () => {
   const m = generateMap(42, 30000, real), m2 = generateMap(42, 30000, real);
   assert.equal(mapChecksum(m), mapChecksum(m2));
   assert.notEqual(mapChecksum(m), mapChecksum(generateMap(42)));
-  const rb = m.boxes.filter((bx) => bx.real);
+  // Each real footprint becomes a walk-in building (or a solid box if it's too small to enter).
+  const rb = [...m.buildings.filter((b) => b.real), ...m.boxes.filter((bx) => bx.real && !bx.shell)];
   assert.equal(m.real.structures, rb.length);
   assert.ok(rb.length >= 2, `placed ${rb.length}`);
-  assert.ok(rb.some((bx) => bx.type === 'warehouse' && Math.abs(bx.maxX - bx.minX - 40) < 0.01));
+  const wh = m.buildings.find((b) => b.real && b.type === 'warehouse');
+  assert.ok(wh && Math.abs(wh.maxX - wh.minX - 40) < 0.01 && wh.doors.length >= 1, 'the warehouse is enterable at its real size');
+  assert.ok(m.boxes.some((bx) => bx.type === 'warehouse' && bx.shell && bx.minX >= wh.minX - 0.01 && bx.maxX <= wh.maxX + 0.01), 'with walls');
   assert.ok(m.roads.some((r) => r.name === 'Test Rd'));
   // Real structures replace the procedural stand-in town blocks and farms.
   assert.ok(!m.boxes.some((bx) => bx.type === 'barn' && !bx.real));
@@ -229,15 +234,22 @@ test('terrain blocks deep water and cliffs, and stops bullets', () => {
   const br = m.bridges.find((b) => b.road === 'SR 20' && b.river === 'Apalachicola River');
   assert.ok(br, 'SR 20 bridge exists');
   assert.ok(t.height(br.x, br.z) > 1, 'bridge deck is above water');
-  // Torreya bluffs: steep ground east of the river, north of Bristol.
+  // Torreya bluffs, from the real elevation data: steep ground east of the river, north of Bristol.
+  const elevation = parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('../data/real/elevation.bin.gz', import.meta.url))));
+  assert.ok(elevation && elevation.n > 500, 'real elevation loads');
+  const te = generateMap(1337, 30000, { elevation }).terrain;
   let cliff = null;
-  for (let x = -4500; x < 0 && !cliff; x += 3) for (let z = -14500; z < -8000 && !cliff; z += 50) if ((t.height(x + 3, z) - t.height(x, z)) / 3 > 1.3) cliff = { x, z };
-  if (cliff) assert.ok(moveWithCollision(cliff.x, cliff.z, 6, 0, PLAYER_RADIUS, [], t).x < cliff.x + 3, 'cliff blocked');
+  for (let x = -9000; x < 0 && !cliff; x += 3) for (let z = -14500; z < -3000 && !cliff; z += 50) if ((te.height(x + 3, z) - te.height(x, z)) / 3 > 1.3) cliff = { x, z };
+  if (cliff) assert.ok(moveWithCollision(cliff.x, cliff.z, 6, 0, PLAYER_RADIUS, [], te).x < cliff.x + 3, 'cliff blocked');
   // A shot fired horizontally from the river bank into the bluffs hits the ground.
   let hill = null;
-  for (let z = -14500; z < -8000 && !hill; z += 250) for (let x = -4500; x < 0 && !hill; x += 10) { const h = t.height(x, z); if (h > 1 && h < 6 && t.height(x + 80, z) > h + 12) hill = { x, z, h }; }
+  for (let z = -14500; z < -3000 && !hill; z += 250) for (let x = -9000; x < 0 && !hill; x += 10) { const h = te.height(x, z); if (h > 1 && h < 6 && te.height(x + 80, z) > h + 12) hill = { x, z, h }; }
   assert.ok(hill, 'found the bluff face');
-  assert.ok(t.ray(hill.x, hill.h + 1.5, hill.z, 1, 0, 0, 200) < 200);
+  assert.ok(te.ray(hill.x, hill.h + 1.5, hill.z, 1, 0, 0, 200) < 200);
+  // Real ground: Bristol sits well above the river, Blountstown down on the floodplain.
+  const rm = generateMap(1337, 30000, { elevation });
+  const elev = (n) => rm.towns.find((q) => q.name === n).elev;
+  assert.ok(elev('Bristol') > 25 && elev('Blountstown') < 15, `Bristol ${elev('Bristol')}, Blountstown ${elev('Blountstown')}`);
 });
 
 test('building rules: frames on open ground, not in towns, water or on top of things', () => {

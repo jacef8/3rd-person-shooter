@@ -54,6 +54,14 @@ The living world:
 - Guard your place: BUILD → **Tripwire**, **Motion alarm**, **Sentry gun** (E to load ammo) and **Dog kennel**
   (E to feed meat). Log off, have a friend walk in, then log back on and read the **away log**.
 
+The real map:
+- There's no fog now: look around from the Bristol side of the river and from the Torreya bluffs north of town.
+- Walk a real street in Blountstown or Bristol. The road's real name shows under the minimap; zoom the
+  map (M) in to read the street names.
+- Find the **Liberty County Courthouse** in Bristol and walk in. Any real building can be claimed.
+- Cross the river on the **SR 20 bridge**, then take a boat under it.
+- Tell me what looks wrong against the real place: a road, a building, a hill, the river.
+
 The river:
 - Go to **Bristol Landing**, on the river about 2 miles west of Bristol (⚓ on the map). E at the post:
   buy or build a **jon boat**, and take a **river freight** load.
@@ -84,8 +92,8 @@ With a friend (meet in the same town; Bristol is easiest):
 ## What to look out for
 
 - Anything confusing: prompts that don't say what to do, or things you couldn't find.
-- Performance on the phone: frame rate, load time (the whole 18.6-mile map is generated on load;
-  streaming it in pieces is a parked item).
+- Performance on the phone: frame rate and load time. The map now downloads about 1.3 MB of real-world
+  data when you enter, and draws the far landscape; streaming it in pieces is still a parked item.
 - Distances and timings that feel wrong. They're all in `shared/data/*.json` and easy to change.
 - Characters are placeholder capsules with no animations yet (planned for the Unreal version).
 

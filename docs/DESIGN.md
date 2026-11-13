@@ -26,8 +26,9 @@ converted in `shared/geography.js`. Real distances hold: Bristol to Blountstown 
 - **Countryside detail:** trees, rocks and scrub aren't stored. At real scale there are hundreds of thousands of them, so
   each 128 m tile generates its own the first time anything (collision, a shot, the renderer) looks at
   it. They come from a seed per tile, so the server and every client get the same trees in any order.
-- **Real buildings and roads** (optional): `tools/import-real-data.mjs` fetches FEMA/ORNL USA
-  Structures footprints and OpenStreetMap roads. With them, every real structure is a map object and the procedural
+- **The real-world map:** `tools/import_real_world.py` writes real ground elevation, every real
+  building footprint and every real road (with names) to `data/real/`. With them, each real building
+  is a walk-in building on a level pad, towns shrink to the Authority's compound, and the procedural
   stand-ins (town blocks, farms, roadside homesteads) are left out. See the README.
 - Outside this 18.6-mile square, the earlier layout's towns (Chattahoochee, Quincy, Marianna,
   Wewahitchka…), the Chipola, Ochlockonee, Lake Seminole and Lake Talquin are still defined in
@@ -420,9 +421,8 @@ describe how each system must behave.
 
 ## Parked work (to pick back up)
 
-- **Real 3D buildings:** importing the real FEMA/ORNL building footprints and OpenStreetMap roads
-  (`tools/import-real-data.mjs`, generator support already in place) and real elevation. On hold
-  by request.
+- **Real 3D buildings: done** (see "The real-world map" in the README). Still open: buildings that
+  don't sit square to the compass are approximated, and none have furniture or upper floors you can reach.
 - **Environment streaming for phones:** phones still generate the whole 18.6-mile map on load and
   build its overview map. Next: have the server send only the area around the player, stream it
   in tiles as you move, keep a coarse low-detail map for the map screen, and cap what phones keep

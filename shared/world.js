@@ -5,7 +5,7 @@
 // seed and size and the client rebuilds the identical world. Generation therefore only uses
 // + - * / and the seeded RNG (no Math.sin etc., which can differ between JS engines).
 
-import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE } from './terrain.js';
+import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, PAD_MARGIN } from './terrain.js';
 import { polyDist, lakeDepth, segDist, project, REAL_SIZE } from './geography.js';
 import RIVER from './data/river.json' with { type: 'json' };
 export { WATER_LEVEL } from './terrain.js';
@@ -151,11 +151,13 @@ export const VEHICLE_TYPES = {
  * rooms, limestone caves, rock outcrops, hollow cypress trees, river fish camps and abandoned
  * vehicles (RVs, buses, box trucks, houseboats).
  *
- * `real` is optional imported data (tools/import-real-data.mjs):
- *   structures: [[lat, lon, width, depth, height, occupancy], ...]   FEMA/ORNL USA Structures
- *   roads:      [[name, class, [[lat, lon], ...]], ...]               OpenStreetMap
- * With structures, every real building becomes a map object and the procedural stand-in buildings
- * (town blocks, farms, roadside homesteads) are left out.
+ * `real` is the real-world data from tools/import_real_world.py (all optional):
+ *   structures: [[lat, lon, width, depth, height, class, name?], ...]   real building footprints
+ *   roads:      [[name, class, [[lat, lon], ...]], ...]                  real roads, 'track' = dirt
+ *   elevation:  the real ground (terrain.parseElevation), with real water cut in
+ * With structures, every real building becomes a walk-in building on a level pad, each town shrinks
+ * to a small compound, and the procedural stand-in buildings (town blocks, farms, roadside
+ * homesteads) are left out.
  *
  * The countryside's trees, rocks and scrub (hundreds of thousands at real scale) aren't stored:
  * they're generated per 128 m tile, deterministically, the first time anything looks at that tile.
@@ -163,7 +165,7 @@ export const VEHICLE_TYPES = {
 export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const rand = mulberry32(seed);
   const half = size / 2;
-  const terrain = createTerrain(seed, size);
+  const terrain = createTerrain(seed, size, real.elevation || null);
   const geo = terrain.geo;
   const boxes = [], buildings = [], houses = [], lootSpawns = [], terminals = [], contacts = [], towns = [], roads = [], campSites = [], landingZones = [];
   const realStructs = Array.isArray(real.structures) && real.structures.length > 0;
@@ -189,23 +191,26 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
    * height (a town's flattened ground); leave it null to sit the building on the terrain.
    */
   const STOREY = 3.4, WALL = 0.3, DOOR_W = 1.6, DOOR_H = 2.4;
-  function shell(minX, minZ, maxX, maxZ, h, type, zone, base = null) {
+  function shell(minX, minZ, maxX, maxZ, h, type, zone, base = null, opts = {}) {
     const w = maxX - minX, d = maxZ - minZ;
     let y0 = base, storey = STOREY, total = h;
+    if (base !== null && opts.sink) { y0 = base - opts.sink; storey = STOREY + opts.sink; total = h + opts.sink; }
     if (base === null) {
       const hs = [terrain.exact(minX, minZ), terrain.exact(maxX, minZ), terrain.exact(minX, maxZ), terrain.exact(maxX, maxZ), terrain.exact((minX + maxX) / 2, (minZ + maxZ) / 2)];
       const lo = Math.min(...hs), hi = Math.max(...hs);
       y0 = lo - 0.4; storey = STOREY + (hi - lo) + 0.4; total = h + (hi - lo) + 0.4;
     }
-    if (w < 5 || d < 5) return box(minX, minZ, maxX, maxZ, total, type, { y0 });
+    // Every piece of one building shares `bldg`, so the client can paint it one colour.
+    const bldg = buildings.length + boxes.length * 7919;
+    if (w < 5 || d < 5) return box(minX, minZ, maxX, maxZ, total, type, { y0, bldg, ...(opts.real ? { real: 1 } : {}) });
     const oneStorey = total < storey + 1;
     const wallH = oneStorey ? total - 0.3 : storey;
-    const part = { y0, shell: 1 };
+    const part = { y0, shell: 1, bldg, ...(opts.real ? { real: 1 } : {}) };
     const floorAt = (x, z) => (base === null ? terrain.exact(x, z) : base);
     // Doorways: small buildings get one, bigger ones a pair on opposite sides so you can run through.
     const sides = ['n', 's', 'w', 'e'];
     const doors = new Set();
-    const rec = { minX, minZ, maxX, maxZ, type, floor: y0, doors: [] };
+    const rec = { minX, minZ, maxX, maxZ, type, floor: y0, ...(opts.sink ? { pad: base } : {}), doors: [], top: y0 + (oneStorey ? wallH + 0.3 : total), roof: opts.roof || null, bldg, ...(opts.real ? { real: 1 } : {}), ...(opts.name ? { name: opts.name } : {}) };
     buildings.push(rec);
     if (Math.max(w, d) < 10) doors.add(sides[Math.floor(rand() * 4)]);
     else if (rand() < 0.5) { doors.add('n'); doors.add('s'); } else { doors.add('w'); doors.add('e'); }
@@ -247,10 +252,10 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       }
     }
     // Ceiling (one storey) or the solid upper floors.
-    if (oneStorey) box(minX, minZ, maxX, maxZ, 0.3, type, { y0: y0 + wallH, shell: 1 });
-    else box(minX, minZ, maxX, maxZ, total - storey, type, { y0: y0 + storey, shell: 1 });
+    if (oneStorey) box(minX, minZ, maxX, maxZ, 0.3, type, { ...part, y0: y0 + wallH });
+    else box(minX, minZ, maxX, maxZ, total - storey, type, { ...part, y0: y0 + storey });
     // Loot inside: one spot per ~120 m² of floor, up to 3, kept off the walls.
-    const n = Math.max(1, Math.min(3, Math.floor((w * d) / 120)));
+    const n = zone ? Math.max(1, Math.min(3, Math.floor((w * d) / 120))) : 0;
     for (let k = 0; k < n; k++) {
       let x = minX + 1.6 + rand() * (w - 3.2), z = minZ + 1.6 + rand() * (d - 3.2);
       if (mid !== null) {
@@ -270,8 +275,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const solidAt = (minX, minZ, maxX, maxZ) => grid.rect(minX, minZ, maxX, maxZ, [], true).some((b) => b.type !== 'canopy' && b.type !== 'caveroof');
   const span4 = (x, z, r, f = terrain.raw) => { const hs = [f(x - r, z - r), f(x + r, z - r), f(x - r, z + r), f(x + r, z + r), f(x, z)]; return { lo: Math.min(...hs), hi: Math.max(...hs) }; };
   const waterDist = (x, z) => Math.min(...geo.rivers.map((r) => polyDist(x, z, r.pts) - r.width / 2), ...geo.lakes.map((l) => -lakeDepth(x, z, l)));
-  const addRoadSeg = (x1, z1, x2, z2, name, width) => {
-    const r = { x1, z1, x2, z2, name, width, minX: Math.min(x1, x2) - width, maxX: Math.max(x1, x2) + width, minZ: Math.min(z1, z2) - width, maxZ: Math.max(z1, z2) + width };
+  const addRoadSeg = (x1, z1, x2, z2, name, width, extra) => {
+    const r = { x1, z1, x2, z2, name, width, ...extra, minX: Math.min(x1, x2) - width, maxX: Math.max(x1, x2) + width, minZ: Math.min(z1, z2) - width, maxZ: Math.max(z1, z2) + width };
     roads.push(r);
     roadGrid.insert(r);
   };
@@ -283,32 +288,56 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   };
 
   // ---- real towns, nudged onto dry ground where the real one sits right on the water
+  // With real buildings, the game's own "town" shrinks to the Authority's compound: a small paved
+  // post (the Contact, quarters to claim, terminals, cover) set on the emptiest ground near the real
+  // centre, so the real downtown around it is left standing.
+  const realXZ = realStructs ? real.structures.map(([lat, lon]) => project(lat, lon, size)) : [];
   for (const gt of geo.towns) {
-    const span = gt.blocks * PITCH - STREET;
+    const blocks = realStructs ? Math.min(gt.blocks, 3) : gt.blocks;
+    const span = blocks * PITCH - STREET;
     const r = span / 2 + STREET;
-    let pos = null;
-    for (let ring = 0; ring <= 16 && !pos; ring++) {
+    let pos = null, bestScore = Infinity;
+    for (let ring = 0; ring <= 16 && (!pos || (realStructs && ring <= 6)); ring++) {
       const steps = ring === 0 ? 1 : ring * 8;
-      for (let k = 0; k < steps && !pos; k++) {
+      for (let k = 0; k < steps && (!pos || realStructs); k++) {
         const a = (k / steps) * Math.PI * 2;
         const x = gt.x + (ring ? Math.cos(a) * ring * 60 : 0), z = gt.z + (ring ? Math.sin(a) * ring * 60 : 0);
         if (Math.abs(x) > half - r - 40 || Math.abs(z) > half - r - 40) continue;
         if (waterDist(x, z) < r * 1.42 + 25) continue;
         if (!freeRect(x - r, z - r, x + r, z + r, 40)) continue;
-        pos = { x, z };
+        if (!realStructs) { pos = { x, z }; continue; }
+        // Fewest real buildings underfoot wins; nearer the centre breaks ties.
+        const score = realXZ.reduce((n, q) => n + (Math.abs(q.x - x) < r + 10 && Math.abs(q.z - z) < r + 10 ? 1 : 0), 0) * 100 + ring;
+        if (score < bestScore) { bestScore = score; pos = { x, z }; }
       }
     }
     if (!pos) continue;
     const g = span4(pos.x, pos.z, r);
     const t = {
-      id: towns.length, name: gt.name, county: gt.county, x: pos.x, z: pos.z, blocks: gt.blocks, span,
+      id: towns.length, name: gt.name, county: gt.county, x: pos.x, z: pos.z, blocks, span,
       city: gt.blocks >= 13, industrial: gt.blocks >= 9 && rand() < 0.5, biome: biomeName(terrain.biome(pos.x, pos.z)),
       elev: Math.max(2.5, (g.lo + g.hi) / 2), real: gt.real,
     };
     t.rect = reserve({ minX: pos.x - r, minZ: pos.z - r, maxX: pos.x + r, maxZ: pos.z + r });
     towns.push(t);
   }
-  terrain.setFlats(towns.map((t) => ({ ...t.rect, elev: t.elev, margin: 60 })));
+  const townFlats = towns.map((t) => ({ ...t.rect, elev: t.elev, margin: 60 }));
+  terrain.setFlats(townFlats);
+  // Every real building stands on a level pad cut into (or built up on) the real ground.
+  const realPads = [];
+  if (realStructs) {
+    for (const [lat, lon, w0, d0] of real.structures) {
+      const { x, z } = project(lat, lon, size);
+      const w = Math.max(3, Math.min(120, w0 || 10)), d = Math.max(3, Math.min(120, d0 || 10));
+      const minX = x - w / 2, minZ = z - d / 2, maxX = x + w / 2, maxZ = z + d / 2;
+      const hs = [terrain.exact(minX, minZ), terrain.exact(maxX, minZ), terrain.exact(minX, maxZ), terrain.exact(maxX, maxZ), terrain.exact(x, z)];
+      const lo = Math.min(...hs), hi = Math.max(...hs);
+      // Not in the water, and not on a slope too steep to cut a pad into.
+      realPads.push(minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30 && lo > 0.3 && hi - lo < 4
+        ? { minX, minZ, maxX, maxZ, x, z, w, d, elev: Math.round((hs.reduce((a, b) => a + b) / 5) * 100) / 100, margin: PAD_MARGIN, pad: 1 } : null);
+    }
+    terrain.setFlats([...townFlats, ...realPads.filter(Boolean)]);
+  }
 
   function addHome(kind, cx, cz, townId = null, extra = {}) {
     const hs = 6, w = 0.4, gap = 1.8;
@@ -429,7 +458,16 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
             terminals.push({ id: terminals.length, x: tx, z: z1 + 0.95, townId: t.id });
           }
           const split = rand();
-          if (realStructs) { lootSpawns.push({ x: cx, z: cz, zone: 'town' }); continue; }   // the real buildings go here
+          if (realStructs) {
+            // The real town is all around; a spare lot in the compound is a yard of barricades.
+            for (let k = 0; k < 5; k++) {
+              const w = 1.5 + rand() * 3.5, d = 0.6 + rand() * 1.4;
+              const px = x0 + 3 + rand() * (BLOCK - 6 - w), pz = z0 + 3 + rand() * (BLOCK - 6 - d);
+              if (rand() < 0.5) tb(px, pz, px + d, pz + w, 1.1 + rand() * 0.4, 'cover'); else tb(px, pz, px + w, pz + d, 1.1 + rand() * 0.4, 'cover');
+            }
+            lootSpawns.push({ x: cx, z: cz, zone: 'town' });
+            continue;
+          }
           if (!t.city && split < 0.6) {
             // Small-town residential block: a few single-storey houses in yards.
             const lots = [[x0 + 1.5, z0 + 1.5], [cx + 1.5, z0 + 1.5], [x0 + 1.5, cz + 1.5], [cx + 1.5, cz + 1.5]];
@@ -484,14 +522,27 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
 
   // ---- roads: the traced highways, plus every imported OpenStreetMap road
   const highways = geo.roads;
-  for (const hw of highways) for (let i = 0; i < hw.pts.length - 1; i++) addRoadSeg(hw.pts[i][0], hw.pts[i][1], hw.pts[i + 1][0], hw.pts[i + 1][1], hw.name, 12);
+  for (const hw of highways) for (let i = 0; i < hw.pts.length - 1; i++) addRoadSeg(hw.pts[i][0], hw.pts[i][1], hw.pts[i + 1][0], hw.pts[i + 1][1], hw.name, 12, { hw: 1 });
   const ROAD_W = { motorway: 14, trunk: 12, primary: 11, secondary: 9, tertiary: 8, unclassified: 6, residential: 6, service: 4, track: 4 };
   for (const [name, cls, pts] of real.roads || []) {
     const w = ROAD_W[cls] || 5;
     const p = pts.map(([lat, lon]) => project(lat, lon, size));
     for (let i = 0; i < p.length - 1; i++) {
       if (Math.max(Math.abs(p[i].x), Math.abs(p[i].z), Math.abs(p[i + 1].x), Math.abs(p[i + 1].z)) > half + 200) continue;
-      addRoadSeg(p[i].x, p[i].z, p[i + 1].x, p[i + 1].z, name || cls, w);
+      addRoadSeg(p[i].x, p[i].z, p[i + 1].x, p[i + 1].z, name || '', w, cls === 'track' ? { cls, dirt: 1 } : { cls });
+    }
+  }
+
+  // ---- bridge railings: solid (they're cover, and keep you on the deck), drawn by the client as rails
+  for (const br of terrain.bridges) {
+    for (let i = 0; i < br.path.length - 1; i++) {
+      const [x1, z1] = br.path[i], [x2, z2] = br.path[i + 1], len = Math.hypot(x2 - x1, z2 - z1) || 1;
+      const nx = -(z2 - z1) / len, nz = (x2 - x1) / len;
+      for (let t = 0; t <= len; t += 0.7) for (const side of [-1, 1]) {
+        const x = x1 + (x2 - x1) * t / len + nx * side * 4.9, z = z1 + (z2 - z1) * t / len + nz * side * 4.9;
+        if (terrain.exact(x, z, true) > BRIDGE_DECK - 0.6) continue;   // the bank is as high as the deck here
+        box(x - 0.45, z - 0.45, x + 0.45, z + 0.45, 1.6, 'rail', { y0: BRIDGE_DECK - 0.5 });
+      }
     }
   }
 
@@ -500,18 +551,28 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const realBuildings = [];
   if (realStructs) {
     let n = 0;
-    for (const [lat, lon, w0, d0, h0, occ] of real.structures) {
-      const { x, z } = project(lat, lon, size);
-      const w = Math.max(3, Math.min(120, w0 || 10)), d = Math.max(3, Math.min(120, d0 || 10));
-      const minX = x - w / 2, minZ = z - d / 2, maxX = x + w / 2, maxZ = z + d / 2;
-      if (!inBounds(minX, minZ, maxX, maxZ) || terrain.exact(x, z) < 0.3) continue;
+    for (let si = 0; si < real.structures.length; si++) {
+      const pad = realPads[si];
+      if (!pad) continue;
+      const [, , , , h0, occ, name] = real.structures[si];
+      const { minX, minZ, maxX, maxZ, x, z, w, d } = pad;
       if (solidAt(minX - 0.5, minZ - 0.5, maxX + 0.5, maxZ + 0.5) || reserved.rect(minX, minZ, maxX, maxZ).some((r) => r.home && maxX > r.minX && minX < r.maxX && maxZ > r.minZ && minZ < r.maxZ)) continue;
-      const o = String(occ || '').toLowerCase();
-      const type = o.startsWith('agri') ? (w * d > 400 ? 'barn' : 'farmhouse') : o.startsWith('indus') ? 'warehouse' : 'building';
-      const h = h0 > 2 ? Math.min(h0, 40) : type === 'warehouse' ? 8 : type === 'barn' ? 7 : o.startsWith('resid') ? (w * d > 600 ? 7 : 4.5) : w * d > 1500 ? 9 : 6;
-      const b = ground(minX, minZ, maxX, maxZ, h, type, { real: 1 });
-      realBuildings.push(b);
-      if (n++ % 3 === 0) lootSpawns.push({ x: maxX + 1.5, z: (minZ + maxZ) / 2, zone: inTown(x, z, 0) ? 'town' : type === 'barn' || type === 'farmhouse' ? 'farm' : 'road' });
+      const o = String(occ || '').toLowerCase(), area = w * d;
+      const slim = Math.min(w, d) < 6.5 && Math.max(w, d) > 2.6 * Math.min(w, d);   // a mobile home
+      const nearTown = towns.some((t) => Math.abs(t.x - x) < 900 && Math.abs(t.z - z) < 900);
+      const type = o.startsWith('agri') ? (area > 300 ? 'barn' : 'farmhouse') : o.startsWith('indus') ? 'warehouse' : o.startsWith('resid') ? 'home'
+        : o.startsWith('comm') ? 'building' : o.startsWith('civic') ? 'civic'
+          : area < 300 || (slim && area < 220) ? 'home' : area < 900 ? (nearTown ? 'building' : 'barn') : nearTown ? 'building' : 'warehouse';
+      // Height: measured where the data has it. A house is one storey unless it's clearly taller.
+      const h = type === 'home' ? (h0 > 7 ? 6.4 : 3.3) : type === 'farmhouse' ? 3.6
+        : type === 'barn' ? Math.max(4.6, Math.min(8, h0 > 2 ? h0 * 0.8 : 5.5)) : type === 'warehouse' ? Math.max(5, Math.min(14, h0 > 2 ? h0 : 7))
+          : Math.max(3.6, Math.min(30, h0 > 2 ? h0 : type === 'civic' ? 5.5 : area > 1500 ? 6 : 4.2));
+      // A walk-in shell of the real footprint and height (doorways, an interior wall in big ones,
+      // a ceiling), with a pitched roof on houses, barns and small halls. Every other one has loot.
+      const zone = type === 'barn' || type === 'farmhouse' ? 'farm' : nearTown ? 'town' : type === 'warehouse' ? 'industrial' : 'road';
+      const pitched = type === 'home' || type === 'farmhouse' || type === 'barn' || (type === 'civic' && area < 1200);
+      shell(minX, minZ, maxX, maxZ, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, real: true, name, sink: 0.6 });
+      realBuildings.push(1);
     }
   }
 
@@ -691,7 +752,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (terrain.biome(cx, cz).sea < 0.5 || !roadAway(cx, cz, C.minFromRoad)) continue;
       // Room for the shacks along the bank.
       const spots = [-24, 0, 24].map((o) => [cx + c.ux * o + c.nx * 12, cz + c.uz * o + c.nz * 12]);
-      if (!spots.every(([sx, sz]) => freeRect(sx - 12, sz - 12, sx + 12, sz + 22, 2) && terrain.exact(sx, sz) > 1 && span4(sx, sz, 7, terrain.exact).hi - span4(sx, sz, 7, terrain.exact).lo < 3)) continue;
+      if (!spots.every(([sx, sz]) => freeRect(sx - 12, sz - 12, sx + 12, sz + 22, 2) && !solidAt(sx - 12, sz - 12, sx + 12, sz + 22) && terrain.exact(sx, sz) > 1 && span4(sx, sz, 7, terrain.exact).hi - span4(sx, sz, 7, terrain.exact).lo < 3)) continue;
       const id = camps.length, name = `${C.names[id % C.names.length]} camp`;
       const dock = addDock(`${C.names[id % C.names.length]} Landing`, c, { campId: id });
       if (!dock) continue;
@@ -730,9 +791,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   // scrub, and (without real data) roadside homesteads standing in for the real rural houses.
   const NATURE_TILE = 128;
   const H = terrain.height;
-  grid.setLoader(NATURE_TILE, (tx, tz) => {
+  /** Everything that grows or lies in one 128 m tile of countryside. Deterministic, so it's worked
+   *  out when first needed rather than stored. `Hf` is the height function to stand things on. */
+  function natureTile(tx, tz, Hf = H) {
+    const out = [];
     const x0 = -half + tx * NATURE_TILE, z0 = -half + tz * NATURE_TILE;
-    if (tx < 0 || tz < 0 || x0 >= half || z0 >= half) return;
+    if (tx < 0 || tz < 0 || x0 >= half || z0 >= half) return out;
     const r = mulberry32((Math.imul(tx + 7, 73856093) ^ Math.imul(tz + 13, 19349663) ^ Math.imul(seed, 83492791)) >>> 0);
     const b = terrain.biome(x0 + NATURE_TILE / 2, z0 + NATURE_TILE / 2);
     let id = NATURE_ID + (tx * 512 + tz) * 512;
@@ -740,8 +804,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       reserved.rect(minX, minZ, maxX, maxZ).some((q) => maxX > q.minX && minX < q.maxX && maxZ > q.minZ && minZ < q.maxZ) ||
       grid.rect(minX, minZ, maxX, maxZ, [], true).some((q) => !q.nature);
     const add = (minX, minZ, maxX, maxZ, h, type) => {
-      const y0 = Math.min(H(minX, minZ), H(maxX, maxZ), H(minX, maxZ), H(maxX, minZ)) - 0.3;
-      grid.insert({ id: id++, minX, minZ, maxX, maxZ, h: h + 0.3, y0, type, nature: 1 });
+      const y0 = Math.min(Hf(minX, minZ), Hf(maxX, maxZ), Hf(minX, maxZ), Hf(maxX, minZ)) - 0.3;
+      out.push({ id: id++, minX, minZ, maxX, maxZ, h: h + 0.3, y0, type, nature: 1 });
     };
     const spot = (m) => [x0 + m + r() * (NATURE_TILE - 2 * m), z0 + m + r() * (NATURE_TILE - 2 * m)];
     // Trees grow in clumps; open ground between them.
@@ -752,7 +816,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       let x, z;
       if (r() < 0.7) { const c = clumps[k % 3]; x = c[0] + (r() * 2 - 1) * 34; z = c[1] + (r() * 2 - 1) * 34; } else [x, z] = spot(1);
       if (x < x0 + 0.5 || x > x0 + NATURE_TILE - 0.5 || z < z0 + 0.5 || z > z0 + NATURE_TILE - 0.5) continue;
-      if (H(x, z) < 0.4 || roadDist(x, z, 14) < 3 || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
+      if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
       const pine = pineTile ? r() < 0.85 : r() < 0.2;
       add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, (pine ? 14 : 9) + r() * 7, pine ? 'pine' : 'tree');
     }
@@ -760,13 +824,13 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     for (let k = 0; k < nRocks; k++) {
       const [x, z] = spot(4);
       const w = 1.2 + r() * (b.mountain * 3 + 1.2), d = 1 + r() * (b.mountain * 2 + 1.2);
-      if (H(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 0.5, z - 0.5, x + w + 0.5, z + d + 0.5)) continue;
+      if (Hf(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 0.5, z - 0.5, x + w + 0.5, z + d + 0.5)) continue;
       add(x, z, x + w, z + d, 0.8 + r() * (0.8 + b.mountain * 2), b.mountain > 0.4 ? 'boulder' : 'rock');
     }
     const nScrub = Math.round(b.desert * 16 * r());
     for (let k = 0; k < nScrub; k++) {
       const [x, z] = spot(2);
-      if (H(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 1, z - 1, x + 1, z + 1)) continue;
+      if (Hf(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 1, z - 1, x + 1, z + 1)) continue;
       add(x - 0.9, z - 0.9, x + 0.9, z + 0.9, 1.1 + r() * 0.6, 'scrub');
     }
     if (!realStructs && r() < 0.18 + b.plains * 0.2) {
@@ -774,9 +838,11 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const [x, z] = spot(16);
       const rd = roadDist(x, z, 70);
       const w = 9 + r() * 5, d = 8 + r() * 5;
-      if (rd > 12 && rd < 70 && H(x, z) > 1.2 && !blocked(x - w / 2 - 3, z - d / 2 - 3, x + w / 2 + 3, z + d / 2 + 3)) add(x - w / 2, z - d / 2, x + w / 2, z + d / 2, 4.5 + r() * 2, 'farmhouse');
+      if (rd > 12 && rd < 70 && Hf(x, z) > 1.2 && !blocked(x - w / 2 - 3, z - d / 2 - 3, x + w / 2 + 3, z + d / 2 + 3)) add(x - w / 2, z - d / 2, x + w / 2, z + d / 2, 4.5 + r() * 2, 'farmhouse');
     }
-  });
+    return out;
+  }
+  grid.setLoader(NATURE_TILE, (tx, tz) => { for (const b of natureTile(tx, tz)) grid.insert(b); });
 
   // Labels for the map screen (only what's on this map).
   const onMap = (l) => Math.abs(l.x) < half - 200 && Math.abs(l.z) < half - 200;
@@ -795,6 +861,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
     docks, camps, river: river ? river.pts : null,
+    /** The trees in one 128 m countryside tile, for drawing far-off woods without loading them into the world. */
+    natureTile: (tx, tz) => natureTile(tx, tz, terrain.exact).filter((b) => b.type === 'tree' || b.type === 'pine'), natureTileSize: NATURE_TILE,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },
     roadsNear: (x, z, r) => roadGrid.near(x, z, r),
   };

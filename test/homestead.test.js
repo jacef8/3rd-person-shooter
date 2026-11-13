@@ -56,7 +56,7 @@ const contactIn = (town) => map.contacts.find((c) => map.towns[c.townId].name ==
 test('homestead: eat, farm (and steal), cook, fish, trade at town prices, wildlife', async (t) => {
   assert.ok(site && bank, 'found farmland and a river bank');
   const A = 'ab'.repeat(16), B = 'cd'.repeat(16);
-  fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 8, size: 30000, houses: {}, bags: [], structures: [], characters: {
+  fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 9, size: 30000, houses: {}, bags: [], structures: [], characters: {
     [A]: character('Farmer', site.x + 2.5, site.z, { food: 30, corn: 2, seeds: 1, cash: 100 }),
     [B]: character('Thief', site.x + 30, site.z),
   } }));

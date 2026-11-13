@@ -3,8 +3,9 @@
 A prototype **third-person shooter** set in one **persistent, always-PvP 18.6 × 18.6 mile open world**
 laid out on the real area around **Bristol, Florida** at **real 1:1 scale**: Bristol, Blountstown,
 Hosford, Telogia, Estiffanulga and Lake Mystic, the Apalachicola River, the real highways and the SR 20
-bridge, the Torreya bluffs and the Apalachicola National Forest. Real buildings and roads can be
-imported so **every real structure becomes a map object** (see below). Stash houses are **claimed with a claim
+bridge, the Torreya bluffs and the Apalachicola National Forest. It is built from open data: **real
+ground elevation, the real river, every real road by name and every real building as a place you can
+walk into** (see "The real-world map" below). Stash houses are **claimed with a claim
 marker** (a room, house, cave, vehicle or open ground) and **level up**, and there's **DayZ-style base building**.
 
 - **Level-based progression, not random drops.** You earn XP by playing: time alive in the zone,
@@ -95,29 +96,45 @@ each other. Options are environment variables: `PORT`, `SEED` (map), `WORLD_SIZE
 `BOTS` (roaming rogues kept around each player, default 5), `SUPPLY_EVERY_MS` (supply drop
 interval), `EXTRACT_HOLD_MS` (how long to hold an extraction, default 90000), `DATA_FILE` (where world 1 is saved; default `data/world.json`; other worlds and the lobby's accounts sit next to it), `WORLDS` (how many worlds the lobby runs, default 2), `WORLD_CAP` (players per world, default 40). `npm run start:world` runs a single world without the lobby.
 
-## Real buildings and roads (parked for now)
+## The real-world map
 
-This is on hold; the game currently uses the procedural stand-in buildings. The importer is kept for later.
+The world is built from open data for the real place, in `data/real/` (about 1.8 MB, in the repo):
 
-`tools/import-real-data.mjs` downloads the real building footprints and roads for the map area
-into `data/real/`. The server loads them at start-up and sends them to every client, so each real
-building becomes a solid map object you can take cover behind, and each road is drawn in the world and on the
-map. Without the files the map uses procedural stand-in buildings.
+- **Ground:** real elevation on a 30 m grid (USGS 3D Elevation Program data, via the open AWS Terrain
+  Tiles). Bristol sits on the high east bank about 130 ft above the river; Blountstown is down on the
+  floodplain; the Torreya bluffs rise about 150 ft straight off the water.
+- **Water:** the Apalachicola follows its real course, with its real width, islands and side channels,
+  and 335 real lakes, ponds and reservoirs are cut in (OpenStreetMap, via Overture Maps).
+- **Roads:** every real road, 2,129 stretches of them. 1,234 carry a real name or route number
+  (496 different names: Church Street, Pea Ridge Road, SR 20…). The rest are service roads and forest
+  tracks, which have no names in real life either; unpaved ones are drawn as dirt. The five state
+  highways (SR 20, 12, 65, 69, 71) follow their real lines, and SR 20 crosses the river on a bridge where
+  the real one stands. The road you're on shows under the minimap, and the map labels roads when you zoom in.
+- **Buildings:** every real building footprint, about 7,400 placed (Microsoft's open building
+  footprints and OpenStreetMap, via Overture). Each is a building you can walk into, at its real size
+  and position on a level pad cut into the real ground: houses with siding and pitched roofs, barns,
+  warehouses, shops, and brick civic buildings. 26 landmarks keep their real names (Liberty County
+  Courthouse, Bristol City Hall, the libraries, churches, the Apalachicola Ranger Station). Shop and
+  brand names are left out on purpose. Any of them can be claimed as a stash house.
+- **Towns:** the game's own part of each town is now just the Authority's compound (the Contact, a
+  couple of quarters, terminals, barricades), set on the emptiest ground near the real centre.
+- **No fog:** you see to the horizon. The whole county's ground is drawn in the distance, with
+  simple stand-ins for buildings and trees out to about a mile.
+
+Limits: walls run north-south and east-west only, so a building turned more than 25° off that
+becomes a square of the same floor area. Buildings have real heights where the data has them
+(about 4 in 10) and a sensible guess otherwise.
+
+To refresh the data (a new Overture release, or a different map size):
 
 ```bash
-node tools/import-real-data.mjs              # needs access to services2.arcgis.com and overpass-api.de
-npm start                                    # picks up data/real/ automatically
+pip install pyarrow shapely numpy pillow
+python3 tools/import_real_world.py        # reads only the parts of the open datasets that cover the map
 ```
 
-- **Buildings:** FEMA / Oak Ridge National Laboratory **USA Structures**, roughly 15,000 in Liberty and
-  Calhoun counties. Each footprint becomes a box of its real size, at its real position. Height comes
-  from the data, or from the occupancy class when the data has none. Agricultural buildings become barns and industrial ones warehouses.
-  Collision is axis-aligned, so a footprint turned well off north-south becomes a square of the same area.
-- **Roads:** OpenStreetMap, every drivable road and forest track (footpaths are skipped).
-- Credits: *USA Structures, FEMA Response Geospatial Office / Oak Ridge National Laboratory
-  (CC BY 4.0)*; *road data © OpenStreetMap contributors (ODbL 1.0)*.
-- Set `REAL_DATA=0` to ignore the files, `REAL_DATA_DIR` to read them from elsewhere. Saves are tied to the
-  map, so changing the data means starting a fresh `DATA_FILE`.
+Sources and licences are in `data/real/ATTRIBUTION.md` (OpenStreetMap is ODbL: keep the credit).
+Set `REAL_DATA=0` to run on the old generated stand-in world (the automated tests do).
+The save file is tied to the map, so new data starts a fresh world.
 
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
