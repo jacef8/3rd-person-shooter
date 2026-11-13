@@ -116,6 +116,22 @@ The real map:
 - Cross the river on the **SR 20 bridge**, then take a boat under it.
 - Tell me what looks wrong against the real place: a road, a building, a hill, the river.
 
+Fair raids (you need a friend, or two browsers):
+- At your stash, find **Raid window** and pick when your base can be raided while you're offline.
+  A new window starts a day after you set it.
+- Have a friend log off. Outside their window, try to shoot their door or chop their wall: it says
+  **Sealed** and when the window opens. Inside it, it takes about a third of the damage.
+- Break in and open their stash: it says how much one raid can carry off (35% while they're away,
+  50% while they're online).
+- Break a claim flag: it becomes a **ruin**. The owner opens the stash and picks **Rebuild**.
+- Watch your hatchet's condition in your bag; it wears out raiding and chopping.
+- Bypassing a lock takes longer on a better door: 8 seconds for a basic door, 32 for a vault door.
+
+New and solo players:
+- Below level 5 a 🛡 shows on your name and other players can't hurt you, until you shoot someone.
+- Playing alone with a medkit, you go down instead of dying: press Ⓐ to patch yourself up.
+- Levelling is slower now: about 5 hours to level 10 and 50 to level 30.
+
 Guns:
 - At your stash, open the gunsmith. There are ten slots now, including **Forearm** and **Ammunition**.
   Moving the outline over a part shows what it would change before you fit it.

@@ -34,18 +34,25 @@
   },
   "crewMax": 6,
   "downed": {
-    "_about": "At 0 HP you go down instead of dying while a crewmate is online and up. Enemy fire drains bleedHp; at 0, or after bleedOutMs, you die.",
+    "_about": "At 0 HP you go down instead of dying while a crewmate is online and up. Enemy fire drains bleedHp; at 0, or after bleedOutMs, you die. Solo players (no crewmate online) also go down if they carry a medkit, and can patch themselves up (selfReviveMs, uses the medkit) once per selfReviveCooldownMs.",
     "bleedOutMs": 30000,
     "bleedHp": 120,
     "crawlSpeed": 1.2,
     "reviveMs": 4000,
     "reviveRange": 2.2,
     "reviveHp": 35,
-    "reviveXp": 75
+    "reviveXp": 75,
+    "selfReviveMs": 6000,
+    "selfReviveCooldownMs": 600000,
+    "selfReviveHp": 30
   },
   "optics": {
     "_about": "thermalRange: how far a thermal sight picks out people and animals (and sees through optical camo) while you aim. glintRange: how far away a 12x lens flash shows.",
     "thermalRange": 150,
     "glintRange": 320
+  },
+  "newPlayerShield": {
+    "_about": "Below untilLevel, other players can't hurt, stun, take down or hack you, until you attack a player or someone's base (that ends it for good). Your claim marker and tools never drop when you die, at any level.",
+    "untilLevel": 5
   }
 }

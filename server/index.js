@@ -27,7 +27,7 @@ import {
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, investedCost, placementProblem } from '../shared/building.js';
-import { CLAIM, HOME_XP, homeLevel, homePerks } from '../shared/claims.js';
+import { CLAIM, HOME_XP, homeLevel, homePerks, RAIDS, windowOpen, windowText } from '../shared/claims.js';
 import { EXTRACT } from '../shared/extraction.js';
 import { distText, feet } from '../shared/units.js';
 import COMBAT from '../shared/data/combat.json' with { type: 'json' };
@@ -110,9 +110,10 @@ for (const h of map.houses) {
 db.structures ??= [];
 db.boats ??= [];
 db.crews ??= {};
+db.lastSeen ??= {};   // login token -> when they were last online (fair raids)
 
 function saveDb() {
-  for (const p of players.values()) persistCharacter(p);
+  for (const p of players.values()) { persistCharacter(p); db.lastSeen[p.token] = Date.now(); }
   db.crews = Object.fromEntries([...squads.values()].map((s) => [s.id, { ...s, officers: [...s.officers], members: [...s.members] }]));
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
   const tmp = DATA_FILE + '.tmp';
@@ -213,7 +214,18 @@ function starterLoadout() {
   const inv = starterKit();
   return { inv, ammo: 90, parts: 0, tech: 0, intel: 0, salvage: 0, mags: { [inv.secondary.id]: weaponStats(inv.secondary).mag }, active: 'secondary' };
 }
-const makeTool = (tool) => ({ id: uid('t'), kind: 'tool', tool, name: TOOLS[tool].name });
+const WEAR = RAIDS.toolWear;
+const makeTool = (tool) => ({ id: uid('t'), kind: 'tool', tool, name: TOOLS[tool].name, ...(WEAR[tool] ? { dur: WEAR[tool], maxDur: WEAR[tool] } : {}) });
+/** Hatchets and pickaxes wear out: raid hits and harvests use them up, and at 0 they break. */
+function wearTool(p, tool, n) {
+  const it = p.inv.pack.find((i) => i.kind === 'tool' && i.tool === tool);
+  if (!it || !WEAR[tool]) return;
+  it.maxDur ??= WEAR[tool]; it.dur ??= it.maxDur;
+  it.dur -= n;
+  if (it.dur <= 0) { p.inv.pack = p.inv.pack.filter((i) => i !== it); toast(p, `Your ${it.name.toLowerCase()} broke. Craft or buy another.`); }
+  else if (it.dur <= n * 2) toast(p, `Your ${it.name.toLowerCase()} is nearly worn out`);
+  dirty(p);
+}
 function newCharacter(name) {
   const kit = starterLoadout();
   kit.inv.pack.push(makeTool('hammer'), makeTool('hatchet'), makeMarker());
@@ -289,7 +301,7 @@ function claimSummary(p) {
   const c = claimOf(p);
   if (!c) return null;
   const xp = c.store.hxp || 0, lvl = homeLevel(xp);
-  return { kind: c.kind, id: c.id, name: claimName(c), x: c.x, z: c.z, level: lvl, xp: Math.floor(xp), perks: homePerks(lvl), crew: c.store.crew ? squads.get(c.store.crew)?.name || null : null };
+  return { kind: c.kind, id: c.id, name: claimName(c), x: c.x, z: c.z, level: lvl, xp: Math.floor(xp), perks: homePerks(lvl), crew: c.store.crew ? squads.get(c.store.crew)?.name || null : null, raid: raidSummary(c.store), ruined: !!c.store.ruined };
 }
 function startClaim(p, houseId) {
   if (claimOf(p)) return toast(p, squadOf(p) ? 'Your crew already has a stash house. An officer can abandon it from its stash menu.' : 'You already have a stash house. Abandon it (from its stash menu) before claiming another.');
@@ -351,7 +363,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', ...RESOURCES];
+const PERSIST = ['shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -373,8 +385,169 @@ function privateState(p) {
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
     food: Math.round(p.food ?? 0), foodMax: HOMESTEAD.hunger.max,
     boat: p.boat ? { id: p.boat, seat: p.seat } : null,
+    shield: shielded(p), shieldLevel: SHIELD_LEVEL, selfRevive: !!p.downed && soloRevive(p),
     downed: !!p.downed, downedUntil: p.downedUntil || 0, stunnedUntil: p.stunnedUntil || 0, stunReadyAt: p.stunReadyAt || 0, bleed: p.downed ? Math.max(0, Math.round(p.bleedHp)) : 0,
   };
+}
+
+// ---------------------------------------------------------------- fair raids
+// Each home has a raid window its owner picks. While anyone who lives there is online (or was in the
+// last 15 minutes) the base can be attacked at full strength: they can come and defend it. Once the
+// whole crew is offline, outside the window it's sealed, and inside it it takes reduced damage. A
+// raid can carry off only a share of a stash. Numbers: shared/data/stash.json "raids".
+const RAID_PROTECTION = process.env.RAID_PROTECTION !== '0';
+const OFFLINE_AFTER_MS = Number(process.env.OFFLINE_AFTER_MS || RAIDS.offlineAfterMs);
+const RAID_CHANGE_MS = Number(process.env.RAID_CHANGE_MS ?? RAIDS.changeDelayMs);
+const RS_CODE = { home: 0, window: 1, sealed: 2 };
+/** The window start hour (county time) in force for a home. A newly picked one waits changeDelayMs. */
+function raidStart(store, now = Date.now()) {
+  const w = store.raidWin;
+  if (!w) return RAIDS.defaultStartHour;
+  if (w.next != null && now >= w.nextAt) { w.start = w.next; w.next = null; w.nextAt = 0; }
+  return w.start ?? RAIDS.defaultStartHour;
+}
+/** Everyone who lives at a home: its crew, or its owner. */
+function storeTokens(store) { const s = store.crew && squads.get(store.crew); return s ? [...s.members] : store.owner ? [store.owner] : []; }
+function tokenHome(t, now) { return !!onlineByToken(t) || now - (db.lastSeen[t] || 0) < OFFLINE_AFTER_MS; }
+/** How a home stands right now: someone's home (full damage), everyone away inside the window (reduced), or sealed. */
+function raidState(store, now = Date.now()) {
+  const start = raidStart(store, now);
+  if (!RAID_PROTECTION || !store.owner || storeTokens(store).some((t) => tokenHome(t, now))) return { mode: 'home', mul: 1, start };
+  if (windowOpen(start, now)) return { mode: 'window', mul: RAIDS.offlineMul, start };
+  return { mode: 'sealed', mul: 0, start };
+}
+const rsCache = new WeakMap();   // store -> raid state, refreshed every second (snapshots read it)
+const cachedRaidState = (store) => rsCache.get(store) || raidState(store);
+const baseCache = new WeakMap();
+/** The home a structure belongs to: the flag or locker itself, a claimed building's doors, or anything its people built inside the claim radius. */
+function baseOf(st, now = Date.now()) {
+  if (PIECES[st.type].claim) return st;
+  if (st.claimOf) return structs.get(st.claimOf) || null;
+  const hit = baseCache.get(st);
+  if (hit && now - hit.at < 2000) return hit.base;
+  const c = claimOfToken(st.owner);
+  const base = c && Math.hypot(st.x - c.x, st.z - c.z) <= homePerks(homeLevel(c.store.hxp || 0)).radius ? c.store : null;
+  baseCache.set(st, { base, at: now });
+  return base;
+}
+const livesAt = (p, store) => storeTokens(store).some((t) => t === p.token || tokenInSquadWith(p, t));
+function sealedNote(p, rs) {
+  const now = Date.now();
+  if (!p || p.isBot || now - (p.sealedNote || 0) < 4000) return;
+  p.sealedNote = now;
+  toast(p, rs.mode === 'sealed'
+    ? `🔒 Sealed: everyone who lives here is offline, and their raid window is ${windowText(rs.start)} (county time)`
+    : `Everyone here is offline: inside their raid window the base takes only ${Math.round(rs.mul * 100)}% damage`);
+}
+/** Damage scale for an attack on a base (1 if it's yours, or nobody's). Attacking ends a new-player shield. */
+function raidMul(store, by, now = Date.now()) {
+  if (!store || !store.owner || (by && !by.isBot && livesAt(by, store))) return 1;
+  if (by && !by.isBot) dropShield(by);
+  const rs = raidState(store, now);
+  if (rs.mul < 1) sealedNote(by, rs);
+  return rs.mul;
+}
+/** Damage to a stash house door (shots and charges). */
+function damageHouseDoor(houseId, dmg, by, how = 'breached') {
+  const h = db.houses[houseId];
+  if (h.doorHp <= 0) return;
+  dmg *= raidMul(h, by);
+  if (dmg <= 0) return;
+  h.doorHp = Math.max(0, h.doorHp - dmg);
+  h.lastDamaged = Date.now();
+  const who = by ? by.name : 'Someone';
+  if (h.doorHp === 0) {
+    if (by && !by.isBot && h.owner !== by.token) award(by, XP.breach, 'Stash house breached', true);
+    feed(`${who} ${how} ${h.ownerName || 'an unclaimed'}'s stash house`);
+    notifyOwner(houseId, `⚠ Your stash house door was ${how} by ${who}!`);
+    if (h.owner) logAway(h.owner, `${who} ${how} your stash house door`);
+  } else if (!h.alertedAt || Date.now() - h.alertedAt > 30_000) {
+    h.alertedAt = Date.now();
+    notifyOwner(houseId, `⚠ ${who} is attacking your stash house door!`);
+  }
+}
+/**
+ * What someone may still carry off from another's stash or crate in this raid: null if there's no
+ * limit (it's theirs, or nobody's), false if it's sealed (and tells them). A raid gets a share of
+ * what was there when it started, counted once a day.
+ */
+function raidCap(p, kind, store, commit = true) {
+  let base;
+  if (kind === 'stash') { if (!store.owner || livesAt(p, store)) return null; base = store; }
+  else if (kind === 'crate') { if (canManage(p, store)) return null; base = baseOf(store); }
+  else return null;
+  const now = Date.now();
+  const rs = base ? raidState(base, now) : { mode: 'home', start: RAIDS.defaultStartHour };
+  if (rs.mode === 'sealed') { if (commit) { sealedNote(p, rs); return false; } return { sealed: true, start: rs.start, items: 0, res: {} }; }
+  let r = store.raidTake;
+  if (!r || now - r.since > RAIDS.takeResetMs) {
+    const share = rs.mode === 'home' ? RAIDS.takeShareOnline : RAIDS.takeShare;
+    r = { since: now, share, items: Math.max(1, Math.ceil(store.items.length * share)), res: Object.fromEntries(RESOURCES.map((k) => [k, Math.floor((store[k] || 0) * share)])) };
+    if (commit) store.raidTake = r;
+  }
+  if (commit) { dropShield(p); return r; }
+  return { ...r, start: rs.start, mode: rs.mode };
+}
+function raidView(p, kind, store) {
+  const r = raidCap(p, kind, store, false);
+  if (!r) return null;
+  return { sealed: !!r.sealed, items: Math.max(0, r.items), res: r.res, share: r.share || 0, window: windowText(r.start), mode: r.mode || 'sealed' };
+}
+/** Pick a new raid window (leader or officer, at the stash). It takes effect after changeDelayMs. */
+function setRaidWindow(p, msg) {
+  const c = claimOf(p);
+  if (!c || !atOwnStash(p)) return toast(p, 'Set your raid window from your stash');
+  const crew = squadOf(p);
+  if (crew && rankOf(crew, p.token) === 'member') return toast(p, 'Only the crew leader or an officer can change the raid window');
+  const start = Number(msg.start);
+  if (!Number.isInteger(start) || start < 0 || start > 23) return;
+  const now = Date.now();
+  const cur = raidStart(c.store, now);
+  c.store.raidWin ??= { start: cur, next: null, nextAt: 0 };
+  if (start === cur) { c.store.raidWin.next = null; c.store.raidWin.nextAt = 0; toast(p, `Raid window stays ${windowText(cur)}`); }
+  else {
+    c.store.raidWin.next = start; c.store.raidWin.nextAt = now + RAID_CHANGE_MS;
+    raidStart(c.store, now);
+    toast(p, RAID_CHANGE_MS > 0 ? `Raid window changes to ${windowText(start)} in ${Math.round(RAID_CHANGE_MS / 3_600_000)} hours` : `Raid window is now ${windowText(start)}`);
+  }
+  for (const o of storeTeam(c.store)) dirty(o);
+  refreshClaim(c);
+}
+function raidSummary(store) {
+  const w = store.raidWin, now = Date.now();
+  return { start: raidStart(store, now), next: w?.next ?? null, nextAt: w?.nextAt || 0, hours: RAIDS.windowHours, mode: raidState(store, now).mode, offlineMul: RAIDS.offlineMul, share: RAIDS.takeShare, shareOnline: RAIDS.takeShareOnline };
+}
+/** Lock tier of a door or gate (0-3): longer and dearer to bypass the better it is. */
+function doorTier(kind, id) {
+  if (kind === 'door') return Math.min(3, db.houses[id].upg.door || 0);
+  const st = structs.get(id);
+  if (!st) return 0;
+  const claim = st.claimOf && structs.get(st.claimOf);
+  return Math.min(3, Math.max(claim ? claim.upg?.door || 0 : 0, st.type === 'door' ? st.stage : Math.max(0, st.stage - 1)));
+}
+function bypassOf(kind, id) { const t = doorTier(kind, id); return { tier: t, ms: RAIDS.lockBypass.ms[t], tech: RAIDS.lockBypass.tech[t] }; }
+const TIER_NAMES = ['basic', 'steel', 'blast', 'vault'];
+
+// ---------------------------------------------------------------- new-player shield
+const SHIELD_LEVEL = Number(process.env.SHIELD_UNTIL_LEVEL ?? COMBAT.newPlayerShield.untilLevel);
+/** Below level 5, other players can't hurt you, until you attack someone (that ends it for good). */
+function shielded(c) { return !!c && !c.isBot && !!c.token && !c.shieldOff && level(c) < SHIELD_LEVEL; }
+function dropShield(p) {
+  if (!shielded(p)) return;
+  p.shieldOff = true;
+  toast(p, '🛡 Your new-player shield is off: you attacked someone. Other players can hurt you now.');
+  dirty(p);
+}
+/** A player hurting a player: false if the target is shielded (and says so). Ends the attacker's own shield. */
+function pvpAllowed(attacker, target) {
+  if (!attacker || attacker.isBot || !attacker.token || !target?.token || target.isBot || attacker === target) return true;
+  if (shielded(target)) {
+    const now = Date.now();
+    if (now - (attacker.shieldNote || 0) > 4000) { attacker.shieldNote = now; toast(attacker, `🛡 ${target.name} is new (below level ${SHIELD_LEVEL}) and shielded until they attack someone`); }
+    return false;
+  }
+  dropShield(attacker);
+  return true;
 }
 
 // ---------------------------------------------------------------- claiming any building
@@ -1688,6 +1861,7 @@ const isStunned = (c, now = Date.now()) => (c.stunnedUntil || 0) > now;
 function stun(c, ms, by) {
   const now = Date.now();
   if (c.dead || (!c.isBot && (c.protectedUntil || 0) > now)) return false;
+  if (!c.isBot && by && !pvpAllowed(by, c)) return false;
   c.stunnedUntil = Math.max(c.stunnedUntil || 0, now + ms);
   c.stunnedBy = by?.token || null;
   if (!c.isBot) {
@@ -1747,6 +1921,7 @@ function behind(p, t) {
   return (fx * dx + fz * dz) / l < -0.35;
 }
 function takedown(p, t) {
+  if (!pvpAllowed(p, t)) return;
   if (!stun(t, TAKEDOWN.stunMs, p)) return toast(p, `${t.name} just deployed — spawn protection for a few more seconds`);
   feed(`${p.name} took down ${t.name}`);
   award(p, XP.takedown, `Takedown: ${t.name}`);
@@ -1813,10 +1988,23 @@ function tickSensors(now) {
 
 /** Timed, interruptible channel: terminals, door bypass, supply drops, contract crates. */
 function startHack(p, kind, id, extra = {}) {
+  if (kind === 'rebuild') {
+    const st = structs.get(id);
+    if (!st || !(st.ruined || st.broken) || !canManage(p, st)) return;
+    if (!hasTool(p, 'hammer')) return toast(p, 'You need a hammer to rebuild');
+    const cost = st.ruined ? RAIDS.ruin.rebuildCost : RAIDS.ruin.doorRebuildCost;
+    if (Object.entries(cost).some(([k, v]) => (p[k] || 0) < v)) return toast(p, `Rebuilding needs ${costText(cost)} (carried)`);
+  }
   const now = Date.now();
   let src;
-  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire') {
-    const ms = kind === 'hotwire' ? RV.rules.hotwireMs : kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
+  if (kind === 'raid' || kind === 'gatehack') {
+    // Nothing gets broken into while a base is sealed; a gate lock takes longer the better it is.
+    const st = structs.get(id);
+    if (!st || raidMul(baseOf(st), p) <= 0) return;
+    if (kind === 'gatehack') { const bp = bypassOf('gate', id); extra = { ...extra, ms: bp.ms, tech: bp.tech }; }
+  }
+  if (kind === 'rebuild' || kind === 'selfrevive' || kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire') {
+    const ms = extra.ms ? extra.ms : kind === 'rebuild' ? RAIDS.ruin.rebuildMs : kind === 'selfrevive' ? DOWNED.selfReviveMs : kind === 'hotwire' ? RV.rules.hotwireMs : kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
     if (kind === 'datahack') toast(p, 'Hacking shows your position to enemies nearby — have your crew cover you.');
@@ -1832,7 +2020,10 @@ function startHack(p, kind, id, extra = {}) {
     src = map.terminals[id];
   } else if (kind === 'door') {
     if (level(p) < GADGETS.doorHack.level) return toast(p, `Locked. Shoot it down, or reach level ${GADGETS.doorHack.level} to hack it.`);
-    if (p.tech < GADGETS.doorHack.cost) return toast(p, `Lock bypass needs ${GADGETS.doorHack.cost} tech`);
+    if (raidMul(db.houses[id], p) <= 0) return;
+    const bp = bypassOf('door', id);
+    if (p.tech < bp.tech) return toast(p, `Bypassing a ${TIER_NAMES[bp.tier]} lock needs ${bp.tech} tech`);
+    extra = { ms: bp.ms, tech: bp.tech };
     src = map.houses[id];
   } else if (kind === 'drop') {
     const d = drops.get(id);
@@ -1842,9 +2033,10 @@ function startHack(p, kind, id, extra = {}) {
     src = objectives.get(id);
     if (!src || src.owner !== p.token) return toast(p, 'Not your contract');
   }
-  p.hack = { kind, id, start: now, until: now + HACK_MS[kind], total: HACK_MS[kind], x: p.x, z: p.z };
+  const ms = extra.ms || HACK_MS[kind];
+  p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
   if (TEAM_HACK.exposes.includes(kind)) toast(p, 'Hacking shows your position to enemies nearby — have your crew cover you. Crewmates close by speed it up.');
-  send(p.ws, { t: 'hack', kind, until: p.hack.until, total: HACK_MS[kind] });
+  send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
   if (kind === 'crate') return;
   const text = { terminal: 'Terminal hack detected', door: 'Stash lock bypass detected', drop: 'Someone is opening the supply drop' }[kind];
   for (const o of players.values()) {
@@ -1880,7 +2072,7 @@ function tickHacks(now) {
         send(o.ws, { t: 'expose', ids: [p.id], until: now + 1500, kind: 'sensor' });
       }
     }
-    if (p.dead || p.downed) { cancelHack(p, 'You went down'); continue; }
+    if (p.dead || (p.downed && h.kind !== 'selfrevive')) { cancelHack(p, 'You went down'); continue; }
     if (h.kind === 'revive') { const t = players.get(h.id); if (!t || !t.downed || t.dead) { cancelHack(p, 'Too late'); continue; } }
     if (h.kind === 'datahack') {
       // The target stays pinned while you hack them.
@@ -1899,6 +2091,28 @@ function tickHacks(now) {
     if (h.kind === 'cook') { finishCook(p); continue; }
     if (h.kind === 'fish') { finishFishing(p); continue; }
     if (h.kind === 'hotwire') { finishHotwire(p, h.id); continue; }
+    if (h.kind === 'selfrevive') {
+      const i = p.inv.pack.findIndex((x) => x.kind === 'medkit');
+      if (!p.downed || i < 0) { send(p.ws, { t: 'hack', done: true, text: 'No medkit' }); continue; }
+      p.inv.pack.splice(i, 1);
+      p.selfReviveAt = now + DOWNED.selfReviveCooldownMs;
+      revive(p, null);
+      p.hp = DOWNED.selfReviveHp;
+      send(p.ws, { t: 'hack', done: true, text: `Patched up. You can do that again in ${Math.round(DOWNED.selfReviveCooldownMs / 60000)} minutes.` });
+      dirty(p);
+      continue;
+    }
+    if (h.kind === 'rebuild') {
+      const st = structs.get(h.id);
+      if (!st || !(st.ruined || st.broken)) continue;
+      const cost = st.ruined ? RAIDS.ruin.rebuildCost : RAIDS.ruin.doorRebuildCost;
+      if (!payCarried(p, cost)) { send(p.ws, { t: 'hack', done: true, text: 'Missing materials' }); continue; }
+      if (st.ruined) { st.ruined = false; st.hp = flagMax(st) * RAIDS.ruin.rebuildHp; refreshContainerViewers('crate', st.id); }
+      else { st.broken = false; st.open = false; st.hp = stageDef(st).hp * RAIDS.ruin.rebuildHp; }
+      send(p.ws, { t: 'hack', done: true, text: st.claimOf ? 'Door rebuilt' : 'Stash house rebuilt' });
+      dirty(p);
+      continue;
+    }
     if (h.kind === 'revive') {
       const t = players.get(h.id);
       if (t && t.downed && !t.dead && Math.hypot(t.x - p.x, t.z - p.z) <= DOWNED.reviveRange + 0.5) { revive(t, p); send(p.ws, { t: 'hack', done: true, text: `${t.name} is back up` }); }
@@ -1913,6 +2127,7 @@ function tickHacks(now) {
       harvested.set(h.id, hv);
       const n = BUILD.harvest[h.res];
       p[h.res] += n;
+      wearTool(p, h.res === 'wood' ? 'hatchet' : 'pickaxe', WEAR.harvestUse);
       send(p.ws, { t: 'hack', done: true, text: `+${n} ${h.res}` });
     } else if (h.kind === 'upgrade') {
       const st = structs.get(h.id);
@@ -1933,11 +2148,13 @@ function tickHacks(now) {
       const r = BUILD.raid[h.tool];
       if (!r.vs.split(',').includes(stageDef(st).material)) { send(p.ws, { t: 'hack', done: true, text: `A ${h.tool} won't break ${stageDef(st).material}` }); continue; }
       damageStruct(st, r.dmg, p);
-      send(p.ws, { t: 'hack', done: true, text: structs.has(st.id) ? `${stageDef(st).name}: ${Math.max(0, Math.round(st.hp))} HP left` : 'Broken through!' });
+      wearTool(p, h.tool, WEAR.raidUse);
+      const through = !structs.has(st.id) || st.ruined || st.broken;
+      send(p.ws, { t: 'hack', done: true, text: through ? 'Broken through!' : `${stageDef(st).name}: ${Math.max(0, Math.round(st.hp))} HP left` });
     } else if (h.kind === 'gatehack') {
       const st = structs.get(h.id);
-      if (!st || p.tech < GADGETS.doorHack.cost) continue;
-      p.tech -= GADGETS.doorHack.cost;
+      if (!st || p.tech < (h.tech ?? GADGETS.doorHack.cost)) continue;
+      p.tech -= h.tech ?? GADGETS.doorHack.cost;
       st.open = true;
       award(p, XP.hackDoor, 'Gate lock bypassed', true);
       send(p.ws, { t: 'hack', done: true, text: 'Gate unlocked' });
@@ -1952,8 +2169,9 @@ function tickHacks(now) {
     } else if (h.kind === 'door') {
       const house = db.houses[h.id];
       if (house.doorHp <= 0 || house.doorOpen) { send(p.ws, { t: 'hack', done: true, text: 'Door already open' }); continue; }
-      p.tech -= GADGETS.doorHack.cost;
+      p.tech -= h.tech ?? GADGETS.doorHack.cost;
       house.doorOpen = true;
+      if (house.owner) logAway(house.owner, `${p.name} bypassed the lock on your stash house door`);
       award(p, XP.hackDoor, 'Lock bypassed', true);
       notifyOwner(h.id, `⚠ ${p.name} hacked open your stash house door!`);
       send(p.ws, { t: 'hack', done: true, text: `${house.ownerName || 'The'}'s door is open` });
@@ -1984,7 +2202,11 @@ function tickHacks(now) {
 // ---------------------------------------------------------------- combat
 const DOWNED = COMBAT.downed;
 /** Can this player be revived if they drop? Only with a crewmate who is online and still up. */
-function canGoDown(p) { return squadMembersOnline(p).some((m) => m !== p && !m.dead && !m.downed); }
+function canGoDown(p) { return squadMembersOnline(p).some((m) => m !== p && !m.dead && !m.downed) || soloRevive(p); }
+/** A player with nobody from their crew online can patch themselves up with a medkit, once in a while. */
+function soloRevive(p, now = Date.now()) {
+  return !squadMembersOnline(p).some((m) => m !== p) && p.inv.pack.some((i) => i.kind === 'medkit') && (p.selfReviveAt || 0) <= now;
+}
 function goDown(p, attacker, headshot) {
   const now = Date.now();
   Object.assign(p, { downed: true, downedUntil: now + DOWNED.bleedOutMs, bleedHp: DOWNED.bleedHp, downedBy: attacker || null, downedHead: !!headshot, hp: 0, camoOn: false, crouch: true });
@@ -1993,13 +2215,13 @@ function goDown(p, attacker, headshot) {
   send(p.ws, { t: 'container', closed: true });
   feed(`${attacker ? attacker.name : 'The city'} downed ${p.name}`);
   for (const m of squadMembersOnline(p)) if (m !== p) { toast(m, `✚ ${p.name} is down — get to them and revive (E)`); send(m.ws, { t: 'alert', x: p.x, z: p.z, text: `${p.name} down` }); }
-  toast(p, 'You\'re down! Crawl to cover — a crewmate can revive you. Q / Ⓨ to give up.');
+  toast(p, soloRevive(p) ? 'You\'re down! Press E / Ⓐ to patch yourself up with a medkit, or crawl to cover. Q / Ⓨ to give up.' : 'You\'re down! Crawl to cover — a crewmate can revive you. Q / Ⓨ to give up.');
   dirty(p);
 }
 function revive(p, by) {
   Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null, hp: DOWNED.reviveHp });
   p.protectedUntil = 0;
-  feed(`${by ? by.name : 'The medic'} revived ${p.name}`);
+  if (by) feed(`${by.name} revived ${p.name}`);
   if (by) award(by, DOWNED.reviveXp, `Revived ${p.name}`);
   toast(p, by ? `${by.name} got you back up` : 'Back on your feet');
   dirty(p);
@@ -2016,6 +2238,7 @@ function applyDamage(target, amount, attacker, isBot, headshot = false, ammo = n
   if (!isBot && attacker && !attacker.isBot && (inFair(target.x, target.z) || inFair(attacker.x, attacker.z) || inCamp(target.x, target.z) || inCamp(attacker.x, attacker.z))) return;   // the fairgrounds and swamp camps are safe zones
   if (target.npc && target.kind === 'trader') return;   // river traders are left alone by everyone
   if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
+  if (!isBot && !pvpAllowed(attacker, target)) return;
   if (!isBot && target.downed) {
     // Shooting someone who's down finishes them off.
     target.bleedHp -= amount;
@@ -2059,8 +2282,10 @@ function killPlayer(p, attacker, headshotKill) {
   Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null });
   const { primary, secondary, armor, pack } = p.inv;
   const keepIntel = hasField(p, 'pouch') ? Math.min(3, p.intel) : 0;
-  dropBag(p.x, p.z, [primary, secondary, armor, ...pack], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
-  p.inv = { primary: null, secondary: null, armor: null, pack: [] };
+  // Your claim marker and tools stay with you: losing them would leave you unable to start again.
+  const keep = pack.filter((i) => i && (i.kind === 'marker' || i.kind === 'tool'));
+  dropBag(p.x, p.z, [primary, secondary, armor, ...pack.filter((i) => !keep.includes(i))], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
+  p.inv = { primary: null, secondary: null, armor: null, pack: keep };
   p.mags = {}; p.armor = 0; p.camoOn = false;
   for (const r of RESOURCES) p[r] = 0;
   p.intel = keepIntel;
@@ -2185,17 +2410,7 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
       continue;
     }
     if (hit.kind === 'door') {
-      const h = db.houses[hit.target];
-      h.doorHp = Math.max(0, h.doorHp - dmg);
-      h.lastDamaged = Date.now();
-      if (h.doorHp === 0) {
-        if (!isBot && h.owner !== shooter.token) award(shooter, XP.breach, 'Stash house breached', true);
-        feed(`${shooter.name} breached ${h.ownerName || 'an unclaimed'}'s stash house`);
-        notifyOwner(hit.target, `⚠ Your stash house door was breached by ${shooter.name}!`);
-      } else if (!h.alertedAt || Date.now() - h.alertedAt > 30_000) {
-        h.alertedAt = Date.now();
-        notifyOwner(hit.target, `⚠ ${shooter.name} is shooting your stash house door!`);
-      }
+      damageHouseDoor(hit.target, dmg, shooter);
     } else {
       applyDamage(hit.target, dmg, shooter, hit.kind === 'bot', hit.headshot, isBot ? null : s);
       if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2] });
@@ -2530,6 +2745,7 @@ function payCarried(p, cost) {
 const costText = (c) => Object.entries(c).map(([k, v]) => `${v} ${k}`).join(', ');
 
 function handleBuild(p, msg) {
+  p.slow = null;
   const def = own(PIECES, msg.piece);
   if (!def) return;
   const x = Number(msg.x), z = Number(msg.z), rot = msg.rot ? 1 : 0;
@@ -2586,13 +2802,27 @@ function homeBuildXp(p, st, reason) {
   if (Math.hypot(st.x - c.x, st.z - c.z) <= homePerks(homeLevel(c.store.hxp)).radius) addHomeXp(c, HOME_XP.build, reason);
 }
 function damageStruct(st, dmg, by) {
-  if (!structs.has(st.id)) return;
+  if (!structs.has(st.id) || st.ruined || st.broken) return;
+  dmg *= raidMul(baseOf(st), by);
+  if (dmg <= 0) return;
   st.hp -= dmg;
   const owner = onlineByToken(st.owner);
   if (owner && by !== owner && (!st.alertedAt || Date.now() - st.alertedAt > 20_000)) { st.alertedAt = Date.now(); toast(owner, `⚠ Your ${stageDef(st).name.toLowerCase()} is under attack${by ? ` by ${by.name}` : ''}!`); }
   if (st.hp > 0) return;
-  if (PIECES[st.type].claim) { feed(`${storeOwnerLabel(st)}'s ${stageDef(st).name.toLowerCase()} was destroyed`); notifyStore(st, '⚠ Your stash house was destroyed — you no longer have one'); }
-  removeStruct(st, true);
+  const who = by ? by.name : 'Someone';
+  if (PIECES[st.type].claim) {
+    // A home isn't wiped out: it becomes a ruin its owner can rebuild (level and upgrades kept).
+    st.ruined = true; st.hp = 0;
+    feed(`${who} broke ${storeOwnerLabel(st)}'s ${stageDef(st).name.toLowerCase()}: it's a ruin`);
+    notifyStore(st, '⚠ Your stash house was broken into a ruin. Its level and upgrades are safe: rebuild it with a hammer.');
+    logAway(st.owner, `${who} broke your stash house into a ruin. Rebuild it from the stash with a hammer (${costText(RAIDS.ruin.rebuildCost)}).`);
+    refreshContainerViewers('crate', st.id);
+  } else if (st.claimOf) {
+    // A claimed building's door breaks open, and its owner can put it back.
+    st.broken = true; st.hp = 0; st.open = true;
+    const home = structs.get(st.claimOf);
+    if (home) { notifyStore(home, `⚠ ${who} broke down a door of your stash house`); logAway(home.owner, `${who} broke down a door of your stash house`); }
+  } else removeStruct(st, true);
   if (by && !by.isBot && st.owner !== by.token) award(by, PIECES[st.type].claim ? 250 : 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
 }
 function removeStruct(st, destroyed) {
@@ -2636,11 +2866,7 @@ function explode(c, now) {
   for (const h of map.houses) {
     const d = boxDist(h.door, c.x, c.z);
     if (d > k.radius) continue;
-    const hs = db.houses[h.id];
-    if (hs.doorHp <= 0) continue;
-    hs.doorHp = Math.max(0, hs.doorHp - k.damage * (1 - d / (k.radius * 1.5)));
-    hs.lastDamaged = now;
-    if (hs.doorHp === 0) { feed(`${c.ownerName} blew open ${hs.ownerName || 'an unclaimed'}'s ${HOME_KINDS[h.kind].name.toLowerCase()}`); notifyOwner(h.id, `⚠ Your stash door was blown open by ${c.ownerName}!`); if (by && hs.owner !== by.token) award(by, XP.breach, 'Stash house breached', true); }
+    damageHouseDoor(h.id, k.damage * (1 - d / (k.radius * 1.5)), by || { name: c.ownerName, isBot: true }, 'blew open');
   }
   for (const t of [...players.values(), ...bots.values()]) {
     if (t.dead) continue;
@@ -2708,7 +2934,7 @@ function containerView(p, kind, id) {
     const mine = ours?.kind === 'home' && ours.id === id;
     const squad = !mine && !!h.owner && tokenInSquadWith(p, h.owner);
     const title = mine ? (h.crew ? `${storeOwnerLabel(h)} crew stash` : 'Your stash') : `${storeOwnerLabel(h) || 'Unclaimed'}'s stash${squad ? ' (crew)' : ''}`;
-    return { t: 'container', kind, id, title, items: h.items, ...Object.fromEntries(RESOURCES.map((r) => [r, h[r] || 0])), ammo: 0, canPut: mine || squad, cap: stashCap(id), gunsmith: mine, bank: mine, craft: mine, upg: mine ? h.upg : null, home: mine ? claimSummary(p) : null };
+    return { t: 'container', kind, id, title, items: h.items, ...Object.fromEntries(RESOURCES.map((r) => [r, h[r] || 0])), ammo: 0, canPut: mine || squad, cap: stashCap(id), raid: raidView(p, 'stash', h), gunsmith: mine, bank: mine, craft: mine, upg: mine ? h.upg : null, home: mine ? claimSummary(p) : null };
   }
   if (kind === 'crate') {
     const st = structs.get(id);
@@ -2717,7 +2943,8 @@ function containerView(p, kind, id) {
     const own = claimOf(p)?.store === st, flag = !!PIECES[st.type].claim;
     const cap = flag ? claimCap({ kind: 'flag', store: st }) : stageDef(st).slots;
     return { t: 'container', kind, id, title: flag ? (own ? (st.crew ? `${storeOwnerLabel(st)} crew stash` : `Your ${stageDef(st).name.toLowerCase()} (stash)`) : `${storeOwnerLabel(st)}'s ${stageDef(st).name.toLowerCase()}`) : `${st.ownerName}'s ${stageDef(st).name.toLowerCase()}${mine ? '' : ' (not yours)'}`, items: st.items, ...Object.fromEntries(RESOURCES.map((r) => [r, st[r] || 0])), canPut: mine, cap, craft: own, upgradable: mine && !!PIECES[st.type].stages[st.stage + 1],
-      gunsmith: flag && own, bank: flag && own, upg: flag && own ? st.upg : null, home: flag && own ? claimSummary(p) : null };
+      gunsmith: flag && own, bank: flag && own, upg: flag && own ? st.upg : null, home: flag && own ? claimSummary(p) : null,
+      raid: raidView(p, 'crate', st), ruin: st.ruined && mine ? { cost: RAIDS.ruin.rebuildCost } : null };
   }
   const bag = db.bags.find((b) => b.id === id);
   return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ...Object.fromEntries(RESOURCES.map((r) => [r, bag[r] || 0])), canPut: false, cap: 0 } : { t: 'container', closed: true };
@@ -2735,6 +2962,7 @@ function refreshContainerViewers(kind, id) {
 }
 
 function interact(p) {
+  p.slow = null;   // their next snapshot shows the result straight away
   if (p.hack) return cancelHack(p, 'Cancelled');
   if (p.boat) return leaveBoat(p);
   // A downed crewmate within reach comes first.
@@ -2757,7 +2985,7 @@ function interact(p) {
   // Then an enemy at arm's length: data-hack them if they're stunned or down, take them down from behind.
   const foe = enemyAtReach(p, DATAHACK.range);
   if (foe) {
-    if (isStunned(foe) || foe.downed) return startHack(p, 'datahack', foe.id);
+    if ((isStunned(foe) || foe.downed) && pvpAllowed(p, foe)) return startHack(p, 'datahack', foe.id);
     if (Math.hypot(foe.x - p.x, foe.z - p.z) <= TAKEDOWN.range && behind(p, foe)) return takedown(p, foe);
   }
   const it = nearestInteractable(p);
@@ -2847,6 +3075,7 @@ function structInteract(p, st) {
   if (def.defense && canManage(p, st) && !msg_upgradeIntent(p)) return defenseInteract(p, st);
   if (def.cook && !msg_upgradeIntent(p) && (canManage(p, st) || !p.buildIntent)) return cookInteract(p, st);
   if (canManage(p, st)) {
+    if (st.broken) return startHack(p, 'rebuild', st.id);
     if (def.container && st.stage >= 0 && !(msg_upgradeIntent(p))) {
       p.openContainer = { kind: 'crate', id: st.id };
       return send(p.ws, containerView(p, 'crate', st.id));
@@ -2863,9 +3092,12 @@ function structInteract(p, st) {
     return startHack(p, 'upgrade', st.id);
   }
   // Someone else's structure.
-  if (def.container) { p.openContainer = { kind: 'crate', id: st.id }; return send(p.ws, containerView(p, 'crate', st.id)); }
+  if (st.broken) return toast(p, `${st.ownerName}'s door is broken down`);
+  const lockedFlag = def.claim && st.type === 'flag' && !st.ruined;   // a flag's stash opens only once the flag is broken
+  if (lockedFlag && !hasTool(p, 'hatchet') && !hasTool(p, 'pickaxe')) return toast(p, `${storeOwnerLabel(st)}'s claim flag: its stash is locked until the flag is broken (hatchet, pickaxe or breach charge)`);
+  if (def.container && !lockedFlag) { p.openContainer = { kind: 'crate', id: st.id }; return send(p.ws, containerView(p, 'crate', st.id)); }
   if (stage.material === 'frame') return toast(p, `${st.ownerName}'s ${stage.name.toLowerCase()}`);
-  if (def.door && !st.open && level(p) >= GADGETS.doorHack.level && p.tech >= GADGETS.doorHack.cost && !hasTool(p, 'hatchet') && !hasTool(p, 'pickaxe')) return startHack(p, 'gatehack', st.id);
+  if (def.door && !st.open && level(p) >= GADGETS.doorHack.level && p.tech >= bypassOf('gate', st.id).tech && !hasTool(p, 'hatchet') && !hasTool(p, 'pickaxe')) return startHack(p, 'gatehack', st.id);
   const tool = stage.material === 'stone' ? 'pickaxe' : hasTool(p, 'hatchet') ? 'hatchet' : hasTool(p, 'pickaxe') ? 'pickaxe' : null;
   if (!tool || !hasTool(p, tool)) return toast(p, stage.material === 'stone' ? 'Stone — break it with a pickaxe or a breach charge' : 'Chop it down with a hatchet, or use a breach charge');
   return startHack(p, 'raid', st.id, { tool });
@@ -2874,20 +3106,31 @@ function structInteract(p, st) {
 function msg_upgradeIntent(p) { return !!p.buildIntent; }
 
 function containerAction(p, msg) {
+  p.slow = null;
   const { kind, id } = p.openContainer || {};
   if (!kind || !nearContainer(p, kind, id)) { p.openContainer = null; return send(p.ws, { t: 'container', closed: true }); }
   const store = kind === 'stash' ? db.houses[id] : kind === 'crate' ? structs.get(id) : kind === 'boat' ? boatById(id) : db.bags.find((b) => b.id === id);
   if (!store) return;
   if (kind === 'boat' && !canUseBoat(p, store)) return;
   if (msg.action === 'take') {
-    if (RESOURCES.includes(msg.res)) { p[msg.res] += store[msg.res] || 0; store[msg.res] = 0; }
-    else {
+    const cap = raidCap(p, kind, store);
+    if (cap === false) return;
+    const full = () => toast(p, `That's all one raid can carry off from here (${Math.round(cap.share * 100)}% of what was in it). The rest is locked in their strongbox for a day.`);
+    if (RESOURCES.includes(msg.res)) {
+      const n = Math.min(store[msg.res] || 0, cap ? Math.max(0, cap.res[msg.res] || 0) : Infinity);
+      if (cap && n <= 0) return full();
+      p[msg.res] += n; store[msg.res] = (store[msg.res] || 0) - n;
+      if (cap) cap.res[msg.res] -= n;
+    } else {
       const idx = store.items.findIndex((i) => i.id === msg.itemId);
       if (idx < 0) return;
       if (store.items[idx].bulk) return toast(p, 'Bulk freight is too heavy to carry. It stays in the hold until you deliver it at the landing.');
+      if (cap && cap.items <= 0) return full();
       if (!addToPack(p, store.items[idx])) return toast(p, 'Backpack full');
       store.items.splice(idx, 1);
+      if (cap) cap.items--;
     }
+    if (cap && store.owner && !cap.logged) { cap.logged = true; logAway(store.owner, `${p.name} took from your ${kind === 'stash' ? 'stash' : stageDef(store).name.toLowerCase()}`); }
   } else if (msg.action === 'put') {
     if (kind === 'bag') return;
     if (kind === 'stash') { const h = db.houses[id]; if (!(h.owner === p.token || (h.owner && tokenInSquadWith(p, h.owner)))) return; }
@@ -3009,6 +3252,9 @@ function tickHouses(now) {
   for (const st of structs.values()) if (PIECES[st.type].claim) claims.push({ kind: 'flag', id: st.id, store: st, x: st.x, z: st.z });
   for (const c of claims) {
     const h = c.store;
+    const was = rsCache.get(h)?.mode, rs = raidState(h, now);
+    rsCache.set(h, rs);
+    if (was && was !== rs.mode && was !== 'home' && rs.mode !== 'home') logAway(h.owner, rs.mode === 'window' ? `Your raid window opened (${windowText(rs.start)}): your base can be raided, at reduced damage, while you're all away` : 'Your raid window closed: your base is sealed again');
     if (c.kind === 'home') {
       const max = doorMax(c.id);
       if (h.doorHp > 0 && h.doorHp < max && now - (h.lastDamaged || 0) > 60_000) h.doorHp = Math.min(max, h.doorHp + max * 0.02);
@@ -3409,7 +3655,8 @@ const handler = (req, res) => {
   // Who's playing, for the lobby (the hub polls this; it isn't exposed publicly through the hub).
   if (url === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ world: WORLD_ID, name: WORLD_NAME, online: players.size, names: [...players.values()].map((p) => p.name) }));
+    const avg = tickMs.length ? tickMs.reduce((a, b) => a + b, 0) / tickMs.length : 0;
+    return res.end(JSON.stringify({ world: WORLD_ID, name: WORLD_NAME, online: players.size, names: [...players.values()].map((p) => p.name), tickMs: +avg.toFixed(2), tickMaxMs: +Math.max(0, ...tickMs).toFixed(2), budgetMs: 1000 / TICK_HZ }));
   }
   if (serveStatic(req, res, url, STATIC)) return;
   res.writeHead(404); res.end('Not found');
@@ -3434,6 +3681,7 @@ wss.on('connection', (ws) => {
     // While downed you can crawl, talk to your crew, or give up; nothing else.
     if (p.downed && !p.dead) {
       if (msg.t === 'giveUp') return killPlayer(p, p.downedBy, p.downedHead);
+      if (msg.t === 'interact') { if (p.hack) return cancelHack(p, 'Cancelled'); return soloRevive(p) ? startHack(p, 'selfrevive', p.id) : toast(p, 'Only a crewmate can revive you'); }
       if (!['state', 'squad', 'leaderboard', 'closeContainer', 'dev'].includes(msg.t)) return;
     }
     switch (msg.t) {
@@ -3448,6 +3696,8 @@ wss.on('connection', (ws) => {
       case 'deploy': return handleDeploy(p, msg);
       case 'respawn': return handleDeploy(p, { kind: claimOf(p) ? 'home' : 'lz', id: 0 });
       case 'abandon': return abandonClaim(p);
+      case 'raidWindow': return setRaidWindow(p, msg);
+      case 'rebuild': { const oc = p.openContainer; if (!p.dead && oc?.kind === 'crate' && nearContainer(p, 'crate', oc.id)) startHack(p, 'rebuild', oc.id); return; }
       case 'buyMarker': {
         const ct = nth(map.contacts, msg.contactId);
         if (!ct || p.dead || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return;
@@ -3506,6 +3756,7 @@ wss.on('connection', (ws) => {
     if (!p) return;
     if (p.boat) leaveBoat(p, true);   // nobody logs off in the middle of the river
     persistCharacter(p);
+    db.lastSeen[p.token] = Date.now();
     players.delete(p.id);
     const crew = squadOf(p);
     if (crew) pushSquadState(crew);   // stays in the crew, shown offline
@@ -3519,28 +3770,45 @@ function snapshotFor(r, views, now) {
   const list = [];
   const thermal = r.aiming && !r.dead && !!stats(r)?.thermal;   // aiming through a thermal sight
   for (const [p, v] of views) {
+    const close = near(p);
     const squad = sameSquad(r, p);
-    if (!squad && !near(p) && !exposedTo(p, r)) continue;   // hacked enemies show wherever they are
+    if (!close && !squad && !exposedTo(p, r)) continue;   // hacked enemies show wherever they are
     const d = Math.hypot(p.x - r.x, p.z - r.z);
     if (p !== r && v.camo && !squad && !exposedTo(p, r) && d > CAMO_REVEAL_DIST && !(thermal && d < COMBAT.optics.thermalRange)) continue;
-    list.push(squad && p !== r ? { ...v, sq: 1 } : v);
+    list.push(squad && p !== r ? `${v.json.slice(0, -1)},"sq":1}` : v.json);   // each player's view is encoded once a tick
   }
-  return {
-    t: 'snap', players: list,
+  // What changes slowly (loot, bags, doors, terminals, structures) is rebuilt twice a second, or
+  // straight after the player does something; the rest ten times a second.
+  if (!r.slow || now - r.slow.at > 450) {
+    r.slow = { at: now, json: JSON.stringify({
+      loot: [...loot.values()].filter((l) => near(l, 140)).map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, name: l.item.name, amount: l.item.amount || 0 })),
+      bags: db.bags.filter((b) => near(b, 200)).map((b) => ({ id: b.id, x: b.x, z: b.z, label: b.label })),
+      houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; const rs = s.owner && !livesAt(r, s) ? cachedRaidState(s) : null; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0, ...(rs ? { rs: RS_CODE[rs.mode], rw: rs.start } : {}) }; }),
+      terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
+      objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
+      structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...structRaidView(r, st), ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
+    }).slice(1, -1) };
+  }
+  const fast = JSON.stringify({
+    t: 'snap', players: 0,
     bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp, stun: isStunned(b, now) ? 1 : 0 })),
-    loot: [...loot.values()].filter((l) => near(l, 140)).map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, name: l.item.name, amount: l.item.amount || 0 })),
-    bags: db.bags.filter((b) => near(b, 200)).map((b) => ({ id: b.id, x: b.x, z: b.z, label: b.label })),
-    houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0 }; }),
-    terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
-    objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
-    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
     boats: db.boats.filter((b) => near(b) || (BOATS[b.type].loud && rtOf(b).speed > 1 && Math.hypot(b.x - r.x, b.z - r.z) < BOATS[b.type].loud)).map((b) => ({ id: b.id, type: b.type, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), max: BOATS[b.type].hp, owner: b.ownerName, mine: canUseBoat(r, b) ? 1 : 0, seats: rtOf(b).seats, fast: rtOf(b).speed > 1 ? 1 : 0 })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
-  };
+  });
+  return `${fast.slice(0, -1).replace('"players":0', `"players":[${list.join(',')}]`)},${r.slow.json}}`;
+}
+
+function structRaidView(r, st) {
+  const out = st.ruined || st.broken ? { ru: 1 } : {};
+  const base = baseOf(st);
+  if (base && !canManage(r, st) && !livesAt(r, base)) { const rs = cachedRaidState(base); out.rs = RS_CODE[rs.mode]; out.rw = rs.start; }
+  return out;
 }
 
 let tick = 0;
+const tickMs = [];   // how long each tick took (for /status and load tests)
 const loop = setInterval(() => {
+  const t0 = performance.now();
   const now = Date.now();
   const dt = 1 / TICK_HZ;
   updateBots(dt, now);
@@ -3585,13 +3853,16 @@ const loop = setInterval(() => {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
-      level: level(p), camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
+      level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
     }]));
-    for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(JSON.stringify(snapshotFor(r, views, now)));
+    for (const v of views.values()) Object.defineProperty(v, 'json', { value: JSON.stringify(v) });   // not enumerable: never encoded twice
+    for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(snapshotFor(r, views, now));
   }
   for (const p of players.values()) if (p.dirty) { p.dirty = false; send(p.ws, privateState(p)); }
+  tickMs.push(performance.now() - t0);
+  if (tickMs.length > 200) tickMs.shift();
   tick++;
 }, 1000 / TICK_HZ);
 

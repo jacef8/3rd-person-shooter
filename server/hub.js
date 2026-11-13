@@ -29,7 +29,7 @@ const DATA_DIR = path.dirname(DATA_FILE);
 const HUB_FILE = process.env.HUB_FILE || path.join(DATA_DIR, 'hub.json');
 const WORLD_PORT_BASE = Number(process.env.WORLD_PORT_BASE || 9100);
 const WORLD_COUNT = Number(process.env.WORLDS || 1);   // one shared living world; more regions come later
-const WORLD_CAP = Number(process.env.WORLD_CAP || 40);
+const WORLD_CAP = Number(process.env.WORLD_CAP || 100);   // load-tested: see tools/load-test.mjs
 const WORLDS = Array.from({ length: WORLD_COUNT }, (_, i) => ({
   id: i + 1,
   name: i === 0 ? 'Liberty County' : `Region ${i + 1}`,

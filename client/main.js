@@ -11,7 +11,7 @@ import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, placementProblem } from '/shared/building.js';
-import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks } from '/shared/claims.js';
+import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS, hourLabel, windowText } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
@@ -815,7 +815,7 @@ function handle(m) {
         if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, ground(p.x, p.z), p.z); state.players.set(p.id, rec); }
         rec.data = p;
         setCharacterGun(rec.mesh, p.gun);
-        setLabel(rec.mesh.userData.label, `${p.sq ? '◆ ' : ''}${p.name}  [${p.level}]${p.hacking ? '  ⌁ hacking' : ''}`, p.sq ? '#7dff9a' : '#ffb27a');
+        setLabel(rec.mesh.userData.label, `${p.sq ? '◆ ' : ''}${p.name}  [${p.level}]${p.sh ? ' 🛡' : ''}${p.hacking ? '  ⌁ hacking' : ''}`, p.sq ? '#7dff9a' : '#ffb27a');
         setCloak(rec.mesh, p.camo ? (p.sq ? 0.35 : 0.12) : 1);
         setGlint(rec.mesh, !!p.gl);
       }
@@ -1059,7 +1059,8 @@ function updateHud() {
   $('reserve').textContent = me.ammo;
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
-  $('housestatus').textContent = me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}` : 'No stash house — plant a claim marker';
+  $('housestatus').textContent = (me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}${me.claim.ruined ? ' · RUIN: rebuild it at the stash' : ''}` : 'No stash house — plant a claim marker')
+    + (me.shield ? ` · 🛡 New-player shield until level ${me.shieldLevel}` : '');
   const goodsHud = ['seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals'].filter((g) => me[g]).map((g) => `<span title="${GOODS[g].name}">${GOODS[g].icon} ${me[g]}</span>`).join('');
   $('resources').innerHTML = `<span title="Cash: trade at any Contact's trading post">$${me.cash || 0}</span>${goodsHud}<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades, building">⛭ ${me.salvage} salvage</span><span title="Building: chop trees with a hatchet">🪵 ${me.wood}</span><span title="Building: mine rocks with a pickaxe">⛰ ${me.stone}</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
   const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
@@ -1069,7 +1070,7 @@ function updateHud() {
 }
 
 function statLine(item) {
-  if (item.kind === 'tool') return TOOLS[item.tool]?.desc || '';
+  if (item.kind === 'tool') return `${item.maxDur ? `Condition ${Math.max(0, Math.round((item.dur ?? item.maxDur) / item.maxDur * 100))}% · ` : ''}${TOOLS[item.tool]?.desc || ''}`;
   if (item.kind === 'charge') return CRAFTS.charge.desc;
   if (item.kind === 'marker') return CRAFTS.marker.desc;
   if (item.kind === 'package') return 'Contract crate — deliver to any Contact';
@@ -1171,7 +1172,15 @@ function renderInventory() {
       tr.append(btn('Fast travel…', () => { closeInventory(); openMapScreen('travel'); }));
       box.append(tr);
     }
+    if (c.raid) box.append(raidPanel(c));
+    if (c.ruin) {
+      const bar = document.createElement('div');
+      bar.className = 'gsentry';
+      bar.append(Object.assign(document.createElement('span'), { className: 'note', textContent: `This stash house is a ruin. Rebuild it to lock it again (needs a hammer and ${costText(c.ruin.cost)} carried).` }), btn('Rebuild', () => send({ t: 'rebuild' }), ''));
+      box.append(bar);
+    }
     if (c.home) box.append(homePanel(c));
+    if (c.home?.raid) box.append(raidWindowPanel(c.home));
     if (c.upg) box.append(upgradePanel(c));
     if (c.craft) box.append(craftPanel(c));
     if (c.canPut) {
@@ -1187,10 +1196,13 @@ function renderInventory() {
       if (dep.children.length) box.append(dep);
     }
     for (const r of RES_UI) {
-      if (c[r]) box.append(itemCard({ kind: r, name: resText(r, c[r]) }, { buttons: [['← Take', () => send({ t: 'container', action: 'take', res: r })]] }));
+      if (!c[r]) continue;
+      // Someone else's stash: one raid carries off only a share of each supply.
+      const can = c.raid ? Math.min(c[r], c.raid.res[r] || 0) : c[r];
+      box.append(itemCard({ kind: r, name: c.raid ? `${resText(r, c[r])} · you can take ${can}` : resText(r, c[r]) }, { buttons: can > 0 && !c.raid?.sealed ? [['← Take', () => send({ t: 'container', action: 'take', res: r })]] : [] }));
     }
     if (!c.items.length && !RES_UI.some((r) => c[r])) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty' }));
-    for (const item of c.items) box.append(itemCard(item, { buttons: [['← Take', () => send({ t: 'container', action: 'take', itemId: item.id })]] }));
+    for (const item of c.items) box.append(itemCard(item, { buttons: c.raid && (c.raid.sealed || c.raid.items <= 0) ? [] : [['← Take', () => send({ t: 'container', action: 'take', itemId: item.id })]] }));
   }
 }
 
@@ -1209,6 +1221,30 @@ function closeInventory() {
 // ------------------------------------------------------------------ stash house upgrades
 function costText(cost) {
   return Object.entries(cost).map(([k, v]) => (k === 'comms' ? `${v} ★` : resText(k, v))).join(' · ');
+}
+/** Someone else's stash: whether it can be raided now, and how much one raid can carry off. */
+function raidPanel(c) {
+  const r = c.raid, el = document.createElement('div');
+  el.className = 'raidnote';
+  el.innerHTML = r.sealed
+    ? `<b>🔒 Sealed</b>Everyone who lives here is offline. You can look, but nothing can be taken until their raid window: ${r.window} (county time).`
+    : `<b>Raid limit</b>One raid carries off ${Math.round(r.share * 100)}% of what was here${r.mode === 'window' ? ' (they are all away)' : ''}: ${r.items} more item${r.items === 1 ? '' : 's'}, and the amounts shown for supplies. The rest stays in their strongbox for a day.`;
+  return el;
+}
+/** Your raid window: when your base can be raided while all of you are offline. */
+function raidWindowPanel(h) {
+  const r = h.raid, wrap = document.createElement('div');
+  wrap.className = 'upgrades';
+  const pick = r.next ?? r.start;
+  wrap.innerHTML = `<h2>Raid window</h2>
+    <div class="st">Now: <b>${windowText(r.start)}</b> (county time).${r.next != null ? ` Changes to <b>${windowText(r.next)}</b> from ${new Date(r.nextAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })} your time.` : ''}</div>
+    <div class="st" style="margin:6px 0">While anyone who lives here is online, your base can be attacked at any hour, so come defend it. Once you're all offline: outside the window it's <b>sealed</b>; inside it, it takes ${Math.round(r.offlineMul * 100)}% damage. A raid can carry off ${Math.round(r.share * 100)}% of a stash (${Math.round(r.shareOnline * 100)}% if you're around). A new window starts a day after you set it.</div>`;
+  const row = document.createElement('div');
+  row.className = 'item';
+  const label = Object.assign(document.createElement('div'), { className: 'meta', innerHTML: `<div class="nm">Start at ${hourLabel(pick)}</div><div class="st">${windowText(pick)}</div>` });
+  row.append(label, btn('Earlier', () => send({ t: 'raidWindow', start: (pick + 23) % 24 })), btn('Later', () => send({ t: 'raidWindow', start: (pick + 1) % 24 })));
+  wrap.append(row);
+  return wrap;
 }
 /** Stash house level: XP bar, current perks, what the next level unlocks, abandon. */
 function homePanel(c) {
@@ -1839,7 +1875,7 @@ function doAction(a) {
       return;
   }
   if (state.me.dead || state.invOpen || state.panelOpen || state.mapOpen || state.contactOpen) return;
-  if (state.me.downed) { if (a === 'swap') send({ t: 'giveUp' }); else if (a === 'ping') { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); } return; }
+  if (state.me.downed) { if (a === 'interact') send({ t: 'interact' }); else if (a === 'swap') send({ t: 'giveUp' }); else if (a === 'ping') { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); } return; }
   if (a === 'build') { toggleBuild(); return; }
   if (build.on) {
     // In build mode the same buttons drive building.
@@ -2000,6 +2036,12 @@ function tryFire(now) {
   state.recoil += s.recoil * (state.crouch ? s.crouchRecoil : 1) * (state.aiming ? 0.85 : 1) * (0.8 + Math.random() * 0.4);
 }
 
+/** "· 🔒 sealed until 7 pm" on other people's bases while everyone who lives there is offline. */
+function raidTag(o) {
+  if (o.rs === 2) return ` · 🔒 sealed until ${hourLabel(o.rw)}`;
+  if (o.rs === 1) return ' · raid window (owners away)';
+  return '';
+}
 function nearestInteractable() {
   if (state.me?.boat) return canStepOut() ? '🚤 Get out onto the bank' : null;
   let best = null, bestD = INTERACT_RANGE;
@@ -2049,7 +2091,13 @@ function nearestInteractable() {
     const d = Math.hypot(Math.max(structBoxOf(st).minX - state.x, 0, state.x - structBoxOf(st).maxX), Math.max(structBoxOf(st).minZ - state.z, 0, state.z - structBoxOf(st).maxZ)) + 0.3;
     let text;
     const next = def.stages[st.stage + 1];
-    const hp = ` <small>${st.hp}/${st.max} HP</small>`;
+    const hp = ` <small>${st.hp}/${st.max} HP</small>${raidTag(st)}`;
+    if (st.ru) {
+      text = st.mine ? (def.door ? `🔨 Rebuild door (${costText(RAIDS.ruin.doorRebuildCost)}, hammer)` : '🔨 Your stash is a ruin: open it to rebuild')
+        : def.door ? `${st.owner}'s door (broken down)` : `Search ${st.owner}'s ruined stash${raidTag(st)}`;
+      consider(d, text);
+      continue;
+    }
     if (def.stall) {
       text = st.mine ? '🛒 Your market stall — list goods, collect the till' : `🛒 Browse ${st.owner}'s stall`;
     } else if (def.defense && st.mine) {
@@ -2067,7 +2115,8 @@ function nearestInteractable() {
       else if (def.container) text = `Open ${stage.name.toLowerCase()}`;
       else if (def.door && stage.material !== 'frame') text = st.open ? `Close ${def.auto ? 'door' : 'gate'}` : `Open ${def.auto ? 'door' : 'gate'}`;
       else text = `${stage.name}${next ? ` — ${glyph('X')} for build mode to upgrade` : ''}`;
-    } else if (def.container) text = `Search ${st.owner}'s crate`;
+    } else if (def.claim && st.type === 'flag') text = `${st.owner}'s claim flag: break it to reach the stash${has('hatchet') || has('pickaxe') ? '' : ' (hatchet, pickaxe or charge)'}`;
+    else if (def.container) text = `Search ${st.owner}'s ${stage.name.toLowerCase()}`;
     else if (stage.material === 'frame') text = `${st.owner}'s ${stage.name.toLowerCase()}`;
     else text = stage.material === 'stone' ? (has('pickaxe') ? `Break ${st.owner}'s ${stage.name.toLowerCase()} (pickaxe)` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a pickaxe or breach charge`) : (has('hatchet') || has('pickaxe') ? `Chop through ${st.owner}'s ${stage.name.toLowerCase()}` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a hatchet`);
     consider(d, def.farm || def.cook || def.stall || (def.defense && st.mine) ? text : text + hp);
@@ -2078,12 +2127,13 @@ function nearestInteractable() {
     const hasMarker = state.me?.inv.pack.some((i) => i.kind === 'marker');
     const claimText = state.me?.claim ? `Unclaimed ${homeKindName(h).toLowerCase()} (you already have a stash house)` : hasMarker ? `Plant claim marker — make this ${homeKindName(h).toLowerCase()} your stash house (8s)` : `Unclaimed ${homeKindName(h).toLowerCase()} — needs a claim marker`;
     const lockedVehicle = h.kind === 'vehicle' && hs.owner && !own && hs.hp > 0 && !hs.open;
-    consider(Math.hypot(h.crate.x - state.x, h.crate.z - state.z) - 0.3, !hs.owner ? claimText : own ? `Open your stash · gunsmith · upgrades (home Lv${hs.hl})` : lockedVehicle ? `${hs.owner}'s ${homeKindName(h).toLowerCase()} — locked` : `Loot ${hs.owner}'s stash`);
+    consider(Math.hypot(h.crate.x - state.x, h.crate.z - state.z) - 0.3, !hs.owner ? claimText : own ? `Open your stash · gunsmith · upgrades (home Lv${hs.hl})` : lockedVehicle ? `${hs.owner}'s ${homeKindName(h).toLowerCase()} — locked` : `Loot ${hs.owner}'s stash${raidTag(hs)}`);
     const d = h.door;
     if (!hs.owner) { consider(Math.hypot((d.minX + d.maxX) / 2 - state.x, (d.minZ + d.maxZ) / 2 - state.z), claimText); continue; }
     const squadHouse = !own && hs.owner && state.squad.members.some((m) => m.name === hs.owner);
-    const lockText = (state.me?.level ?? 1) >= GADGETS.doorHack.level ? `Hack lock (${GADGETS.doorHack.cost} tech, 8s)` : `Locked — shoot it down (hack at lvl ${GADGETS.doorHack.level})`;
-    const doorText = own || squadHouse ? (hs.hp <= 0 ? (own ? 'Rebuild door' : 'Doorway (breached)') : hs.open ? 'Close door' : 'Open door') : (hs.hp <= 0 ? 'Doorway (breached)' : hs.open ? 'Doorway (open)' : `${lockText} · ${Math.round(hs.hp / hs.max * 100)}%`);
+    const tier = Math.min(3, hs.upg?.door || 0);
+    const lockText = (state.me?.level ?? 1) >= GADGETS.doorHack.level ? `Bypass lock (${RAIDS.lockBypass.tech[tier]} tech, ${RAIDS.lockBypass.ms[tier] / 1000}s)` : `Locked — shoot it down (bypass at lvl ${GADGETS.doorHack.level})`;
+    const doorText = own || squadHouse ? (hs.hp <= 0 ? (own ? 'Rebuild door' : 'Doorway (breached)') : hs.open ? 'Close door' : 'Open door') : (hs.hp <= 0 ? `Doorway (breached)${raidTag(hs)}` : hs.open ? 'Doorway (open)' : hs.rs === 2 ? `${hs.owner}'s door${raidTag(hs)}` : `${lockText} · ${Math.round(hs.hp / hs.max * 100)}%${raidTag(hs)}`);
     consider(Math.hypot((d.minX + d.maxX) / 2 - state.x, (d.minZ + d.maxZ) / 2 - state.z), doorText);
   }
   if (!best) {
@@ -2193,7 +2243,7 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING', rebuild: 'REBUILDING', selfrevive: 'PATCHING YOURSELF UP' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
   } else hb.hidden = true;
   // Stun flash fades out over the stun.
   const sf = $('stunfx'), sLeft = (state.stunnedUntil || 0) - performance.now();
@@ -2203,7 +2253,7 @@ function drawMarkers() {
   if (state.me?.downed && !state.me.dead) {
     const left = Math.max(0, Math.ceil((state.me.downedUntil - Date.now()) / 1000));
     dbar.hidden = false;
-    dbar.innerHTML = `<b>✚ DOWN</b> — bleeding out in ${left}s<br><small>Crawl to cover. A crewmate can revive you. <kbd>${glyph('Q')}</kbd> give up</small>`;
+    dbar.innerHTML = `<b>✚ DOWN</b> — bleeding out in ${left}s<br><small>${state.me.selfRevive ? `<kbd>${glyph('E')}</kbd> patch yourself up (uses a medkit, ${COMBAT_RULES.downed.selfReviveMs / 1000}s) · ` : 'Crawl to cover. A crewmate can revive you. '}<kbd>${glyph('Q')}</kbd> give up</small>`;
   } else dbar.hidden = true;
   // Extraction countdown for anyone near a flare.
   const xb = $('extractbar');
@@ -2767,10 +2817,16 @@ function syncStructs(list) {
   const seen = new Set();
   for (const st of list) {
     seen.add(st.id);
-    const key = `${st.stage}|${st.crop || ''}|${(st.grow || 0) >= 1 ? 'ripe' : Math.floor((st.grow || 0) * 4)}|${st.rotten || 0}`;
+    const key = `${st.stage}|${st.crop || ''}|${(st.grow || 0) >= 1 ? 'ripe' : Math.floor((st.grow || 0) * 4)}|${st.rotten || 0}|${st.ru || 0}`;
     let v = structVis.get(st.id);
     if (v && v.key !== key) { scene.remove(v.mesh); v = null; }
-    if (!v) { v = { mesh: structMesh(st), key }; structVis.set(st.id, v); }
+    if (!v) {
+      v = { mesh: structMesh(st), key };
+      // A ruin (or a broken-down door) is charred and slumped until its owner rebuilds it.
+      if (st.ru) v.mesh.traverse((o) => { if (o.material?.color) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.3); } });
+      if (st.ru && !PIECES[st.type].door) { v.mesh.rotation.z = 0.25; v.mesh.position.y -= 0.3; }
+      structVis.set(st.id, v);
+    }
     v.data = st;
     if (v.mesh.userData.panel) v.mesh.userData.panel.visible = !st.open;
   }

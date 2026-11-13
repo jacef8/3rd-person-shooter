@@ -33,7 +33,7 @@ unlock every hour and a half.
 
 Reaching 30 on the proposed curve is roughly 850 Rogue kills, 150 contracts and 40 player kills,
 plus intel and hacks along the way. It is two numbers in `shared/data/progression.json`
-(`firstLevelXp` 400 to 600, `extraPerLevelXp` 60 to 440). **Not changed yet: it is your call.**
+(`firstLevelXp` 400 to 600, `extraPerLevelXp` 60 to 440). **Applied.**
 
 **What you unlock along the way.** With this week's gun parts, something now unlocks at every level
 up to 30. The reviewers' advice on order: one thing per level and a big moment every fifth level
@@ -79,7 +79,7 @@ In the order the reviewers would build it. Each step makes the next one possible
 
 | # | What | Why it comes here | Size |
 |---|---|---|---|
-| 1 | **Fair raids.** Raid windows the owner picks, far less damage while a whole crew is offline, lock bypass that takes longer on better doors, tools that wear out, a cap on what one raid can take, and a ruin you can rebuild from. | Nobody builds big while a base falls in a minute. | Small to medium |
+| 1 | **Fair raids (built 13 Nov).** Raid windows the owner picks, far less damage while a whole crew is offline, lock bypass that takes longer on better doors, tools that wear out, a cap on what one raid can take, and a ruin you can rebuild from. | Nobody builds big while a base falls in a minute. | Small to medium |
 | 2 | **A real economy.** Shops with limited stock, prices that move with what players sell, goods that weigh something. | Without scarcity there is nothing to trade. | Medium |
 | 3 | **Land rights and upkeep.** Nobody else builds inside your claim; a daily land tax that grows with the size of the base; unpaid places decay. | Stops the first big crew owning everything forever, and gives cash a use. | Medium to large |
 | 4 | **Production buildings and fuel.** Stills, workshops, generators that need feeding. | Reasons to log in daily and to need each other. | Medium |
@@ -120,7 +120,21 @@ only, and a new-player shield (your claim marker and tools never drop; no PvP un
 - XP farms: free sidearm builds, hacking the same stunned target over and over, trading kills with a
   friend, and standing still in a safe camp.
 
-## Decisions only you can make
+## Decisions (made 13 November 2026)
+
+Jace went with the recommendations below. Fair raids, the shield, the solo self-revive, the
+level curve and the player cap are built; titles and the move to Unreal are for later.
+
+1. **Wipes:** this browser version is a test world and may be wiped. Callsigns, friends and a
+   founder's skin carry over to Unreal; after that launch, nothing is wiped.
+2. **Offline loss:** a capped share (35% of a stash a day), and only inside the raid window you choose.
+3. **Level 30:** about 50 hours. Applied: `firstLevelXp` 600, `extraPerLevelXp` 440.
+4. **Players per world:** load-tested: 100 run comfortably on one server, 150 is busy. The cap is
+   100 for now; 150 needs the next round of server work (sending each player less about crowds).
+5. **Solo players are first-class:** solo self-revive and a new-player shield are in.
+6. **A titled home can be robbed, never taken.**
+
+## The questions, as asked
 
 1. **Does anything ever get wiped, and what survives the move to Unreal?** Everything about titles,
    mastery and "permanent" depends on the answer.

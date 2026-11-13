@@ -70,13 +70,24 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   claimed** as a stash house: plant a marker inside for a stash locker and lockable doors.
 - **Building:** chop trees (hatchet) and mine rocks (pickaxe) for wood and stone, then place
   frames and upgrade them into wooden or stone walls, gates, barricades and stash crates, anywhere
-  in the wild. Raid other bases with hatchets, pickaxes, gate hacks or breach charges.
+  in the wild. Raid other bases with hatchets, pickaxes, gate hacks or breach charges (see fair raids below).
+- **New players are shielded:** below level 5 other players can't hurt you, until you attack someone.
+  Your claim marker and tools never drop when you die. **Solo players** go down instead of dying if
+  they carry a medkit, and can patch themselves up (once every 10 minutes).
 - Open-world rules: no safe zones, no instancing. When you die, everything you carried drops in a bag
   anyone can loot. When you log off, your character stays where you stood.
-- **Stash houses are part of the live world.** Each player is given a walled stash house with a crate.
-  Its door can be shot down by anyone, at any time, **including while you're offline**. Once it's
-  breached, anyone can walk in and empty your stash. Owners get alerts while online, must rebuild a
-  breached door by hand, and an intact door slowly repairs itself.
+- **Stash houses are part of the live world, and raids are fair.** Your home stays in the world when
+  you log off, and it can be raided, under these rules:
+  - **While anyone who lives there is online** (or was in the last 15 minutes), it can be attacked at
+    full strength at any hour. Come home and defend it.
+  - **Once you're all offline,** it's sealed except during the **raid window** you pick (4 hours a
+    day, county time), and inside the window it takes only 35% damage.
+  - **One raid carries off only a share** of a stash: 35% of what's in it (50% if you were around),
+    counted once a day. The rest stays in your strongbox.
+  - **Better locks take longer** to bypass (8 s and 15 tech for a basic door, up to 32 s and 60 tech
+    for a vault door). **Hatchets and pickaxes wear out.**
+  - **A broken home becomes a ruin,** not a loss: it keeps its level and upgrades, and you rebuild it
+    with a hammer. Your away log tells you what happened while you were gone.
 - AI "Rogues" patrol the city, fight anyone they see, and drop parts, tech, intel and ammo.
 
 ## Play the test build
@@ -215,6 +226,11 @@ works at your own stash. Another end-to-end test boots the server, has one playe
 house door, walk in, take an item, shoot the owner, then restarts the server and checks the stash,
 door state and loot all persisted.
 
+**Load test.** `node tools/load-test.mjs 40 100 150` starts a world and connects that many fake
+players (half crowded into towns, half spread out) and reports how long each server tick takes. On
+a 4-core test machine: 100 players run comfortably (8 ms of the 50 ms tick), 150 is busy (15 ms
+average, spikes to 45 ms). The hub lets 100 into a world (`WORLD_CAP`).
+
 **Controller check.** `tools/controller-check.mjs` plays the game in a real browser with a simulated
 controller and nothing else: it types a callsign on the on-screen keyboard, searches for a friend,
 deploys, founds a crew, shops, and accepts a trade request. It needs Playwright with Chromium, which
@@ -246,8 +262,8 @@ This is a playable vertical slice meant to prove the design. The likely next ste
    registration and snapshot delta compression.
 3. **Persistence:** swap the JSON file for a database (Postgres/Redis) so a cluster of server shards
    can share characters and stashes.
-4. **Raid design:** decide on raid-protection rules (e.g. breach tools, raid windows, offline
-   protection that ramps up) so offline raiding feels fair, not just punishing.
+4. **Raid design:** fair raids are in (raid windows, offline sealing, the raid share, ruins). Next is
+   land rights and upkeep: a build budget tied to land you hold and pay tax on.
 5. **Progression depth:** per-weapon XP and challenges for unlocking parts, prestige, and more
    platforms and attachments.
 6. **Content:** missions/landmarks, a dark-zone-style extraction loop, and more.

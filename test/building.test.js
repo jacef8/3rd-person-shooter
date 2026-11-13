@@ -125,15 +125,20 @@ test('building: gather, build, upgrade, gate, crate, raid, breach charge, disman
   b.send({ t: 'container', action: 'put', res: 'wood' });
   await until(() => b.container.wood === woodStored && b.you.wood === 0);
 
-  // A raider loots the crate (crates aren't locked — your walls are the protection) …
+  // A raider loots the crate (crates aren't locked — your walls are the protection), but one raid
+  // only carries off a share: half while the owner is around, the rest stays in their strongbox.
   const r = await conn('Raider', TOK_R);
   await until(() => r.you);
   await r.tp(site.bx, site.bz - 4.4);
   r.send({ t: 'interact' });
   await until(() => r.container?.kind === 'crate');
   assert.equal(r.container.canPut, false);
+  assert.equal(r.container.raid.res.wood, Math.floor(woodStored / 2));
   r.send({ t: 'container', action: 'take', res: 'wood' });
-  await until(() => r.you.wood === woodStored);
+  await until(() => r.you.wood === Math.floor(woodStored / 2));
+  r.send({ t: 'container', action: 'take', res: 'wood' });
+  await r.got((m) => m.t === 'toast' && /all one raid can carry off/.test(m.text));
+  assert.equal(r.you.wood, Math.floor(woodStored / 2));
   // … then takes a pickaxe to the stone wall from the outside. The owner is alerted and the wall loses HP.
   const hp0 = b.st(wall.id).hp;
   await r.tp(site.bx - 1, site.bz + 1.4);

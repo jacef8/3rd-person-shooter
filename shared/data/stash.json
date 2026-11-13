@@ -242,5 +242,52 @@
         }
       ]
     }
+  },
+  "raids": {
+    "_about": "Fair raids. Each home has a raid window the owner picks (windowHours long, starting at startHour, county time). While anyone on the home's crew is online (or was within offlineAfterMs), the base can be attacked at full strength at any hour: they can defend it. Once the whole crew is offline: outside the window the base is sealed (no damage, no lock bypass); inside the window it takes offlineMul of the damage. A new window takes effect changeDelayMs after you set it. A raid can carry off only takeShare of what a stash holds (takeShareOnline if someone was home), counted once per takeResetMs.",
+    "timeZone": "America/New_York",
+    "windowHours": 4,
+    "defaultStartHour": 19,
+    "changeDelayMs": 86400000,
+    "offlineAfterMs": 900000,
+    "offlineMul": 0.35,
+    "takeShare": 0.35,
+    "takeShareOnline": 0.5,
+    "takeResetMs": 86400000,
+    "lockBypass": {
+      "_about": "Time and tech to bypass a lock, by the door's tier (house doors: the Reinforced Door upgrade; a claimed building's doors: the same upgrade or the steel door stage; gates: wooden 0, reinforced 1).",
+      "ms": [
+        8000,
+        14000,
+        22000,
+        32000
+      ],
+      "tech": [
+        15,
+        25,
+        40,
+        60
+      ]
+    },
+    "ruin": {
+      "_about": "A claim flag or stash locker broken to 0 becomes a ruin instead of vanishing: the home keeps its level and upgrades, and outsiders can search the stash (within the raid share). The owner rebuilds it with a hammer. A claimed building's broken doors are rebuilt the same way.",
+      "rebuildCost": {
+        "wood": 40,
+        "stone": 20,
+        "parts": 20
+      },
+      "doorRebuildCost": {
+        "wood": 15
+      },
+      "rebuildMs": 8000,
+      "rebuildHp": 0.4
+    },
+    "toolWear": {
+      "_about": "Hatchets and pickaxes wear out: durability points, spent per raid hit and per harvest. At 0 the tool breaks.",
+      "hatchet": 60,
+      "pickaxe": 80,
+      "raidUse": 6,
+      "harvestUse": 1
+    }
   }
 }

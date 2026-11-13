@@ -2,8 +2,8 @@
   "_about": "Player levels and where XP comes from. Level n needs firstLevelXp*(n-1) + extraPerLevelXp*(n-1)(n-2)/2 total XP.",
   "maxLevel": 30,
   "xpCurve": {
-    "firstLevelXp": 400,
-    "extraPerLevelXp": 60
+    "firstLevelXp": 600,
+    "extraPerLevelXp": 440
   },
   "xp": {
     "rogueKill": 100,

@@ -76,6 +76,47 @@ Each level adds stash slots (+4/level), door/lock/flag strength (+12%/level), cl
 levels**: steel door and alarm at 2, generator and workbench at 3, blast door at 4, 50 m alarm at 5,
 60-slot storage and 30/h generator at 6, vault door at 7, 60/h generator at 9.
 
+## Fair raids
+
+The game promises two things that pull against each other: your home stays in the world forever,
+and anyone can raid it. These rules make both true. Numbers: `shared/data/stash.json`, `raids`.
+
+| Situation | What happens |
+| --- | --- |
+| Anyone who lives there is online, or was in the last 15 minutes | Full damage at any hour. They get alerts and can come defend it. |
+| Everyone is offline, outside the raid window | **Sealed.** No damage, no lock bypass, nothing taken. Raiders are told when the window opens. |
+| Everyone is offline, inside the raid window | 35% damage, so it takes about three times the tools, tech and charges. |
+
+- **The raid window** is 4 hours a day, on the county clock (Eastern time). The owner (or a crew
+  leader or officer) picks the start hour at the stash. A new window takes effect a day later, so it
+  can't be dodged mid-raid. The default is 7 pm to 11 pm.
+- **The raid share:** one raid carries off at most 35% of what a stash held when the raid started
+  (50% if the owners were around to defend), counted once a day per stash or crate. The rest stays
+  in the owner's strongbox. This applies to stash houses, claim flags and lockers, and crates.
+- **Locks:** bypassing takes 8 / 14 / 22 / 32 seconds and 15 / 25 / 40 / 60 tech for a basic, steel,
+  blast or vault door. A claimed building's doors and gates count by their stage and the home's door
+  upgrade.
+- **Tools wear out:** a hatchet has 60 points and a pickaxe 80; a raid hit costs 6, a harvest 1.
+- **Ruins:** a claim flag or stash locker broken to 0 becomes a ruin instead of vanishing. The home
+  keeps its level and upgrades; outsiders can search the stash (within the raid share); the owner
+  rebuilds it with a hammer (40 wood, 20 stone, 20 parts). A claimed building's broken doors are put
+  back the same way (15 wood). A claim flag's stash stays locked until the flag is broken.
+- **The away log** tells the owner who broke, bypassed or took from their home, and when their
+  window opened and closed.
+
+What's still to come (in the order the review recommends): a cap on what an attacking crew can
+carry home per day across all bases, land rights and upkeep, and titled homes that can be robbed
+but never taken.
+
+## New players and solo players
+
+- **New-player shield:** below level 5, other players can't hurt, stun, take down or data-hack you.
+  It ends for good the moment you attack a player or someone's base. A 🛡 shows on your name.
+- **Claim marker and tools never drop** when you die, at any level, so nobody is left unable to start again.
+- **Solo self-revive:** with nobody from your crew online, carrying a medkit means you go down
+  instead of dying, and can patch yourself up (6 seconds, uses the medkit, back at 30 health). Once
+  every 10 minutes.
+
 ## Building (DayZ-style)
 
 1. **Tools** (carried, lost on death): **hammer** (place and upgrade), **hatchet** (chop trees →
@@ -262,7 +303,8 @@ feet/miles scale bar.
 ## How progression is balanced
 
 1. **Primary: level (XP).** Levels 1–30 unlock weapon platforms, attachments, armor, paints and
-   gadgets on a fixed schedule. XP comes from everything you do: time alive, kills, hacks,
+   gadgets on a fixed schedule. Level 30 takes about 50 hours of play (196,040 XP; level 10 is
+   about 5 hours, level 20 about 22). XP comes from everything you do: time alive, kills, hacks,
    contracts, uploading intel, drops.
 2. **Secondary: field gear (★ commendations).** A short list of strong-but-fair sidegrades
    (Integrated Suppressor, Hardened Barrel, Field Plate, Secure Pouch, Camo/Sensor Mk2, …) bought
@@ -291,7 +333,7 @@ There are no random drops anywhere, so grinding for luck is never the way to pro
 | **Parts** ⚙ | Parts caches in the street, Rogue kills, other players' bags and stashes | Building new guns (30–70) and armor (20–80) from blueprints you've unlocked. Swapping attachments is free. |
 | **Salvage** ⛭ | Industrial zones, farms, forests, roads, contracts, supply drops | Stash house upgrades |
 | **Commendations** ★ | Only contracts and supply drops (never lost) | Field gear from Contacts, top-tier upgrades |
-| **Tech** ⌁ | Electronics caches, hacked terminals, Rogue kills | Powering gadgets: sensor grenade (10), optical camo (1 per 2 s), lock bypass (15) |
+| **Tech** ⌁ | Electronics caches, hacked terminals, Rogue kills | Powering gadgets: sensor grenade (10), optical camo (1 per 2 s), lock bypass (15 to 60, by door) |
 | **Intel** ▣ | Hacked terminals, Rogue kills | **XP.** Worth nothing until you upload it at your own stash (40 XP each, shared with nearby squadmates). Lost if you die carrying it. |
 | **Ammo** | Ammo boxes, Rogue kills, bags | Shooting |
 
@@ -312,7 +354,7 @@ So the loot loop is:
 | Player kill (+20 per victim level, +50 headshot) | 300+ |
 | Hack a terminal | 60 |
 | Upload intel | 40 each |
-| Breach a stash house (shoot or hack) | 150 / 120 |
+| Breach a stash house (shoot or hack; not while it's sealed) | 150 / 120 |
 | Your tag leads to a kill (assist) | 40 |
 | Build a gun or armor | 40 |
 | Squad share: nearby squadmates get 25% of your kill, hack and upload XP | — |

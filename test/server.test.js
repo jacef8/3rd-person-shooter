@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { generateMap } from '../shared/world.js';
-import { makeWeapon } from '../shared/items.js';
+import { makeWeapon, xpForLevel } from '../shared/items.js';
 
 const PORT = 18000 + Math.floor(Math.random() * 1000);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dz-'));
@@ -39,7 +39,7 @@ seed.houses[0] = { owner: TOK_A, ownerName: 'Alice', doorHp: 300, doorOpen: fals
 fs.writeFileSync(DATA_FILE, JSON.stringify(seed));
 
 function startServer() {
-  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT, DATA_FILE, BOTS: '0', DOOR_HP: '300' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT, DATA_FILE, BOTS: '0', DOOR_HP: '300', SHIELD_UNTIL_LEVEL: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
   return new Promise((resolve) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) resolve(proc); }));
 }
 
@@ -131,8 +131,9 @@ test('stash house breach, loot, PvP and persistence', async (t) => {
   assert.equal(bob.container.canPut, false);
   bob.send({ t: 'container', action: 'take', itemId: relic.id });
   await until(() => bob.you.inv.pack.some((i) => i.id === relic.id));
+  // One raid carries off a share: half of the 50 parts while Alice is around to defend.
   bob.send({ t: 'container', action: 'take', res: 'parts' });
-  await until(() => bob.you.parts === 50);
+  await until(() => bob.you.parts === 25);
   // The gunsmith only works at your own stash house.
   bob.send({ t: 'gunsmith', action: 'attach', itemId: relic.id, slot: 'muzzle', partId: 'compensator' });
   await until(() => bob.msgs.some((m) => m.t === 'toast' && /your stash house/.test(m.text)));
@@ -172,17 +173,17 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   houses[1] = { owner: TOK_E, ownerName: 'Eve', doorHp: 300, doorOpen: false, items: [makeWeapon('dmr')], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} };
   const h1 = map.houses[1], h2 = map.houses[2];
   houses[2] = { owner: TOK_G, ownerName: 'Grace', doorHp: 300, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} };
-  const lvl10 = 4000;
+  const lvl10 = xpForLevel(10);
   const frankKit = { primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] };
   const kit = () => ({ primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] });
   fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 9, size: 30000, houses, bags: [], characters: {
     [TOK_C]: character('Carol', tx, tz, kit(), { xp: lvl10, tech: 100 }),
     [TOK_D]: character('Dave', tx + 2, tz + 1, kit()),
     [TOK_E]: character('Eve', tx + 6, tz + 4, kit()),
-    [TOK_F]: character('Frank', h1.x, h1.door.maxZ + 1, frankKit, { xp: 9000, tech: 40, mags: { [frankKit.primary.id]: 30 } }),
+    [TOK_F]: character('Frank', h1.x, h1.door.maxZ + 1, frankKit, { xp: xpForLevel(10), tech: 40, mags: { [frankKit.primary.id]: 30 } }),
     [TOK_G]: character('Grace', h2.crate.x + 1, h2.crate.z + 1.2, kit(), { intel: 5 }),
   } }));
-  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT: PORT + 1, DATA_FILE: file, BOTS: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT: PORT + 1, DATA_FILE: file, BOTS: '0', SHIELD_UNTIL_LEVEL: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));
   await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));
   const conn = (name, token) => {

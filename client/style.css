@@ -328,3 +328,8 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
 #tradepanel .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 #tradepanel .item input, #ctTrade .item input, #ctTrade .item select { padding: 5px 6px; background: #11151a; color: #eee; border: 1px solid #333; margin-right: 4px; }
 #contactpanel section[hidden] { display: none; }
+
+/* Someone else's stash: the raid limit, on a solid panel. */
+.raidnote { margin: 6px 0 10px; padding: 10px 12px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-left: 4px solid var(--hud-accent); border-radius: 12px; color: var(--hud-ink); font-size: 15px; line-height: 1.4; }
+.raidnote b { display: block; margin-bottom: 2px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--hud-ink-2); }
+.gsentry .note { flex: 1 1 260px; font-size: 15px; color: var(--hud-ink); }

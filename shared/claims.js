@@ -33,3 +33,17 @@ export function homePerks(level) {
   };
 }
 export const HOME_LEVEL_TEXT = stash.homeLevelText;
+
+// ---------------------------------------------------------------- fair raids
+// Each home has a raid window its owner picks. While the home's whole crew is offline, the base
+// is sealed outside the window and takes reduced damage inside it. Numbers: stash.json "raids".
+export const RAIDS = stash.raids;
+const hourFmt = new Intl.DateTimeFormat('en-US', { timeZone: RAIDS.timeZone, hour: 'numeric', hourCycle: 'h23' });
+/** The hour (0-23) on the county clock. */
+export function countyHour(now = Date.now()) { return Number(hourFmt.format(now)) % 24; }
+/** Is a window that starts at `start` (county hour) open at `now`? */
+export function windowOpen(start, now = Date.now()) { return (countyHour(now) - start + 24) % 24 < RAIDS.windowHours; }
+/** "7 pm", "12 am". */
+export function hourLabel(h) { h = ((h % 24) + 24) % 24; return `${h % 12 || 12} ${h < 12 ? 'am' : 'pm'}`; }
+/** "7 pm to 11 pm". */
+export function windowText(start) { return `${hourLabel(start)} to ${hourLabel(start + RAIDS.windowHours)}`; }
