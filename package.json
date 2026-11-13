@@ -1,0 +1,16 @@
+{
+  "name": "deadzone-looter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prototype third-person looter shooter with a persistent, always-PvP shared world and raidable stash houses.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "three": "^0.187.0",
+    "ws": "^8.23.0"
+  }
+}

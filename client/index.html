@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Deadzone — persistent looter shooter prototype</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script type="importmap">{ "imports": { "three": "/vendor/three.module.js" } }</script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="login" class="panel center">
+    <h1>DEADZONE</h1>
+    <p class="sub">One persistent city. Always PvP. Your stash house stays in the world when you log off — and anyone can breach it.</p>
+    <input id="name" maxlength="16" placeholder="Callsign" autocomplete="off" />
+    <button id="join">Enter the zone</button>
+    <div class="controls">
+      <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
+      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory
+    </div>
+  </div>
+
+  <div id="hud" hidden>
+    <div id="feed"></div>
+    <canvas id="minimap" width="200" height="200"></canvas>
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+    <div id="prompt"></div>
+    <div id="toasts"></div>
+    <div id="vitals">
+      <div class="bar"><div id="armorbar" class="fill armor"></div><span id="armortext"></span></div>
+      <div class="bar"><div id="hpbar" class="fill hp"></div><span id="hptext"></span></div>
+    </div>
+    <div id="weapon">
+      <div id="wname"></div>
+      <div id="wammo"><span id="mag">0</span><small> / <span id="reserve">0</span></small></div>
+      <div id="wextra"></div>
+    </div>
+    <div id="housestatus"></div>
+    <div id="dmgnums"></div>
+  </div>
+
+  <div id="inventory" class="panel" hidden>
+    <div class="cols">
+      <section>
+        <h2>Equipped</h2>
+        <div id="equipped"></div>
+        <h2>Backpack <small id="packcount"></small></h2>
+        <div id="pack"></div>
+      </section>
+      <section id="containerCol" hidden>
+        <h2 id="containerTitle"></h2>
+        <div id="container"></div>
+      </section>
+    </div>
+    <div class="hint">Tab / Esc to close</div>
+  </div>
+
+  <div id="death" class="panel center" hidden>
+    <h1>DOWN</h1>
+    <p id="deathby"></p>
+    <p class="sub">Everything you carried is in a bag where you fell. Anyone can take it — including whoever killed you.</p>
+    <button id="respawn">Redeploy</button>
+  </div>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
