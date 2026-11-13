@@ -47,7 +47,47 @@ each other. Options are environment variables: `PORT`, `SEED` (map), `BOTS` (rog
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
 H medkit · Tab inventory · F tag · G sensor grenade · V optical camo · T rally (squad leader) ·
-B squad ping · P squad panel and leaderboard. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
+B squad ping · P squad panel and leaderboard (controller layout below). Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
+
+## Playing on a phone with a Backbone One (or any controller)
+
+The game supports controllers through the browser's standard gamepad layout. That's how a
+Backbone One shows up on iPhone (Safari) and Android (Chrome). Every screen works from the
+controller: login, gameplay, inventory, stash, gunsmith (highlighting an attachment previews it),
+squad panel and the death screen. On phones the game also uses a lighter graphics setting and a
+smaller HUD for landscape.
+
+| Control | Gameplay | Menus |
+| --- | --- | --- |
+| Left stick | Move (analog: tilt less to walk slower) | Move highlight |
+| Right stick | Look (slows down slightly over enemies, and while aiming) | Scroll |
+| L3 (click left stick) | Sprint (toggle) | |
+| RT / LT | Fire / aim down sights | |
+| A | Interact: loot, doors, stash, hack terminals | Select |
+| B | Crouch | Back |
+| X / Y | Reload / swap weapon | Y: gunsmith exploded view |
+| RB / LB | Tag target / sensor grenade | |
+| R3 (click right stick) | Optical camo | |
+| D-pad ▲ ▼ ◀ ▶ | Medkit · squad ping · Rally (leader) · squad panel | Move highlight |
+| View (⧉) / Menu (☰) | Inventory / squad panel | |
+
+On-screen prompts switch to controller buttons as soon as you use the controller.
+
+**Phones need HTTPS.** Browsers only let web pages read controllers on secure (HTTPS) pages, and
+`localhost` counts as secure. A phone opening `http://192.168.x.x:8080` won't see the controller.
+Choose one:
+
+- **Host it** anywhere that gives you an HTTPS URL. A real online game needs this anyway.
+- **Local Wi-Fi testing** with a self-signed certificate:
+  ```bash
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout data/key.pem -out data/cert.pem -days 365 -subj "/CN=deadzone.local"
+  TLS_CERT=data/cert.pem TLS_KEY=data/key.pem npm start
+  ```
+  On the phone, open `https://<your-computer's-LAN-IP>:8080` and accept the certificate warning.
+  (Safari: Show Details → visit this website.)
+
+Then press any button on the controller; browsers only expose a controller after a button press.
+For full screen on iPhone, use Share → **Add to Home Screen** and launch it from there.
 
 ## Tests
 

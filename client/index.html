@@ -2,7 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0b0d10" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
   <title>Deadzone — persistent looter shooter prototype</title>
   <link rel="stylesheet" href="/style.css" />
   <script type="importmap">{ "imports": { "three": "/vendor/three.module.js" } }</script>
@@ -15,7 +22,8 @@
     <p class="sub">One persistent city. Always PvP. Your stash house stays in the world when you log off — and anyone can breach it.</p>
     <input id="name" maxlength="16" placeholder="Callsign" autocomplete="off" />
     <button id="join">Enter the zone</button>
-    <div class="controls">
+    <div id="padhint" class="controls"></div>
+    <div class="controls kbonly">
       <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
       <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory · <b>P</b> squad &amp; leaderboard<br />
       <b>F</b> tag · <b>G</b> sensor grenade · <b>V</b> optical camo · <b>T</b> rally (leader) · <b>B</b> squad ping<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
@@ -61,7 +69,7 @@
         <div id="container"></div>
       </section>
     </div>
-    <div class="hint">Tab / Esc to close</div>
+    <div class="hint"><span class="kbonly">Tab / Esc to close</span><span class="padonly">Ⓑ back · View (⧉) closes</span></div>
   </div>
 
   <div id="gunsmith" class="panel" hidden>
@@ -85,7 +93,7 @@
         <div id="gsOptions"></div>
       </aside>
     </div>
-    <div class="hint">Hover an option to preview it · Esc to go back</div>
+    <div class="hint"><span class="kbonly">Hover an option to preview it · Esc to go back</span><span class="padonly">Highlight an option to preview it · Ⓐ apply · Ⓨ exploded view · Ⓑ back · right stick scrolls</span></div>
   </div>
 
   <div id="squadpanel" class="panel" hidden>
@@ -105,7 +113,7 @@
         Squadmates share XP (25% within 50 m), see each other's tags and sensor reveals, can't hurt each other, and can open each other's stash houses.</div>
       </section>
     </div>
-    <div class="hint">P / Esc to close</div>
+    <div class="hint"><span class="kbonly">P / Esc to close</span><span class="padonly">Ⓑ back</span></div>
   </div>
 
   <div id="death" class="panel center" hidden>

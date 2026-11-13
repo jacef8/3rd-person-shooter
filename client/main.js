@@ -13,18 +13,20 @@ const $ = (id) => document.getElementById(id);
 
 // ------------------------------------------------------------------ renderer / scene
 const canvas = $('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// Phones/tablets (touch-first devices) get a lighter render profile.
+const MOBILE = matchMedia('(pointer: coarse)').matches;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !MOBILE, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, MOBILE ? 1.25 : 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9aa4ad);
-scene.fog = new THREE.Fog(0x9aa4ad, 60, 230);
+scene.fog = new THREE.Fog(0x9aa4ad, MOBILE ? 45 : 60, MOBILE ? 170 : 230);
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 600);
 scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 1.1));
 const sun = new THREE.DirectionalLight(0xfff1dc, 1.6);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 70, bottom: -70, near: 1, far: 220 });
 scene.add(sun, sun.target);
 
@@ -383,7 +385,7 @@ function handle(m) {
       $('login').hidden = true; $('hud').hidden = false;
       if (m.houseId !== null) toast(`Your stash house is marked green on the minimap. It stays in the world while you're offline.`);
       else toast('All stash houses are claimed — survive and take one by force… (claim when an owner is freed)');
-      canvas.requestPointerLock?.();
+      lockPointer();
       break;
     case 'snap': {
       for (const p of m.players) {
@@ -836,18 +838,58 @@ function levelBanner(level, unlocks) {
 }
 
 // ------------------------------------------------------------------ input
+function lockPointer() {
+  if (MOBILE || state.inputMode === 'pad') return;
+  try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* not supported */ }
+}
+
+/** One place for every gameplay action, shared by keyboard and controller. */
+function doAction(a) {
+  if (!state.me) return;
+  switch (a) {
+    case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
+    case 'inventory':
+      if (state.me.dead) return;
+      if (state.invOpen) { state.gunsmithOpen = false; $('gunsmith').hidden = true; closeInventory(); lockPointer(); } else openInventory();
+      return;
+  }
+  if (state.me.dead || state.invOpen || state.panelOpen) return;
+  switch (a) {
+    case 'interact': send({ t: 'interact' }); break;
+    case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
+    case 'sensor': { const p = aimPoint(); send({ t: 'sensor', x: p.x, z: p.z }); break; }
+    case 'camo': send({ t: 'camo' }); break;
+    case 'rally': send({ t: 'rally' }); break;
+    case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
+    case 'reload': send({ t: 'reload' }); break;
+    case 'swap': send({ t: 'swap' }); break;
+    case 'heal': send({ t: 'inv', action: 'use' }); break;
+    case 'crouch': state.crouch = !state.crouch; break;
+  }
+}
 $('join').onclick = () => {
   const name = $('name').value.trim() || 'Agent';
   localStorage.setItem('dz_name', name);
   connect(name);
 };
 $('name').value = localStorage.getItem('dz_name') || '';
+{
+  // Login-screen controller help. Gamepads only exist on HTTPS/localhost pages.
+  const hint = $('padhint');
+  if (!window.isSecureContext) {
+    hint.innerHTML = '<b style="color:#ff8a2a">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
+  } else {
+    hint.innerHTML = '🎮 <b>Controller:</b> press any button on your Backbone One / gamepad. D-pad + A to pick Join.';
+  }
+  if (MOBILE) document.body.classList.add('mobile');
+}
 $('name').onkeydown = (e) => { if (e.key === 'Enter') $('join').click(); };
-$('respawn').onclick = () => { send({ t: 'respawn' }); $('death').hidden = true; canvas.requestPointerLock?.(); };
+$('respawn').onclick = () => { send({ t: 'respawn' }); $('death').hidden = true; lockPointer(); };
 
-canvas.addEventListener('click', () => { if (state.me && !state.invOpen && !state.me.dead) canvas.requestPointerLock?.(); });
+canvas.addEventListener('click', () => { if (state.me && !state.invOpen && !state.me.dead) lockPointer(); });
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return;
+  setInputMode('kb');
   const sens = state.aiming ? 0.0022 * camera.fov / 70 : 0.0022;
   state.yaw -= e.movementX * sens;
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - e.movementY * sens));
@@ -862,34 +904,21 @@ addEventListener('mouseup', (e) => {
   if (e.button === 2) state.aiming = false;
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
+const KEY_ACTIONS = {
+  KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
+  KeyQ: 'swap', Digit1: 'swap', Digit2: 'swap', KeyH: 'heal', KeyC: 'crouch', ControlLeft: 'crouch',
+};
 addEventListener('keydown', (e) => {
   if (document.activeElement === $('name')) return;
-  if (e.code === 'KeyP') {
-    if (!state.me) return;
-    if (state.panelOpen) closeSquadPanel(); else openSquadPanel();
-    return;
-  }
+  setInputMode('kb');
+  if (e.code === 'KeyP') { doAction('squadPanel'); return; }
   if (e.code === 'Escape' && state.panelOpen) { closeSquadPanel(); return; }
-  if (e.code === 'Tab' || e.code === 'KeyI') {
-    e.preventDefault();
-    if (!state.me || state.me.dead) return;
-    if (state.invOpen) { state.gunsmithOpen = false; $('gunsmith').hidden = true; closeInventory(); canvas.requestPointerLock?.(); } else openInventory();
-    return;
-  }
+  if (e.code === 'Tab' || e.code === 'KeyI') { e.preventDefault(); doAction('inventory'); return; }
   if (e.code === 'Escape' && state.gunsmithOpen) { closeGunsmith(); return; }
   if (e.code === 'Escape' && state.invOpen) { closeInventory(); return; }
   state.keys.add(e.code);
   if (e.repeat) return;
-  if (e.code === 'KeyE') send({ t: 'interact' });
-  if (e.code === 'KeyF' && state.aimTargetId) send({ t: 'mark', id: state.aimTargetId });
-  if (e.code === 'KeyG') { const p = aimPoint(); send({ t: 'sensor', x: p.x, z: p.z }); }
-  if (e.code === 'KeyV') send({ t: 'camo' });
-  if (e.code === 'KeyT') send({ t: 'rally' });
-  if (e.code === 'KeyB') { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); }
-  if (e.code === 'KeyR') send({ t: 'reload' });
-  if (e.code === 'KeyQ' || e.code === 'Digit1' || e.code === 'Digit2') send({ t: 'swap' });
-  if (e.code === 'KeyH') send({ t: 'inv', action: 'use' });
-  if (e.code === 'KeyC' || e.code === 'ControlLeft') state.crouch = !state.crouch;
+  if (KEY_ACTIONS[e.code]) doAction(KEY_ACTIONS[e.code]);
 });
 addEventListener('keyup', (e) => state.keys.delete(e.code));
 addEventListener('blur', () => { state.keys.clear(); state.mouseDown = false; state.aiming = false; });
@@ -1041,7 +1070,7 @@ function updateGadgetBar() {
     ['T', 'Rally', GADGETS.rally.level, !leader ? 'notleader' : me.rallyReadyAt > now ? 'cooldown' : ''],
     ['B', 'Ping', 1, state.squad.id ? '' : 'notleader'],
   ];
-  $('gadgets').innerHTML = items.map(([k, name, lv, st]) => `<div class="gadget ${lvl < lv ? 'locked' : st}"><kbd>${k}</kbd>${name}${lvl < lv ? `<small>LVL ${lv}</small>` : ''}</div>`).join('') +
+  $('gadgets').innerHTML = items.map(([k, name, lv, st]) => `<div class="gadget ${lvl < lv ? 'locked' : st}"><kbd>${glyph(k)}</kbd>${name}${lvl < lv ? `<small>LVL ${lv}</small>` : ''}</div>`).join('') +
     (me.buffUntil > now ? '<div class="gadget on"><kbd>★</kbd>Rallied</div>' : '');
 }
 setInterval(updateGadgetBar, 1000);
@@ -1056,7 +1085,7 @@ function openSquadPanel() {
 function closeSquadPanel() {
   state.panelOpen = false;
   $('squadpanel').hidden = true;
-  canvas.requestPointerLock?.();
+  lockPointer();
 }
 
 function btn(label, fn, cls = 'ghost') {
@@ -1102,12 +1131,158 @@ function renderSquadPanel() {
     (state.leaderboard || []).map((r, i) => `<tr class="${r.online ? 'online' : ''}"><td>${i + 1}</td><td>${r.name}</td><td>${r.level}</td><td>${r.xp}</td><td>${r.kills}</td></tr>`).join('');
 }
 
+// ------------------------------------------------------------------ controller (Backbone One / any standard gamepad)
+// Uses the browser Gamepad API "standard" layout, which is what the Backbone One reports on
+// iPhone (MFi) and Android. Note: browsers only expose gamepads on HTTPS (or localhost) pages,
+// and only after a button has been pressed.
+const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, L3: 10, R3: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
+const PAD_ACTIONS = {
+  [BTN.A]: 'interact', [BTN.B]: 'crouch', [BTN.X]: 'reload', [BTN.Y]: 'swap', [BTN.LB]: 'sensor', [BTN.RB]: 'tag',
+  [BTN.R3]: 'camo', [BTN.UP]: 'heal', [BTN.DOWN]: 'ping', [BTN.LEFT]: 'rally', [BTN.RIGHT]: 'squadPanel',
+  [BTN.VIEW]: 'inventory', [BTN.MENU]: 'squadPanel',
+};
+const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: '▶' };
+const pad = { prev: [], moveX: 0, moveY: 0, sprint: false, navAt: 0, settings: { lookSpeed: 2.6, invertY: false } };
+function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : k; }
+
+function setInputMode(m) {
+  if (state.inputMode === m) return;
+  state.inputMode = m;
+  document.body.classList.toggle('pad', m === 'pad');
+  if (m === 'pad') document.exitPointerLock?.();
+  updateGadgetBar();
+}
+
+addEventListener('gamepadconnected', (e) => toast(`Controller connected: ${e.gamepad.id.split('(')[0].trim() || 'gamepad'}`));
+addEventListener('gamepaddisconnected', () => { toast('Controller disconnected'); pad.moveX = pad.moveY = 0; state.mouseDown = false; });
+
+function readPad() {
+  if (!navigator.getGamepads) return null;
+  for (const g of navigator.getGamepads()) if (g && g.connected) return g;
+  return null;
+}
+const deadzone = (v, d = 0.16) => (Math.abs(v) < d ? 0 : Math.sign(v) * (Math.abs(v) - d) / (1 - d));
+
+function topPanel() {
+  for (const id of ['death', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
+  return null;
+}
+function focusables(root) {
+  return [...root.querySelectorAll('button:not([disabled]), input')].filter((el) => el.offsetParent !== null);
+}
+function padFocus(el) {
+  const prev = document.activeElement;
+  if (prev && prev !== el) { prev.classList.remove('padfocus'); prev.dispatchEvent(new MouseEvent('mouseleave')); }
+  el.classList.add('padfocus');
+  el.focus({ preventScroll: true });
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  el.dispatchEvent(new MouseEvent('mouseenter'));   // drives gunsmith hover previews
+}
+/** Spatial menu navigation: move to the nearest control in the pushed direction. */
+function moveFocus(root, dx, dy) {
+  const list = focusables(root);
+  if (!list.length) return;
+  const cur = document.activeElement;
+  // Start on the first button rather than a text box, so the phone keyboard doesn't pop up.
+  if (!list.includes(cur)) return padFocus(list.find((el) => el.tagName === 'BUTTON') || list[0]);
+  const a = cur.getBoundingClientRect();
+  const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
+  let best = null, bestScore = Infinity;
+  for (const el of list) {
+    if (el === cur) continue;
+    const b = el.getBoundingClientRect();
+    const vx = b.left + b.width / 2 - ax, vy = b.top + b.height / 2 - ay;
+    const along = vx * dx + vy * dy;
+    if (along <= 4) continue;
+    const across = Math.abs(vx * dy - vy * dx);
+    const score = along + across * 2.5;
+    if (score < bestScore) { bestScore = score; best = el; }
+  }
+  // Nothing in that direction: step through controls in reading order instead.
+  if (!best) best = list[(list.indexOf(cur) + (dx + dy > 0 ? 1 : -1) + list.length) % list.length];
+  padFocus(best);
+}
+function padBack() {
+  if (state.gunsmithOpen) closeGunsmith();
+  else if (state.panelOpen) closeSquadPanel();
+  else if (state.invOpen) closeInventory();
+}
+
+function pollPad(dt, now) {
+  const g = readPad();
+  if (!g) { pad.moveX = pad.moveY = 0; return; }
+  const b = (i) => !!g.buttons[i]?.pressed;
+  const val = (i) => g.buttons[i]?.value ?? 0;
+  const just = (i) => b(i) && !pad.prev[i];
+  const ax = g.axes.map((v) => v ?? 0);
+  if (g.buttons.some((x) => x.pressed) || ax.some((v) => Math.abs(v) > 0.4)) setInputMode('pad');
+  if (state.inputMode !== 'pad') { pad.prev = g.buttons.map((x) => x.pressed); return; }
+
+  const panel = topPanel();
+  if (panel) {
+    // Menu mode: D-pad / left stick to move focus, A to select, B to go back, right stick scrolls.
+    pad.moveX = pad.moveY = 0;
+    state.mouseDown = false; state.aiming = false;
+    const sx = deadzone(ax[0], 0.5), sy = deadzone(ax[1], 0.5);
+    const dir = b(BTN.UP) || sy < 0 ? [0, -1] : b(BTN.DOWN) || sy > 0 ? [0, 1] : b(BTN.LEFT) || sx < 0 ? [-1, 0] : b(BTN.RIGHT) || sx > 0 ? [1, 0] : null;
+    const navPressed = [BTN.UP, BTN.DOWN, BTN.LEFT, BTN.RIGHT].some(just);
+    if (dir && (navPressed || now > pad.navAt)) { moveFocus(panel, dir[0], dir[1]); pad.navAt = now + (navPressed ? 380 : 160); }
+    if (!dir) pad.navAt = 0;
+    const scroller = panel.id === 'gunsmith' ? panel.querySelector('.gsgrid aside:last-child') : panel;
+    if (scroller) scroller.scrollTop += deadzone(ax[3]) * 600 * dt;
+    if (just(BTN.A)) {
+      const el = document.activeElement;
+      if (el && panel.contains(el) && el.tagName === 'BUTTON') {
+        const idx = focusables(panel).indexOf(el);
+        el.click();
+        // Panels re-render after most actions; put focus back where it was.
+        setTimeout(() => { const p = topPanel(); if (!p) return; const l = focusables(p); if (l.length && !l.includes(document.activeElement)) padFocus(l[Math.min(idx, l.length - 1)]); }, 150);
+      } else if (!el || !panel.contains(el)) moveFocus(panel, 0, 1);
+    }
+    if (just(BTN.B)) padBack();
+    if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
+    if (just(BTN.VIEW) && panel.id !== 'login' && panel.id !== 'death') doAction('inventory');
+    if (just(BTN.MENU) && panel.id !== 'login' && panel.id !== 'death') doAction('squadPanel');
+  } else if (state.me && !state.me.dead) {
+    // Gameplay.
+    pad.moveX = deadzone(ax[0]);
+    pad.moveY = -deadzone(ax[1]);
+    if (just(BTN.L3)) pad.sprint = !pad.sprint;
+    if (Math.hypot(pad.moveX, pad.moveY) < 0.2) pad.sprint = false;
+    // Look: response curve for fine aim, slower while aiming down sights, light aim slowdown over targets.
+    aimPoint();
+    const curve = (v) => Math.sign(v) * Math.abs(v) ** 1.8;
+    const lx = curve(deadzone(ax[2], 0.12)), ly = curve(deadzone(ax[3], 0.12));
+    const zoomScale = state.aiming ? camera.fov / 70 : 1;
+    const slow = state.aimTargetId ? 0.5 : 1;
+    const speed = pad.settings.lookSpeed * zoomScale * slow;
+    state.yaw -= lx * speed * dt;
+    state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - ly * speed * 0.75 * dt * (pad.settings.invertY ? -1 : 1)));
+    state.aiming = val(BTN.LT) > 0.35;
+    const firing = val(BTN.RT) > 0.35;
+    if (firing && !state.mouseDown) state.firedThisPress = false;
+    state.mouseDown = firing;
+    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (just(Number(i))) doAction(action);
+  } else if (state.me?.dead && just(BTN.A)) {
+    $('respawn').click();
+  }
+  pad.prev = g.buttons.map((x) => x.pressed);
+}
+
+// Panels opened by controller get an initial focus so A works immediately.
+new MutationObserver(() => {
+  if (state.inputMode !== 'pad') return;
+  const p = topPanel();
+  if (p && !p.contains(document.activeElement)) { const l = focusables(p); if (l.length) padFocus(l.find((el) => el.tagName === 'BUTTON') || l[0]); }
+}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
+
 // ------------------------------------------------------------------ main loop
 let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  pollPad(dt, now);   // also drives the login and death screens
   if (!state.map) { renderer.render(scene, camera); return; }
   const me = state.me;
   const alive = me && !me.dead;
@@ -1117,7 +1292,8 @@ function frame(now) {
     const k = state.keys;
     const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
-    state.sprint = k.has('ShiftLeft') && f > 0 && !state.aiming;
+    const pf = f + pad.moveY, pr = r + pad.moveX;
+    state.sprint = (k.has('ShiftLeft') || pad.sprint) && pf > 0.3 && !state.aiming;
     if (state.sprint) state.crouch = false;
     // Mobility comes from the active weapon build and the armor you wear.
     const ws = weaponStats(me.inv[me.active]);
@@ -1125,10 +1301,10 @@ function frame(now) {
     const speed = (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
     const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
     const rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
-    let mx = fx * f + rx * r, mz = fz * f + rz * r;
+    let mx = fx * pf + rx * pr, mz = fz * pf + rz * pr;
     const len = Math.hypot(mx, mz);
-    if (len > 0) {
-      mx /= len; mz /= len;
+    if (len > 0.05) {
+      if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
       const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solids());
       state.x = p.x; state.z = p.z;
     }
@@ -1187,7 +1363,7 @@ function frame(now) {
   }
 
   const prompt = alive && !state.invOpen ? nearestInteractable() : null;
-  $('prompt').innerHTML = prompt ? `<kbd>E</kbd>${prompt}` : '';
+  $('prompt').innerHTML = prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : '';
   drawMinimap();
   renderer.render(scene, camera);
   drawGunsmith(dt);

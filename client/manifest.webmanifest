@@ -1,0 +1,11 @@
+{
+  "name": "Deadzone",
+  "short_name": "Deadzone",
+  "description": "Persistent always-PvP third-person shooter prototype",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

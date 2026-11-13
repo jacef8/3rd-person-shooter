@@ -5,6 +5,7 @@
 //   so the world keeps existing while players are offline — including their stash houses.
 
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -978,13 +979,17 @@ function handleRespawn(p) {
 }
 
 // ---------------------------------------------------------------- http + ws
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml' };
+// Phones need HTTPS for controller (Gamepad API) access. Set TLS_CERT and TLS_KEY to serve HTTPS directly,
+// or put the server behind any HTTPS host/tunnel.
+const TLS = process.env.TLS_CERT && process.env.TLS_KEY
+  ? { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) } : null;
 const STATIC = [
   ['/vendor/', path.join(ROOT, 'node_modules', 'three', 'build')],
   ['/shared/', path.join(ROOT, 'shared')],
   ['/', path.join(ROOT, 'client')],
 ];
-const server = http.createServer((req, res) => {
+const handler = (req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
   for (const [prefix, dir] of STATIC) {
     if (!url.startsWith(prefix)) continue;
@@ -998,7 +1003,8 @@ const server = http.createServer((req, res) => {
     });
   }
   res.writeHead(404); res.end('Not found');
-});
+};
+const server = TLS ? https.createServer(TLS, handler) : http.createServer(handler);
 
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 wss.on('connection', (ws) => {
@@ -1119,4 +1125,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 refillLoot(Date.now());
-server.listen(PORT, () => console.log(`Deadzone server on http://localhost:${PORT}  (seed ${SEED}, ${map.houses.length} stash houses, ${BOT_COUNT} rogues)`));
+server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${map.houses.length} stash houses, ${BOT_COUNT} rogues)`));

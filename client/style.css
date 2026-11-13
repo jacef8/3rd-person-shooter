@@ -132,3 +132,44 @@ body.cloaked #hud::after { content: ''; position: absolute; inset: 0; box-shadow
 #sqBoard th { text-align: left; color: #889; font-weight: 600; border-bottom: 1px solid #333; padding: 4px; }
 #sqBoard td { padding: 4px; border-bottom: 1px solid #1f2329; }
 #sqBoard tr.online td:nth-child(2)::after { content: ' ●'; color: #5fd35f; font-size: 9px; }
+
+/* ---------------------------------------------------------------- controller + phone */
+.padfocus { outline: 2px solid #ffc53d !important; outline-offset: 1px; box-shadow: 0 0 0 4px rgba(255, 197, 61, 0.25); }
+button:focus { outline: none; }
+body.pad .kbonly { display: none; }
+body.pad #prompt kbd, body.pad .gadget kbd { border-radius: 10px; min-width: 20px; text-align: center; }
+html, body { touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+input { -webkit-user-select: text; user-select: text; }
+#hud { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+/* Phone in landscape (e.g. iPhone in a Backbone One): shrink the HUD and let panels fill the screen. */
+@media (max-height: 520px) {
+  #minimap { width: 110px; height: 110px; top: 8px; right: calc(8px + env(safe-area-inset-right)); }
+  #housestatus { top: 122px; right: calc(8px + env(safe-area-inset-right)); width: 110px; font-size: 10px; }
+  #feed { font-size: 10px; top: 6px; left: calc(8px + env(safe-area-inset-left)); }
+  #vitals { width: 190px; bottom: 10px; left: calc(10px + env(safe-area-inset-left)); }
+  .bar { height: 10px; } .bar span { font-size: 8px; line-height: 10px; }
+  #weapon { bottom: 10px; right: calc(10px + env(safe-area-inset-right)); }
+  #wname { font-size: 12px; } #wammo { font-size: 26px; } #wammo small { font-size: 13px; } #wextra { font-size: 10px; }
+  #resources { bottom: 64px; right: calc(10px + env(safe-area-inset-right)); font-size: 10px; gap: 8px; }
+  #gadgets { bottom: 8px; gap: 3px; } .gadget { min-width: 42px; font-size: 9px; padding: 2px 4px; }
+  #xpfeed { bottom: 70px; font-size: 10px; left: calc(10px + env(safe-area-inset-left)); }
+  #prompt { font-size: 12px; } #toasts div { font-size: 12px; padding: 4px 10px; }
+  #levelup { top: 18%; } #levelup h2 { font-size: 16px; }
+  .panel { padding: 12px 14px; }
+  .panel.center { width: min(560px, 94vw); max-height: 94vh; overflow: auto; }
+  .panel h1 { font-size: 22px; } .sub, .controls { font-size: 11px; }
+  #inventory, #squadpanel { width: 96vw; max-height: 94vh; }
+  #inventory h2, #squadpanel h2 { font-size: 11px; margin: 6px 0 4px; }
+  .item { padding: 4px 8px; } .item .nm { font-size: 12px; } .item .st, .item .at { font-size: 10px; }
+  #gunsmith { inset: 2vh 2vw; padding: 8px 12px; }
+  #gunsmith header h2 { font-size: 14px; } #gunsmith header #gsParts { font-size: 10px; }
+  .gsgrid { grid-template-columns: 170px 1fr 190px; gap: 10px; }
+  #gunsmith h3 { margin: 6px 0 4px; font-size: 9px; }
+  .gsweapon, .gsslot, .gsopt { padding: 4px 8px; font-size: 11px; margin-bottom: 3px; }
+  #gsview { min-height: 110px; }
+  #gsNumbers { font-size: 10px; margin: 4px 0; }
+  .statrow { font-size: 9px; margin: 1px 0; grid-template-columns: 62px 1fr; } .sbar { height: 6px; }
+  .bprow { font-size: 10px; padding: 2px 0; }
+}
+.padonly { display: none; } body.pad .padonly { display: inline; }
