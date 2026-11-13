@@ -16,6 +16,14 @@ A prototype **third-person looter shooter** set in one **persistent, always-PvP 
   or steal them from stashes. You spend them to build new guns and armor from the blueprints you've
   unlocked. Swapping attachments is free. Guns are physical items, so you can lose them, loot them
   and stash them. Your level and unlocks can never be taken from you.
+- **Tech, Future Soldier-style.** Tag targets for your squad (F), sensor grenades that reveal
+  everyone nearby, cloaked players included (G), optical camo (V), hack data terminals for intel and tech
+  (E), and at higher levels hack enemy stash locks silently.
+- **Squads and leadership, Division-style.** Squads of up to 4 with no friendly fire, shared tags and
+  sensor reveals, shared XP and shared stash access. The leader sets the squad objective with a ping
+  and can Rally the squad. A server leaderboard ranks everyone (P).
+- **What loot is for:** parts build guns and armor, tech powers gadgets, and intel is XP, but only
+  once you get it home to your stash. See [docs/DESIGN.md](docs/DESIGN.md) for the full loop.
 - Combat: headshots, damage falloff, armor that regenerates out of combat, crouch behind cover.
 - Open-world rules: no safe zones, no instancing. When you die, everything you carried drops in a bag
   anyone can loot. When you log off, your character stays where you stood.
@@ -23,7 +31,7 @@ A prototype **third-person looter shooter** set in one **persistent, always-PvP 
   Its door can be shot down by anyone, at any time, **including while you're offline**. Once it's
   breached, anyone can walk in and empty your stash. Owners get alerts while online, must rebuild a
   breached door by hand, and an intact door slowly repairs itself.
-- AI "Rogues" patrol the city, fight anyone they see, and drop parts and ammo.
+- AI "Rogues" patrol the city, fight anyone they see, and drop parts, tech, intel and ammo.
 
 ## Run it
 
@@ -38,7 +46,8 @@ each other. Options are environment variables: `PORT`, `SEED` (map), `BOTS` (rog
 
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
-H medkit · Tab inventory. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
+H medkit · Tab inventory · F tag · G sensor grenade · V optical camo · T rally (squad leader) ·
+B squad ping · P squad panel and leaderboard. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
 
 ## Tests
 

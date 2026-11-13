@@ -38,6 +38,7 @@ export function generateMap(seed = 1337) {
   const houses = [];
   const lootSpawns = [];
   const playerSpawns = [];
+  const terminals = [];
 
   const BLOCK = 30;
   const STREET = 12;
@@ -104,6 +105,12 @@ export function generateMap(seed = 1337) {
         playerSpawns.push({ x: cx, z: cz });
       } else {
         // Solid buildings: split the block into 1–3 towers with an alley.
+        // Every other building block gets a hackable data terminal on its street-facing (+Z) wall.
+        if ((i + j) % 2 === 0) {
+          const tx = x0 + 6;
+          boxes.push(box(tx - 0.4, z1 - 1, tx + 0.4, z1 - 0.65, 1.5, 'terminal', { terminalId: terminals.length }));
+          terminals.push({ id: terminals.length, x: tx, z: z1 - 0.65 });
+        }
         const split = rand();
         const tall = () => 6 + rand() * 22;
         if (split < 0.33) {
@@ -158,6 +165,7 @@ export function generateMap(seed = 1337) {
     houses,
     lootSpawns: lootSpawns.filter(free),
     playerSpawns: playerSpawns.filter(free),
+    terminals,
   };
 }
 

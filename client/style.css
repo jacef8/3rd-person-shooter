@@ -105,3 +105,30 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 .bprow { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #1f2329; }
 .bprow.locked span { color: #666; }
 .bprow button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+#markers .marker { position: absolute; transform: translate(-50%, -50%); font-size: 12px; font-weight: 700; white-space: nowrap; text-shadow: 0 0 3px #000; }
+.marker.tag { color: #ff3b3b; }
+.marker.sensed { color: #ff9b21; font-size: 16px; }
+.marker.squad { color: #7dff9a; font-size: 11px; }
+.marker.ping { color: #fff; }
+.marker.objective { color: #ffc53d; font-size: 13px; }
+.marker.alert { color: #ff3b3b; font-size: 22px; }
+#hackbar { position: absolute; top: calc(50% + 70px); left: 50%; transform: translateX(-50%); width: 260px; text-align: center; font-size: 11px; letter-spacing: 0.15em; color: #16c2ff; text-shadow: 0 0 3px #000; }
+#hackbar div { height: 6px; background: rgba(0,0,0,0.6); margin-top: 4px; border: 1px solid #16c2ff66; }
+#hackbar i { display: block; height: 100%; background: #16c2ff; }
+#gadgets { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+.gadget { background: rgba(0,0,0,0.55); border: 1px solid #333; padding: 4px 8px; font-size: 11px; display: flex; flex-direction: column; align-items: center; min-width: 58px; }
+.gadget kbd { background: #2a2e35; padding: 0 5px; border-radius: 2px; margin-bottom: 2px; font-weight: 700; }
+.gadget small { color: #888; font-size: 9px; }
+.gadget.locked, .gadget.notleader { opacity: 0.35; }
+.gadget.cooldown, .gadget.notech { opacity: 0.55; border-color: #552; }
+.gadget.on { border-color: #16c2ff; color: #16c2ff; }
+#resources { position: absolute; bottom: 92px; right: 24px; font-size: 12px; display: flex; gap: 12px; text-shadow: 0 0 3px #000; color: #ddd; }
+body.cloaked #hud::after { content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(22, 194, 255, 0.35); pointer-events: none; }
+#squadpanel { top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(980px, 96vw); max-height: 88vh; overflow: auto; }
+#squadpanel .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+#squadpanel h2 { font-size: 14px; letter-spacing: 0.15em; text-transform: uppercase; color: #ff8a2a; margin: 10px 0 6px; }
+#sqBoard { width: 100%; border-collapse: collapse; font-size: 12px; }
+#sqBoard th { text-align: left; color: #889; font-weight: 600; border-bottom: 1px solid #333; padding: 4px; }
+#sqBoard td { padding: 4px; border-bottom: 1px solid #1f2329; }
+#sqBoard tr.online td:nth-child(2)::after { content: ' ●'; color: #5fd35f; font-size: 9px; }

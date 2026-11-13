@@ -23,12 +23,28 @@ export function levelFromXp(xp) {
 
 export const XP = {
   rogueKill: 100,
+  hackTerminal: 60,
+  hackDoor: 120,
+  intelBanked: 40,         // per intel drive banked at your stash (carrying it is the risk)
+  markAssist: 40,
+  squadShare: 0.25,        // squadmates nearby get this share of your kill/bank XP
   playerKill: 300,         // + 20 per level of the victim
   headshotKill: 50,
   breach: 150,
   survivalPerMinute: 25,   // time alive in the zone counts — you level just by playing
   pickup: 5,
   build: 40,
+};
+
+// ------------------------------------------------------------------ tech (gadgets)
+// Tech costs "tech" (electronics) — the resource that powers gadgets.
+export const GADGETS = {
+  mark:     { name: 'Target Tagging',   level: 1,  cost: 0,  key: 'F', desc: 'Tag the enemy under your crosshair; your squad sees them through walls for 8s.' },
+  hack:     { name: 'Terminal Hacking', level: 1,  cost: 0,  key: 'E', desc: 'Hack data terminals for intel and tech. Stand still for 5s.' },
+  sensor:   { name: 'Sensor Grenade',   level: 2,  cost: 10, key: 'G', desc: 'Reveals everyone within 18m of where it lands to your squad for 10s — including cloaked players.' },
+  camo:     { name: 'Optical Camo',     level: 4,  cost: 1,  key: 'V', desc: 'Near-invisible while crouched or moving slowly. Drains 1 tech every 2s. Firing or taking damage breaks it.' },
+  doorHack: { name: 'Lock Bypass',      level: 8,  cost: 15, key: 'E', desc: 'Silently hack open a locked stash house door (8s). The owner is alerted.' },
+  rally:    { name: 'Rally (squad leader)', level: 5, cost: 0, key: 'T', desc: 'Leader only: restores 50% armor and gives +20% damage for 10s to squadmates within 30m. 90s cooldown.' },
 };
 
 // ------------------------------------------------------------------ weapons
@@ -130,12 +146,17 @@ export function makeConsumable(kind) {
 
 /** Fixed (non-random) world supplies: what you find is resources, not stat-rolled gear. */
 export function worldSupply(index) {
-  const k = index % 5;
+  const k = index % 6;
   if (k === 0 || k === 3) return { kind: 'parts', name: 'Parts Cache', amount: 15 };
   if (k === 1) return { kind: 'ammo', name: 'Ammo Box', amount: 60 };
   if (k === 2) return { kind: 'medkit', name: 'Medkit' };
+  if (k === 4) return { kind: 'tech', name: 'Electronics', amount: 8 };
   return { kind: 'parts', name: 'Parts Cache', amount: 10 };
 }
+
+/** What a successful terminal hack pays out. */
+export const TERMINAL_REWARD = { intel: 3, tech: 10 };
+export const TERMINAL_COOLDOWN_MS = 3 * 60_000;
 
 export function partFits(partId, archetype) {
   const part = PARTS[partId];
@@ -180,6 +201,7 @@ export function unlocksAt(level) {
   for (const [k, p] of Object.entries(PARTS)) if (p.level === level && p.level > 1) out.push({ type: 'part', id: k, name: p.name });
   for (const [k, p] of Object.entries(PAINTS)) if (p.level === level && p.level > 1) out.push({ type: 'paint', id: k, name: `${p.name} paint` });
   for (const [k, a] of Object.entries(ARMORS)) if (a.level === level && a.level > 1) out.push({ type: 'armor', id: k, name: a.name });
+  for (const [k, g] of Object.entries(GADGETS)) if (g.level === level && g.level > 1) out.push({ type: 'gadget', id: k, name: g.name });
   return out;
 }
 

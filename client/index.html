@@ -17,7 +17,8 @@
     <button id="join">Enter the zone</button>
     <div class="controls">
       <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
-      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
+      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory · <b>P</b> squad &amp; leaderboard<br />
+      <b>F</b> tag · <b>G</b> sensor grenade · <b>V</b> optical camo · <b>T</b> rally (leader) · <b>B</b> squad ping<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
     </div>
   </div>
 
@@ -41,6 +42,10 @@
     </div>
     <div id="housestatus"></div>
     <div id="dmgnums"></div>
+    <div id="markers"></div>
+    <div id="hackbar" hidden><span></span><div><i></i></div></div>
+    <div id="gadgets"></div>
+    <div id="resources"></div>
   </div>
 
   <div id="inventory" class="panel" hidden>
@@ -81,6 +86,26 @@
       </aside>
     </div>
     <div class="hint">Hover an option to preview it · Esc to go back</div>
+  </div>
+
+  <div id="squadpanel" class="panel" hidden>
+    <div class="cols">
+      <section>
+        <h2>Squad</h2>
+        <div id="sqInvite"></div>
+        <div id="sqMembers"></div>
+        <h2>Online agents</h2>
+        <div id="sqOnline"></div>
+      </section>
+      <section>
+        <h2>Leaderboard</h2>
+        <table id="sqBoard"></table>
+        <h2>Leader tools</h2>
+        <div class="sub" style="text-align:left">★ The leader's <b>B</b> ping becomes the squad objective. <b>T</b> Rally restores armor and gives +20% damage to everyone within 30 m.
+        Squadmates share XP (25% within 50 m), see each other's tags and sensor reveals, can't hurt each other, and can open each other's stash houses.</div>
+      </section>
+    </div>
+    <div class="hint">P / Esc to close</div>
   </div>
 
   <div id="death" class="panel center" hidden>
