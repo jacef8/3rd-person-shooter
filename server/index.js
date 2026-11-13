@@ -2342,6 +2342,15 @@ const loop = setInterval(() => {
 }, 1000 / TICK_HZ);
 
 const saver = setInterval(saveDb, Number(process.env.SAVE_EVERY_MS || 10_000));
+// Hosting platforms stop the old server with SIGTERM on every redeploy: save the world and exit
+// cleanly, so nothing is lost and the platform doesn't report a crash.
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.once(sig, () => {
+    try { saveDb(); } catch (e) { console.error('Save on shutdown failed:', e); }
+    console.log(`Saved the world and shut down (${sig})`);
+    process.exit(0);
+  });
+}
 function shutdown() { clearInterval(loop); clearInterval(saver); saveDb(); process.exit(0); }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
