@@ -288,11 +288,37 @@ function setLabel(s, text, color = '#fff') {
 }
 
 // ------------------------------------------------------------------ characters
-/** Simple wildlife: a body, legs and a head; hogs are low and dark, deer tall and tan. */
+function makeTruck() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6), new THREE.MeshStandardMaterial({ color: 0x4b5a3a, roughness: 0.8 }));
+  body.position.set(0, 1.8, -0.8);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2, 2), new THREE.MeshStandardMaterial({ color: 0x3e4a30 }));
+  cab.position.set(0, 1.5, 3);
+  g.add(body, cab);
+  for (const [x, z] of [[-1.2, 2.6], [1.2, 2.6], [-1.2, -2.4], [1.2, -2.4], [-1.2, -0.6], [1.2, -0.6]]) {
+    const wh = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.4, 10), new THREE.MeshStandardMaterial({ color: 0x151515 }));
+    wh.rotation.z = Math.PI / 2; wh.position.set(x, 0.5, z);
+    g.add(wh);
+  }
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  scene.add(g);
+  return g;
+}
+/** Simple wildlife: a body, legs and a head; hogs are low and dark, deer tall and tan, dogs small. */
 function makeAnimal(kind) {
   const g = new THREE.Group();
-  const deer = kind === 'deer';
-  const mat = new THREE.MeshStandardMaterial({ color: deer ? 0x8a6440 : 0x3a302a, roughness: 0.9 });
+  if (kind === 'boar') { const m = makeAnimal('hog'); m.scale.setScalar(1.8); return m; }
+  const deer = kind === 'deer', dog = kind === 'dog';
+  const mat = new THREE.MeshStandardMaterial({ color: deer ? 0x8a6440 : dog ? 0x6b5236 : 0x3a302a, roughness: 0.9 });
+  if (dog) {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.8), mat); body.position.y = 0.5;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.32), mat); head.position.set(0, 0.72, 0.48);
+    g.add(body, head);
+    for (const [x, z] of [[-0.11, 0.3], [0.11, 0.3], [-0.11, -0.3], [0.11, -0.3]]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.36, 0.07), mat); leg.position.set(x, 0.18, z); g.add(leg); }
+    g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    scene.add(g);
+    return g;
+  }
   const body = new THREE.Mesh(new THREE.BoxGeometry(deer ? 0.45 : 0.55, 0.5, deer ? 1.3 : 1.1), mat);
   body.position.y = deer ? 1.0 : 0.55;
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.28, deer ? 0.4 : 0.45), mat);
@@ -517,6 +543,7 @@ function drawMinimap() {
   for (const ct of state.contracts) edge(ct.x, ct.z, '#ffc53d', 7);
   for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
   for (const e of state.extracts) edge(e.x, e.z, '#ff2a2a', 8);
+  for (const e of state.worldEvents || []) edge(e.x, e.z, '#c77dff', 8);
   if (state.enemyStash && state.enemyStash.untilPerf > performance.now()) edge(state.enemyStash.x, state.enemyStash.z, '#ff8a2a', 8);
   for (const [id, e] of state.exposed) { if (e.until < performance.now()) continue; const c = state.players.get(id)?.data; if (c && !c.dead && !c.sq) edge(c.x, c.z, '#ff4d4d', 6); }
   const hp0 = homePos();
@@ -585,7 +612,18 @@ function handle(m) {
       for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
         let rec = state.bots.get(b.id);
-        if (!rec && HOMESTEAD.animals[b.kind]) {
+        if (!rec && (b.kind === 'merchant' || b.kind === 'settler')) {
+          rec = { mesh: makeCharacter('contact', b.name) };
+          rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
+          setLabel(rec.mesh.userData.label, `${b.kind === 'merchant' ? '🛒' : '🌾'} ${b.name}`, '#9fe39f');
+          state.bots.set(b.id, rec);
+        }
+        if (!rec && b.kind === 'convoy') {
+          rec = { mesh: makeTruck(), animal: true };
+          rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
+          state.bots.set(b.id, rec);
+        }
+        if (!rec && (HOMESTEAD.animals[b.kind] || b.kind === 'dog')) {
           rec = { mesh: makeAnimal(b.kind), animal: true };
           rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
           state.bots.set(b.id, rec);
@@ -749,6 +787,20 @@ function handle(m) {
       state.contact = m;
       openContact();
       break;
+    case 'worldEvents': {
+      state.worldEvents = m.list;
+      const e = m.announce && m.list.find((x) => x.id === m.announce);
+      if (e) toast(`📣 ${e.name} — ${e.desc} Marked on your map (M).`);
+      if (state.contactOpen) renderContact();
+      break;
+    }
+    case 'awayLog': {
+      const n = m.entries.length;
+      toast(`While you were away: ${n} thing${n === 1 ? '' : 's'} happened at your place`);
+      for (const en of m.entries.slice(-6)) toast(`🕒 ${en.text}`);
+      break;
+    }
+    case 'ptrade': handlePlayerTrade(m); break;
     case 'boom': boomFx(m.x, m.y, m.z); break;
     case 'homexp': if (m.amount >= 5) xpPopup(m.amount, `Home: ${m.reason}`); break;
     case 'homeLevel': levelBanner(m.level, [{ name: HOME_LEVEL_TEXT[m.level - 1] }], 'STASH HOUSE LEVEL'); break;
@@ -993,8 +1045,26 @@ function closeContact() {
 }
 function renderTrade(c, me) {
   const box = $('ctTrade');
-  if (!box || !c.trade) return;
-  box.innerHTML = `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. Prices here reflect what ${c.trade.town} has plenty of — haul goods to where they're scarce.</p>`;
+  if (!box) return;
+  const solo = !!(c.npc || c.stall);
+  $('ctColContracts').hidden = solo; $('ctColQm').hidden = solo;
+  $('ctTradeTitle').textContent = c.stall ? 'Stall' : c.npc ? 'Trade' : 'Trading post';
+  if (c.stall) return renderStall(c, me, box);
+  if (!c.trade) return;
+  const tsend = (m) => send({ t: 'trade', contactId: c.id, npcId: c.npc || undefined, ...m });
+  box.innerHTML = c.npc ? `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. ${c.trade.who === 'Travelling merchant' ? 'Merchants pay close to the best price anywhere, and roam between towns.' : 'Settlers sell what they grow or catch, cheap.'}</p>`
+    : `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. Prices here reflect what ${c.trade.town} has plenty of — haul goods to where they're scarce.</p>`;
+  // County fair: hand in meat for the hunting contest.
+  const fair = c.fair && (state.worldEvents || []).find((e) => e.type === 'fair');
+  if (fair) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">🏆 Hunting contest</div><div class="st">${(fair.board || []).map((r, i) => `${i + 1}. ${r.name} — ${r.meat}`).join(' · ') || 'No entries yet'}</div></div>`;
+    const b = btn(`Hand in ${me.meat || 0} meat`, () => send({ t: 'fairSubmit' }), '');
+    b.disabled = !(me.meat > 0);
+    row.append(b);
+    box.append(row);
+  }
   const sellable = c.trade.sells.filter((x) => me[x.good] > 0);
   if (sellable.length) {
     const h = document.createElement('h3'); h.textContent = 'Sell'; box.append(h);
@@ -1002,7 +1072,7 @@ function renderTrade(c, me) {
       const row = document.createElement('div');
       row.className = 'item';
       row.innerHTML = `<div class="meta"><div class="nm">${GOODS[x.good]?.icon || ''} ${resText(x.good, me[x.good])}</div><div class="st">pays $${x.pays} each</div></div>`;
-      row.append(btn('Sell 1', () => send({ t: 'trade', contactId: c.id, action: 'sell', good: x.good, qty: 1 })), btn(`Sell all ($${x.pays * me[x.good]})`, () => send({ t: 'trade', contactId: c.id, action: 'sell', good: x.good, qty: 'all' }), ''));
+      row.append(btn('Sell 1', () => tsend({ action: 'sell', good: x.good, qty: 1 })), btn(`Sell all ($${x.pays * me[x.good]})`, () => tsend({ action: 'sell', good: x.good, qty: 'all' }), ''));
       box.append(row);
     }
   }
@@ -1011,7 +1081,7 @@ function renderTrade(c, me) {
     const row = document.createElement('div');
     row.className = 'item';
     row.innerHTML = `<div class="meta"><div class="nm">${GOODS[it.id]?.icon || ''} ${it.name}${it.qty > 1 ? ` ×${it.qty}` : ''}</div></div>`;
-    const b = btn(`$${it.price}`, () => send({ t: 'trade', contactId: c.id, action: 'buy', item: it.id }), '');
+    const b = btn(`$${it.price}`, () => tsend({ action: 'buy', item: it.id }), '');
     b.disabled = (me.cash || 0) < it.price;
     row.append(b);
     box.append(row);
@@ -1020,6 +1090,59 @@ function renderTrade(c, me) {
   prices.className = 'sub'; prices.style.textAlign = 'left'; prices.style.fontSize = '11px';
   prices.textContent = 'Pays: ' + c.trade.sells.map((x) => `${x.name} $${x.pays}`).join(' · ');
   box.append(prices);
+  if (c.npc) return;
+  // Freight: carry a load to another town's post.
+  if (c.hauls?.length) {
+    const h = document.createElement('h3'); h.textContent = 'Freight jobs'; box.append(h);
+    for (const j of c.hauls) {
+      const row = document.createElement('div');
+      row.className = 'item';
+      row.innerHTML = `<div class="meta"><div class="nm">📦 ${j.label} → ${j.toTown}</div><div class="st">${distText(j.km * 1000)} · no helicopters or fast travel with freight</div></div>`;
+      row.append(btn(`Take ($${j.pay})`, () => send({ t: 'haul', contactId: c.id, id: j.id }), ''));
+      box.append(row);
+    }
+  }
+  // Market board: what players are selling at their stalls around the map.
+  const hb = document.createElement('h3'); hb.textContent = 'Market board — player stalls'; box.append(hb);
+  if (!c.board?.length) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No player stalls are selling yet. Build a Market stall to be the first.' }));
+  for (const r of c.board || []) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">${GOODS[r.res]?.icon || ''} ${r.qty} ${r.name} · $${r.price} each</div><div class="st">${r.seller}'s stall near ${r.near} · ${distText(r.dist)}</div></div>`;
+    row.append(btn('Mark', () => { state.pings.push({ x: r.x, z: r.z, from: `${r.seller}'s stall`, objective: false, until: performance.now() + 600_000 }); toast(`Marked ${r.seller}'s stall`); }));
+    box.append(row);
+  }
+}
+function renderStall(c, me, box) {
+  const S = c.stallData;
+  box.innerHTML = '';
+  if (S.mine) {
+    box.innerHTML = `<p class="sub" style="text-align:left">Goods listed here sell while you're away; buyers' cash goes in the till. Listed on every trading post's market board.</p>`;
+    const till = document.createElement('div'); till.className = 'item';
+    till.innerHTML = `<div class="meta"><div class="nm">💰 Till: $${S.till}</div></div>`;
+    const cb = btn('Collect', () => send({ t: 'stall', id: c.stall, action: 'collect' }), ''); cb.disabled = !S.till; till.append(cb); box.append(till);
+    // New listing: pick something you carry, how many, and a price.
+    const row = document.createElement('div'); row.className = 'item';
+    const sel = document.createElement('select');
+    for (const r of RES_UI) if (r !== 'cash' && r !== 'intel' && me[r]) sel.append(Object.assign(document.createElement('option'), { value: r, textContent: resText(r, me[r]) }));
+    const qty = Object.assign(document.createElement('input'), { type: 'number', min: 1, value: 1, style: 'width:60px' });
+    const price = Object.assign(document.createElement('input'), { type: 'number', min: 1, value: 10, style: 'width:70px', title: 'Price each ($)' });
+    row.append(sel, qty, Object.assign(document.createElement('span'), { textContent: '× $' }), price, btn('List', () => send({ t: 'stall', id: c.stall, action: 'list', res: sel.value, qty: qty.value, price: price.value }), ''));
+    if (sel.options.length) box.append(row); else box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Carry some goods to list them.' }));
+  }
+  if (!S.listings.length) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing for sale.' }));
+  for (const l of S.listings) {
+    const row = document.createElement('div'); row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">${GOODS[l.res]?.icon || ''} ${l.qty} ${l.name}</div><div class="st">$${l.price} each</div></div>`;
+    if (S.mine) row.append(btn('Unlist', () => send({ t: 'stall', id: c.stall, action: 'unlist', i: l.i })));
+    else {
+      const b1 = btn(`Buy 1 ($${l.price})`, () => send({ t: 'stall', id: c.stall, action: 'buy', i: l.i, qty: 1 }), '');
+      const ba = btn(`Buy all ($${l.price * l.qty})`, () => send({ t: 'stall', id: c.stall, action: 'buy', i: l.i, qty: 'all' }));
+      b1.disabled = (me.cash || 0) < l.price; ba.disabled = (me.cash || 0) < l.price * l.qty;
+      row.append(b1, ba);
+    }
+    box.append(row);
+  }
 }
 function renderContact() {
   const c = state.contact, me = state.me;
@@ -1093,7 +1216,8 @@ function renderContact() {
 /** Active contracts shown under the kill feed. */
 function renderTracker() {
   const el = $('tracker');
-  el.innerHTML = state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('');
+  el.innerHTML = state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('') +
+    (state.worldEvents || []).map((e) => `<div style="color:#c77dff">📣 ${e.name} <span>${e.type === 'swing' ? '' : `${distText(Math.hypot(e.x - state.x, e.z - state.z))} · `}${Math.max(0, Math.ceil((e.endsAt - Date.now()) / 60000))} min left</span></div>`).join('');
 }
 setInterval(() => { if (state.map) renderTracker(); }, 1000);
 
@@ -1182,6 +1306,10 @@ function drawMapCanvas() {
   for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: '#cfcfcf', size: 4, label: state.mapMode === 'redeploy' ? lz.name : '' });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
+  for (const e of state.worldEvents || []) {
+    markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#c77dff', size: 9, label: `📣 ${e.name}` });
+    if (e.radius) markers.push({ x: e.x, z: e.z, kind: 'ring', radius: e.radius, color: '#c77dff' });
+  }
   // Enemies lit up by a hack, a scan, a tag or a sensor, and any enemy stash house you've located.
   const pnow = performance.now();
   for (const [id, e] of state.exposed) {
@@ -1503,7 +1631,7 @@ addEventListener('keydown', (e) => {
   // Build mode: X toggles, 1-5 pick a piece.
   if (document.activeElement?.tagName === 'INPUT' || !state.me) return;
   if (e.code === 'KeyX' && !e.repeat) doAction('build');
-  if (build.on && /^Digit[1-8]$/.test(e.code)) { const k = Object.keys(PIECES).filter((x) => !PIECES[x].auto)[Number(e.code.slice(5)) - 1]; if (k) { build.piece = k; renderBuildBar(); } e.stopImmediatePropagation(); }
+  if (build.on && /^Digit[1-9]$/.test(e.code)) { const k = Object.keys(PIECES).filter((x) => !PIECES[x].auto)[Number(e.code.slice(5)) - 1]; if (k) { build.piece = k; renderBuildBar(); } e.stopImmediatePropagation(); }
 }, true);
 addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
@@ -1610,6 +1738,10 @@ function nearestInteractable() {
       if (dot < -0.35) consider(d - 1.5, `✊ Takedown ${c.name} — stun them`);
     }
   }
+  for (const [, r] of state.bots) {
+    const c = r.data;
+    if (c && (c.kind === 'merchant' || c.kind === 'settler')) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.3, `🛒 Trade with the ${c.name.toLowerCase()}`);
+  }
   for (const [, r] of state.players) if (r.data.sq && r.data.downed && !r.data.dead) consider(Math.hypot(r.data.x - state.x, r.data.z - state.z) - 1.5, `✚ Revive ${r.data.name} (stand still ${COMBAT_RULES.downed.reviveMs / 1000}s)`);
   for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
   if (!best && state.me?.claim && !state.extracts.length) for (const lz of state.map.landingZones) if (Math.hypot(lz.x - state.x, lz.z - state.z) < EXTRACT.callRange) best = `Call extraction — fire a flare, hold ${feet(EXTRACT.radius)} for ${EXTRACT.holdMs / 1000}s, fly home with your loot`;
@@ -1623,7 +1755,13 @@ function nearestInteractable() {
     let text;
     const next = def.stages[st.stage + 1];
     const hp = ` <small>${st.hp}/${st.max} HP</small>`;
-    if (def.farm) {
+    if (def.stall) {
+      text = st.mine ? '🛒 Your market stall — list goods, collect the till' : `🛒 Browse ${st.owner}'s stall`;
+    } else if (def.defense && st.mine) {
+      text = def.defense === 'sentry' ? `🔫 Sentry: ${st.ammo} rounds — load ammo (you carry ${me?.ammo || 0})`
+        : def.defense === 'kennel' ? `🐕 Kennel: ${st.meat} meat stored${st.fed ? '' : ' — HUNGRY, no dog on guard'} · feed (you carry ${me?.meat || 0})`
+          : def.defense === 'tripwire' ? 'Tripwire (yours) — armed' : 'Motion alarm (yours) — on';
+    } else if (def.farm) {
       const crop = st.crop ? st.crop[0].toUpperCase() + st.crop.slice(1) : '';
       text = !st.crop ? (st.mine ? (me?.seeds ? '🌱 Plant seeds (uses 1 seed packet)' : 'Empty farm plot — needs a seed packet') : `${st.owner}'s empty plot`)
         : st.rotten ? `${crop} rotted — clear it (E)` : st.grow >= 1 ? (st.mine ? `🌾 Harvest ${crop.toLowerCase()}` : `🌾 Steal ${st.owner}'s ${crop.toLowerCase()}`) : `${crop} — ${Math.round(st.grow * 100)}% grown`;
@@ -1637,7 +1775,7 @@ function nearestInteractable() {
     } else if (def.container) text = `Search ${st.owner}'s crate`;
     else if (stage.material === 'frame') text = `${st.owner}'s ${stage.name.toLowerCase()}`;
     else text = stage.material === 'stone' ? (has('pickaxe') ? `Break ${st.owner}'s ${stage.name.toLowerCase()} (pickaxe)` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a pickaxe or breach charge`) : (has('hatchet') || has('pickaxe') ? `Chop through ${st.owner}'s ${stage.name.toLowerCase()}` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a hatchet`);
-    consider(d, def.farm || def.cook ? text : text + hp);
+    consider(d, def.farm || def.cook || def.stall || (def.defense && st.mine) ? text : text + hp);
   }
   for (const [id, hs] of state.houseState) {
     const h = state.map.houses[id];
@@ -1737,6 +1875,7 @@ function drawMarkers() {
     state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${distText(Math.hypot(p.x - state.x, p.z - state.z))}`, new THREE.Vector3(p.x, ground(p.x, p.z) + 1.5, p.z)));
     for (const ct of state.contracts) marker(`c${ct.id}`, 'objective', `◆ ${CONTRACT_TYPES[ct.type].name} · ${distText(Math.hypot(ct.x - state.x, ct.z - state.z))}`, new THREE.Vector3(ct.x, ground(ct.x, ct.z) + 2.5, ct.z));
     for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${distText(Math.hypot(d.x - state.x, d.z - state.z))}`, new THREE.Vector3(d.x, ground(d.x, d.z) + 3, d.z));
+    for (const e of state.worldEvents || []) if (e.type !== 'swing') marker(`w${e.id}`, 'objective', `📣 ${e.name} · ${distText(Math.hypot(e.x - state.x, e.z - state.z))}`, new THREE.Vector3(e.x, ground(e.x, e.z) + 6, e.z));
     for (const e of state.extracts) marker(`e${e.id}`, 'alert', `🚁 ${distText(Math.hypot(e.x - state.x, e.z - state.z))}`, new THREE.Vector3(e.x, ground(e.x, e.z) + 4, e.z));
     const hh = homePos();
     if (hh) {
@@ -1876,6 +2015,7 @@ function renderSquadPanel() {
     row.className = 'item';
     row.innerHTML = `<div class="meta"><div class="nm">${p.name} <small style="color:#888">lvl ${p.level}</small></div></div>`;
     if (canInvite) row.append(btn('Crew invite', () => send({ t: 'squad', action: 'invite', id: p.id })));
+    row.append(btn('Trade', () => { send({ t: 'ptrade', action: 'request', id: p.id }); }));
     if (lobby.state && !lobby.state.friends.some((f) => f.name === p.name) && !lobby.state.sent.includes(p.name)) row.append(btn('Add friend', () => hubSend({ t: 'friendRequest', name: p.name })));
     on.append(row);
   }
@@ -1925,7 +2065,7 @@ function readPad() {
 const deadzone = (v, d = 0.16) => (Math.abs(v) < d ? 0 : Math.sign(v) * (Math.abs(v) - d) / (1 - d));
 
 function topPanel() {
-  for (const id of ['mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
+  for (const id of ['tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
   return null;
 }
 function focusables(root) {
@@ -2093,6 +2233,39 @@ function structMesh(st) {
         g.add(plant);
       }
     }
+  } else if (def.defense === 'tripwire') {
+    // Two stakes and a thin wire between them, low to the ground.
+    const long = Math.max(w, d), alongX = w >= d;
+    const stake = new THREE.MeshStandardMaterial({ color: 0x5a4632 });
+    for (const f of [-0.5, 0.5]) { const s2 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.45, 0.06), stake); s2.position.set(alongX ? f * long : 0, 0.22, alongX ? 0 : f * long); g.add(s2); }
+    const wire = new THREE.Mesh(new THREE.BoxGeometry(alongX ? long : 0.015, 0.015, alongX ? 0.015 : long), new THREE.MeshBasicMaterial({ color: 0xbfc6cc }));
+    wire.position.y = 0.3;
+    g.add(wire);
+  } else if (def.defense === 'sentry') {
+    const metal = new THREE.MeshStandardMaterial({ color: 0x4a5058, metalness: 0.5, roughness: 0.5 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 0.8, 10), metal); base.position.y = 0.4;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.4, 0.6), metal); head.position.y = 1.0;
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.8, 8), new THREE.MeshStandardMaterial({ color: 0x1b1d20 }));
+    barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 1.0, 0.6);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff3030 })); eye.position.set(0, 1.12, 0.31);
+    g.add(base, head, barrel, eye);
+  } else if (def.defense === 'kennel') {
+    const wood = new THREE.MeshStandardMaterial({ color: 0x7a5533, roughness: 0.95 });
+    const box = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.7, d), wood); box.position.y = h * 0.35;
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w, d) * 0.75, h * 0.45, 4), new THREE.MeshStandardMaterial({ color: 0x8a2e22 }));
+    roof.rotation.y = Math.PI / 4; roof.position.y = h * 0.92;
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 0.05), new THREE.MeshBasicMaterial({ color: 0x111111 })); door.position.set(0, 0.28, d / 2 + 0.01);
+    g.add(box, roof, door);
+  } else if (def.defense === 'alarm') {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, h, 6), new THREE.MeshStandardMaterial({ color: 0x777b80 })); pole.position.y = h / 2;
+    const light = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3a3a })); light.position.y = h + 0.05;
+    g.add(pole, light);
+  } else if (def.stall) {
+    const wood = new THREE.MeshStandardMaterial({ color: 0x8a6440, roughness: 0.9 });
+    const counter = new THREE.Mesh(new THREE.BoxGeometry(w, 1.0, d), wood); counter.position.y = 0.5;
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(w + 0.4, 0.08, d + 0.6), new THREE.MeshStandardMaterial({ color: 0xc23b2a })); roof.position.y = 2.3;
+    g.add(counter, roof);
+    for (const f of [-0.5, 0.5]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.3, 0.08), wood); post.position.set(f * (w - 0.1), 1.15, -d / 2 + 0.05); g.add(post); }
   } else if (def.cook) {
     // Ring of stones and a flame.
     const stone = new THREE.MeshStandardMaterial({ color: 0x77736d, roughness: 1, flatShading: true });
@@ -2212,15 +2385,15 @@ function cyclePiece(dir) {
 function renderBuildBar() {
   const me = state.me;
   if (!me) return;
-  const items = Object.entries(PIECES).filter(([, p]) => !p.auto).map(([k, p]) => {
+  const items = Object.entries(PIECES).filter(([, p]) => !p.auto).map(([k, p], idx) => {
     const st = p.stages[0];
     const cost = p.explosive ? `${me.inv.pack.filter((i) => i.kind === 'charge').length} carried` : Object.entries(st.cost).map(([r, v]) => `${v} ${r}`).join(' ') + (p.claim ? ' + marker' : '');
-    return `<div class="bpiece ${k === build.piece ? 'sel' : ''}"><kbd>${p.key}</kbd>${p.name}<small>${cost}</small></div>`;
+    return `<div class="bpiece ${k === build.piece ? 'sel' : ''}"><kbd>${idx < 9 ? idx + 1 : '·'}</kbd>${p.name}<small>${cost}</small></div>`;
   }).join('');
   const pad = state.inputMode === 'pad';
   $('buildbar').innerHTML = `<div class="pieces">${items}</div><div class="bhint">${pad
     ? 'LB/RB piece · X rotate · RT place · A upgrade · Y dismantle · ▶ exit'
-    : '1-8 piece · R / wheel rotate · Click place · E upgrade · Q dismantle · X exit'}${me.inv.pack.some((i) => i.tool === 'hammer') ? '' : ' · <b style="color:#ff6b6b">You need a hammer</b>'}</div>`;
+    : '1-9 or F/G piece · R / wheel rotate · Click place · E upgrade · Q dismantle · X exit'}${me.inv.pack.some((i) => i.tool === 'hammer') ? '' : ' · <b style="color:#ff6b6b">You need a hammer</b>'}</div>`;
 }
 const buildWorldClient = () => ({
   terrain: state.map.terrain, towns: state.map.towns, contacts: state.map.contacts, landingZones: state.map.landingZones,
@@ -2481,6 +2654,7 @@ function buildTouchUI() {
   $('tclose').addEventListener('click', closeTopPanel);
 }
 function closeTopPanel() {
+  if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.gunsmithOpen) return closeGunsmith();
   if (state.contactOpen) return closeContact();
   if (state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) return closeMapScreen();
@@ -2638,3 +2812,52 @@ setInterval(() => {
 
 // Start talking to the lobby once everything above exists.
 hubConnect();
+
+// ------------------------------------------------------------------ face-to-face trading
+// Both players put up goods, items or cash; both confirm; it swaps at once. Any change un-confirms.
+const ptrade = { open: false, offer: { res: {}, items: [] } };
+function handlePlayerTrade(m) {
+  if (m.state === 'ask') {
+    const bar = $('invitebar');
+    bar.innerHTML = `<div><b>${m.from}</b> wants to trade</div>`;
+    bar.append(btn('Trade', () => { bar.hidden = true; send({ t: 'ptrade', action: 'accept' }); }, ''), btn('No', () => { bar.hidden = true; }));
+    bar.hidden = false;
+    return;
+  }
+  if (m.state === 'closed') { ptrade.open = false; $('tradepanel').hidden = true; toast(m.why); lockPointer(); return; }
+  ptrade.open = true;
+  ptrade.view = m;
+  $('tradepanel').hidden = false;
+  document.exitPointerLock?.();
+  renderPlayerTrade();
+}
+function renderPlayerTrade() {
+  const m = ptrade.view, me = state.me;
+  if (!m || !me) return;
+  $('tpTitle').textContent = `Trading with ${m.with || '…'}`;
+  const mine = $('tpMine'); mine.innerHTML = '';
+  const offer = { res: { ...m.you.res }, items: m.you.items.map((i) => i.id) };
+  for (const r of RES_UI.filter((x) => me[x] || offer.res[x])) {
+    const row = document.createElement('div'); row.className = 'item';
+    const input = Object.assign(document.createElement('input'), { type: 'number', min: 0, max: me[r], value: offer.res[r] || 0, style: 'width:70px' });
+    input.onchange = () => { offer.res[r] = Number(input.value) || 0; send({ t: 'ptrade', action: 'offer', ...offer }); };
+    row.innerHTML = `<div class="meta"><div class="nm">${resText(r, me[r])}</div></div>`;
+    row.append(input);
+    mine.append(row);
+  }
+  for (const it of me.inv.pack.filter((i) => i.kind !== 'cargo')) {
+    const row = document.createElement('div'); row.className = 'item';
+    const on = offer.items.includes(it.id);
+    row.innerHTML = `<div class="meta"><div class="nm">${it.name}</div></div>`;
+    row.append(btn(on ? '✓ Offered' : 'Offer', () => { offer.items = on ? offer.items.filter((x) => x !== it.id) : [...offer.items, it.id]; send({ t: 'ptrade', action: 'offer', ...offer }); }, on ? '' : 'ghost'));
+    mine.append(row);
+  }
+  const theirs = $('tpTheirs');
+  const list = [...Object.entries(m.them.res).filter(([, v]) => v > 0).map(([k, v]) => resText(k, v)), ...m.them.items.map((i) => i.name)];
+  theirs.innerHTML = list.length ? list.map((x) => `<div class="item"><div class="meta"><div class="nm">${x}</div></div></div>`).join('') : '<div class="empty">Nothing yet</div>';
+  $('tpStatus').textContent = `${m.youOk ? '✔ You confirmed' : 'You haven\'t confirmed'} · ${m.themOk ? `✔ ${m.with} confirmed` : `${m.with} hasn't confirmed`}`;
+}
+$('tpConfirm').onclick = () => send({ t: 'ptrade', action: 'confirm' });
+$('tpCancel').onclick = () => send({ t: 'ptrade', action: 'cancel' });
+// Touching the screen after using a controller brings the touch controls back.
+addEventListener('touchstart', () => { if (state.inputMode === 'pad') setInputMode('kb'); }, { passive: true });

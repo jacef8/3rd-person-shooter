@@ -1,0 +1,162 @@
+{
+  "_about": "The living world: world events that draw people across the map, NPCs who travel and trade, player commerce, and the defenses that guard your stuff while you're offline. Times in ms, distances in metres.",
+  "events": {
+    "_about": "One event starts every everyMs (first after firstAfterMs), up to maxActive at once. weight = how often each type is picked.",
+    "everyMs": 720000,
+    "firstAfterMs": 180000,
+    "maxActive": 2,
+    "riot": {
+      "name": "Riot",
+      "weight": 3,
+      "durationMs": 1200000,
+      "rogues": 8,
+      "radius": 60,
+      "xp": 400,
+      "reward": {
+        "cash": 150,
+        "parts": 60,
+        "salvage": 60,
+        "comms": 1
+      },
+      "desc": "Rogues have taken the town square. Clear them out and the cache they're guarding is yours."
+    },
+    "fair": {
+      "name": "County fair & hunting contest",
+      "weight": 2,
+      "durationMs": 1500000,
+      "radius": 45,
+      "prizes": [
+        300,
+        150,
+        75
+      ],
+      "perMeat": 3,
+      "xp": 150,
+      "desc": "A safe zone: no shooting at the fairgrounds. Hand in meat for the hunting contest; the top three hunters win cash."
+    },
+    "hoghunt": {
+      "name": "Hog hunt",
+      "weight": 3,
+      "durationMs": 1200000,
+      "boarHp": 700,
+      "boarBite": 18,
+      "hogs": 4,
+      "radius": 90,
+      "xp": 350,
+      "reward": {
+        "meat": 30,
+        "cash": 120
+      },
+      "desc": "A monster boar is tearing up the swamp. It charges anyone who gets close."
+    },
+    "convoy": {
+      "name": "Supply convoy",
+      "weight": 2,
+      "durationMs": 1500000,
+      "hp": 2000,
+      "speed": 5,
+      "escorts": 4,
+      "xp": 500,
+      "reward": {
+        "cash": 250,
+        "parts": 80,
+        "tech": 40,
+        "ammo": 200,
+        "comms": 2
+      },
+      "desc": "An armed convoy is crossing on SR 20. Stop the truck and take its cargo — or let it pass."
+    },
+    "swing": {
+      "name": "Market swing",
+      "weight": 3,
+      "durationMs": 2700000,
+      "boom": 2.2,
+      "glut": 0.45,
+      "desc": "A shortage or a glut: one trading post pays far more (or far less) for one good."
+    }
+  },
+  "npcs": {
+    "merchant": {
+      "name": "Travelling merchant",
+      "count": 2,
+      "hp": 260,
+      "speed": 2.6,
+      "respawnMs": 600000,
+      "loot": {
+        "cash": 160,
+        "meals": 4,
+        "seeds": 6
+      },
+      "buyRate": 0.9,
+      "shop": {
+        "seeds": 3,
+        "meals": 16,
+        "rod": 18,
+        "medkit": 24,
+        "ammo": 10
+      }
+    },
+    "settler": {
+      "name": "Settler",
+      "every": 6,
+      "hp": 120,
+      "spawnWithin": 250,
+      "despawn": 400,
+      "goneMs": 1800000,
+      "loot": {
+        "cash": 40
+      },
+      "sellRate": 0.6,
+      "buyRate": 1.1
+    }
+  },
+  "commerce": {
+    "haul": {
+      "_about": "Freight jobs at trading posts: carry cargo to another town's post. Helicopters won't carry freight and you can't fast travel with it; if you die, whoever picks it up can deliver it.",
+      "perPost": 2,
+      "base": 25,
+      "perKm": 8,
+      "xp": 60,
+      "refreshMs": 3600000
+    },
+    "stall": {
+      "maxListings": 8,
+      "maxPrice": 9999
+    },
+    "trade": {
+      "range": 6
+    }
+  },
+  "defenses": {
+    "tripwire": {
+      "stunMs": 2500,
+      "exposeMs": 12000,
+      "rearmMs": 30000
+    },
+    "alarm": {
+      "radius": 20,
+      "exposeMs": 10000,
+      "cooldownMs": 30000
+    },
+    "sentry": {
+      "range": 25,
+      "damage": 9,
+      "rpm": 240,
+      "maxAmmo": 300,
+      "loadAtOnce": 100
+    },
+    "kennel": {
+      "dogHp": 120,
+      "bite": 14,
+      "biteEveryMs": 900,
+      "guardRange": 18,
+      "chaseRange": 30,
+      "speed": 7,
+      "mealEveryMs": 3600000,
+      "maxMeat": 20,
+      "respawnMs": 300000,
+      "activeWithin": 250
+    },
+    "logMax": 30
+  }
+}

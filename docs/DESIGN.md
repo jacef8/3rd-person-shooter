@@ -164,9 +164,45 @@ always reasons to move around, risk in doing it, and an economy that rewards hau
 - **Risk:** cash and goods are carried like everything else: you drop them all when you die.
   Farms can be stolen from. Everything is in `shared/data/homestead.json` and `economy.json`.
 
-Coming next: boats and the river trade (phase 2), prices that move with what players sell, a player
-market, player jobs and bounties, land upkeep and outlaw reputation (phase 3), then more regions,
-day/night, weather and world events (phase 4).
+## The living world: events, NPCs, commerce and defenses
+
+Things happen whether or not many players are on, there's always a reason to cross the map, and
+your place can look after itself while you're offline. All the numbers are in `shared/data/world.json`.
+
+**World events.** One starts about every 12 minutes (up to two at once). Each is announced to everyone,
+shows on the map, minimap and tracker, and lasts 20-45 minutes:
+- **Riot:** Rogues take over a town square. Clear them and the cache they guarded drops for everyone who helped.
+- **County fair:** a safe zone (no shooting) in one town plus a hunting contest. Hand in meat; the top
+  three hunters win $300 / $150 / $75, and every hunter is paid for each pound handed in.
+- **Hog hunt:** a monster boar tears up a swamp or field and charges anyone close. Kill it for meat and cash.
+- **Supply convoy:** an armed truck with escorts drives along SR 20. Stop it and take the cargo.
+- **Market swing:** a shortage or glut: one trading post pays far more (or far less) for one good.
+
+**NPCs.** Two **travelling merchants** walk the roads between towns. They pay close to the best price
+anywhere and sell supplies. **Farmers and fishermen** live at farms and fish camps across the county and
+sell their produce cheap. They're real targets: killing one drops their goods, but it's announced, and
+they don't come back for a while.
+
+**Commerce.**
+- **Freight:** each trading post offers haul jobs to another town. Pay grows with distance. Cargo
+  can't go on the extraction helicopter or fast travel, so you have to walk or drive it, and anyone can take it off you.
+- **Market stalls** (10 wood, 5 salvage): list goods at your own price. They sell while you're away and
+  the cash goes into the till. Every trading post shows a **market board** of what's for sale and where.
+- **Face-to-face trades:** request a trade with a player standing near you. Both of you put up goods,
+  cash or items, both confirm, and it swaps at once. Nobody can be cheated mid-trade.
+
+**Defenses (work while you're offline).** Build them around your stash, farm or camp:
+- **Tripwire** (4 salvage, 2 parts): stuns whoever crosses it for 2.5 s and lights them up for your crew. Re-arms after 30 s.
+- **Motion alarm** (10 tech, 10 parts): warns your crew when an intruder comes within 65 ft. Optical camo beats it.
+- **Sentry gun** (40 parts, 25 tech, 20 salvage): shoots intruders and Rogues within 80 ft. Load it with ammo (E).
+- **Dog kennel** (12 wood, 4 meat): a guard dog that patrols and attacks intruders. Feed it meat (E);
+  it eats one an hour, and with no food it stops guarding. If it's killed, a new one comes after 5 minutes.
+- **Away log:** everything that happened while you were offline (who tripped what, who got shot,
+  who raided) is waiting for you when you log back in. Crewmates online get warned as it happens.
+
+Coming next: boats and the river trade (phase 2), prices that move with what players sell, player
+jobs and bounties, land upkeep and outlaw reputation (phase 3), then more regions, day/night and
+weather (phase 4).
 
 ## Units
 

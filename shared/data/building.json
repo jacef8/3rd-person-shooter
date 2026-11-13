@@ -324,6 +324,112 @@
           "material": "stone"
         }
       ]
+    },
+    "tripwire": {
+      "name": "Tripwire",
+      "size": [
+        3,
+        0.3,
+        0.3
+      ],
+      "defense": "tripwire",
+      "_about": "Invisible-ish wire: an intruder who crosses it is stunned, revealed to your crew and logged. Re-arms itself.",
+      "stages": [
+        {
+          "name": "Tripwire",
+          "cost": {
+            "salvage": 4,
+            "parts": 2
+          },
+          "hp": 60,
+          "material": "wire"
+        }
+      ]
+    },
+    "alarm": {
+      "name": "Motion alarm",
+      "size": [
+        0.4,
+        0.4,
+        1.2
+      ],
+      "defense": "alarm",
+      "_about": "Warns your crew (and logs it for when you're back) when an intruder comes within 65 ft. Camo beats it.",
+      "stages": [
+        {
+          "name": "Motion alarm",
+          "cost": {
+            "tech": 10,
+            "parts": 10
+          },
+          "hp": 200,
+          "material": "stone"
+        }
+      ]
+    },
+    "sentry": {
+      "name": "Sentry gun",
+      "size": [
+        0.9,
+        0.9,
+        1.4
+      ],
+      "defense": "sentry",
+      "_about": "Shoots intruders and Rogues within 80 ft. Needs ammo: load it with E.",
+      "stages": [
+        {
+          "name": "Sentry gun",
+          "cost": {
+            "parts": 40,
+            "tech": 25,
+            "salvage": 20
+          },
+          "hp": 900,
+          "material": "stone"
+        }
+      ]
+    },
+    "kennel": {
+      "name": "Dog kennel",
+      "size": [
+        1.6,
+        1.2,
+        1.1
+      ],
+      "defense": "kennel",
+      "_about": "A guard dog that patrols nearby and attacks intruders. Feed it meat (E): it eats one an hour.",
+      "stages": [
+        {
+          "name": "Dog kennel",
+          "cost": {
+            "wood": 12,
+            "meat": 4
+          },
+          "hp": 600,
+          "material": "wood"
+        }
+      ]
+    },
+    "stall": {
+      "name": "Market stall",
+      "size": [
+        2.2,
+        1.2,
+        1.1
+      ],
+      "stall": true,
+      "_about": "Sell goods while you're away: list what you carry at your price; buyers pay into the till.",
+      "stages": [
+        {
+          "name": "Market stall",
+          "cost": {
+            "wood": 10,
+            "salvage": 5
+          },
+          "hp": 500,
+          "material": "wood"
+        }
+      ]
     }
   },
   "build": {

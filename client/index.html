@@ -158,23 +158,33 @@
   <div id="contactpanel" class="panel" hidden>
     <header><h2 id="ctTitle"></h2><span id="ctComms"></span></header>
     <div class="cols">
-      <section>
+      <section id="ctColContracts">
         <h2>Contracts</h2>
         <div id="ctOffers"></div>
         <h2>Active</h2>
         <div id="ctActive"></div>
       </section>
-      <section>
-        <h2>Trading post</h2>
+      <section id="ctColTrade">
+        <h2 id="ctTradeTitle">Trading post</h2>
         <div id="ctTrade"></div>
       </section>
-      <section>
+      <section id="ctColQm">
         <h2>Quartermaster — field gear</h2>
         <p class="sub" style="text-align:left">Paid with ★ commendations, which you only earn by completing contracts and securing supply drops. Field gear is permanent and is never lost on death.</p>
         <div id="ctShop"></div>
       </section>
     </div>
     <div class="hint"><span class="kbonly">Esc to close</span><span class="padonly">Ⓑ back</span></div>
+  </div>
+
+  <div id="tradepanel" class="panel" hidden>
+    <header><h2 id="tpTitle">Trade</h2></header>
+    <div class="cols">
+      <section><h2>You offer</h2><div id="tpMine"></div></section>
+      <section><h2>They offer</h2><div id="tpTheirs"></div></section>
+    </div>
+    <p class="sub" id="tpStatus"></p>
+    <div class="gsentry"><button id="tpConfirm">Confirm trade</button><button class="ghost" id="tpCancel">Cancel</button></div>
   </div>
 
   <script type="module" src="/main.js"></script>

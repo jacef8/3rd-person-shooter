@@ -43,6 +43,17 @@ Living off the land:
 - Hunt deer and hogs (sneak up crouched). BUILD → **Campfire** to cook raw fish/meat into meals.
 - Sell goods at a trading post. Compare prices between towns: corn pays more in Bristol than Blountstown.
 
+The living world:
+- Watch the top-left tracker and the map for **world events** (riot, county fair, hog hunt, supply
+  convoy, market swing). The first one starts about 3 minutes after the server starts, then one every
+  ~12 minutes.
+- Find a **travelling merchant** on the roads, or a **farmer / fisherman** at a farm or fish camp, and press E to trade.
+- At a trading post, take a **freight** job and haul it to another town (no helicopter or fast travel with cargo).
+- BUILD → **Market stall**, list some goods, and have a friend buy them. Check the **market board** at a trading post.
+- Stand next to a friend and **trade** face to face (crew panel → Trade).
+- Guard your place: BUILD → **Tripwire**, **Motion alarm**, **Sentry gun** (E to load ammo) and **Dog kennel**
+  (E to feed meat). Log off, have a friend walk in, then log back on and read the **away log**.
+
 Solo:
 1. **Claim a home.** You start with a claim marker. Walk into any building (or a house, cave, RV…)
    with nothing else around and press E. Take your time picking: it's your base.
@@ -70,6 +81,6 @@ With a friend (meet in the same town; Bristol is easiest):
 
 ## Known limits
 
-- You can only invite players who are near you on screen.
+- Friends must already be your friends (lobby) to get an invite; anyone else has to be standing near you.
 - One world for everyone on the link: anyone with the link can play.
 - Debug commands are off on the hosted server.

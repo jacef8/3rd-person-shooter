@@ -25,6 +25,11 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   behind), then **data-hack** them: their whole crew lights up for your crew through walls and on
   the map, and you learn where their stash house is. Hacking a terminal scans the area for enemies.
   Also: tag targets (F), sensor grenades (G), optical camo (V), and silent lock bypass.
+- **A living world.** World events (riots, a county fair, hog hunts, armed convoys, market swings)
+  pull players across the map. Travelling merchants and farm and fish-camp settlers trade even when few
+  players are on. There's freight hauling, market stalls that sell while you're offline, and
+  face-to-face trades. Tripwires, motion alarms, sentry guns and guard dogs protect your place while
+  you're away, and an away log tells you what happened.
 - **Crews: a team game.** Permanent crews of up to 6 (leader, officers, members) that survive
   logging off. They share one stash house, revive each other when downed, hack faster together
   (while the hacker shows up to enemies nearby), split contract rewards and climb a crew board.

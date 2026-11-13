@@ -120,6 +120,16 @@
     "spawnMin": 60,
     "spawnMax": 200,
     "despawn": 400,
-    "xp": 20
+    "xp": 20,
+    "boar": {
+      "name": "Monster boar",
+      "hp": 700,
+      "speed": 6.5,
+      "walk": 1.2,
+      "fleeRange": 0,
+      "meat": 20,
+      "biomes": [],
+      "_about": "Hog-hunt event boss: never spawns on its own."
+    }
   }
 }

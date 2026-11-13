@@ -32,6 +32,7 @@ import GADGET_DATA from '../shared/data/gadgets.json' with { type: 'json' };
 import ACTIVITIES from '../shared/data/activities.json' with { type: 'json' };
 import HOMESTEAD from '../shared/data/homestead.json' with { type: 'json' };
 import ECONOMY from '../shared/data/economy.json' with { type: 'json' };
+import LIVING from '../shared/data/world.json' with { type: 'json' };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -183,7 +184,7 @@ function structsNear(x, z, r) {
 const stageDef = (s) => PIECES[s.type].stages[s.stage];
 function structBox(s) { return { ...pieceBox(s.type, s.x, s.z, s.rot, s.y0), type: 'struct', structId: s.id }; }
 /** Frames are walk-through scaffolding; open gates let you pass; charges aren't solid. */
-function structIsSolid(s) { return stageDef(s).material !== 'frame' && !PIECES[s.type].explosive && !(PIECES[s.type].door && s.open); }
+function structIsSolid(s) { return stageDef(s).material !== 'frame' && stageDef(s).material !== 'wire' && !PIECES[s.type].explosive && !(PIECES[s.type].door && s.open); }
 function structSolids(x, z, r, out = []) {
   for (const s of structsNear(x, z, r)) if (structIsSolid(s)) out.push(structBox(s));
   return out;
@@ -340,7 +341,7 @@ function award(p, amount, reason, share = false) {
 }
 
 const PERSIST = ['name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', ...RESOURCES];
-function persistCharacter(p) { db.characters[p.token] = Object.fromEntries(PERSIST.map((k) => [k, p[k]])); }
+function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
 function send(ws, msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
@@ -425,6 +426,551 @@ function finishClaimBuilding(p, idx) {
   const s = squadOf(p);
   if (s) for (const m of crewOnline(s)) { if (m !== p) { toast(m, `${p.name} claimed a ${lowerFirst(buildingLabel(idx))} for ${s.name}`); send(m.ws, { t: 'claimed' }); } dirty(m); }
   dirty(p);
+}
+
+
+// ================================================================ the living world
+// World events that pull people across the map, NPCs who travel and trade, player commerce, and
+// defenses that guard your stuff while you're offline. Numbers live in shared/data/world.json.
+const EV = LIVING.events, NPC = LIVING.npcs, COM = LIVING.commerce, DEF = LIVING.defenses;
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+const townContact = (t) => map.contacts.find((c) => c.townId === t.id);
+
+// ---- offline log: what happened to your stuff while you were away
+function teamTokensOf(token) { const s = squads.get(squadOfToken.get(token)); return s ? [...s.members] : [token]; }
+function logAway(ownerToken, text) {
+  const now = Date.now();
+  for (const tok of teamTokensOf(ownerToken)) {
+    const online = onlineByToken(tok);
+    if (online) continue;   // online crewmates get toasts instead
+    const c = db.characters[tok];
+    if (!c) continue;
+    c.awayLog = [...(c.awayLog || []), { at: now, text }].slice(-DEF.logMax);
+  }
+}
+function warnTeam(ownerToken, text, x, z, alert = 'Intruder') {
+  for (const o of teamOfToken(ownerToken)) { toast(o, text); send(o.ws, { t: 'alert', x, z, text: alert }); }
+  logAway(ownerToken, text.replace(/^⚠ /, ''));
+}
+const teamKeyOf = (token) => squadOfToken.get(token) || `solo:${token}`;
+function exposeToTeam(target, ownerToken, ms) {
+  expose(target, teamKeyOf(ownerToken), ms);
+  for (const o of teamOfToken(ownerToken)) send(o.ws, { t: 'expose', ids: [target.id], until: Date.now() + ms, kind: 'sensor' });
+}
+
+// ---- world events
+const worldEvents = new Map();
+let nextEventAt = Date.now() + Number(process.env.EVENT_FIRST_MS || EV.firstAfterMs);
+function eventView(e) {
+  return { id: e.id, type: e.type, name: e.name, desc: e.desc, x: Math.round(e.x), z: Math.round(e.z), radius: e.radius || 0, endsAt: e.endsAt, town: e.town || null,
+    good: e.good || null, mult: e.mult || null, board: e.board ? Object.values(e.board).sort((a, b) => b.meat - a.meat).slice(0, 5) : null };
+}
+function pushWorldEvents(extra = {}) { broadcast({ t: 'worldEvents', list: [...worldEvents.values()].map(eventView), ...extra }); }
+function inFair(x, z) { for (const e of worldEvents.values()) if (e.type === 'fair' && Math.hypot(x - e.x, z - e.z) <= e.radius) return e; return null; }
+function priceSwing(contactId, good) {
+  for (const e of worldEvents.values()) if (e.type === 'swing' && e.contactId === contactId && e.good === good) return e.mult;
+  return 1;
+}
+function randomDry(test, tries = 200) {
+  for (let i = 0; i < tries; i++) {
+    const x = (Math.random() - 0.5) * (map.size - 1200), z = (Math.random() - 0.5) * (map.size - 1200);
+    if (terrain.height(x, z) < 1 || map.towns.some((t) => x > t.rect.minX - 60 && x < t.rect.maxX + 60 && z > t.rect.minZ - 60 && z < t.rect.maxZ + 60)) continue;
+    if (test(x, z)) return { x, z };
+  }
+  return null;
+}
+function startEvent(type) {
+  const def = EV[type];
+  if (!def) return null;
+  const now = Date.now();
+  const e = { id: uid('ev'), type, name: def.name, desc: def.desc, startedAt: now, endsAt: now + def.durationMs, radius: def.radius || 0, hitters: new Set() };
+  if (type === 'riot') {
+    const busy = new Set([...worldEvents.values()].map((x) => x.town));
+    const t = pick(map.towns.filter((q) => !busy.has(q.name))) || pick(map.towns);
+    const c = townContact(t);
+    Object.assign(e, { x: c.x, z: c.z, town: t.name, name: `Riot in ${t.name}` });
+    e.bots = [];
+    for (let i = 0; i < def.rogues; i++) {
+      const a = (i / def.rogues) * Math.PI * 2;
+      e.bots.push(spawnBot(c.x + Math.cos(a) * 14, c.z + Math.sin(a) * 14, 'riot', { eventId: e.id }).id);
+    }
+  } else if (type === 'fair') {
+    const t = map.towns.find((q) => q.name === 'Blountstown' && ![...worldEvents.values()].some((x) => x.town === q.name)) || pick(map.towns);
+    const c = townContact(t);
+    Object.assign(e, { x: c.x, z: c.z, town: t.name, name: `${t.name} county fair`, board: {} });
+  } else if (type === 'hoghunt') {
+    const at = randomDry((x, z) => terrain.biome(x, z).sea > 0.45) || randomDry(() => true);
+    Object.assign(e, { x: at.x, z: at.z, name: 'Hog hunt in the swamp' });
+    const boar = spawnAnimal('boar', at.x, at.z);
+    Object.assign(boar, { hp: def.boarHp, maxHp: def.boarHp, eventId: e.id, aggressive: true });
+    e.boss = boar.id;
+    for (let i = 0; i < def.hogs; i++) spawnAnimal('hog', at.x + (Math.random() - 0.5) * 30, at.z + (Math.random() - 0.5) * 30);
+  } else if (type === 'convoy') {
+    const road = geoRoad('SR 20');
+    if (!road || road.length < 2) return null;
+    const route = Math.random() < 0.5 ? road : [...road].reverse();
+    const truck = { id: uid('cv'), name: 'Supply convoy', isBot: true, npc: true, kind: 'convoy', serial: botSerial++, x: route[0][0], z: route[0][1], yaw: 0, hp: def.hp, maxHp: def.hp, dead: false, route, leg: 1, eventId: e.id };
+    bots.set(truck.id, truck);
+    e.truck = truck.id;
+    e.bots = [];
+    for (let i = 0; i < def.escorts; i++) e.bots.push(spawnBot(truck.x + (i - 1.5) * 4, truck.z + 6, 'escort', { eventId: e.id, follow: truck.id, offset: [(i - 1.5) * 5, (i % 2 ? 8 : -8)] }).id);
+    Object.assign(e, { x: truck.x, z: truck.z, radius: 0 });
+  } else if (type === 'swing') {
+    const c = pick(map.contacts);
+    const good = pick(Object.keys(ECONOMY.prices).filter((g) => HOMESTEAD.goods[g]));
+    const boom = Math.random() < 0.6;
+    Object.assign(e, { x: c.x, z: c.z, contactId: c.id, town: postTown(c.id), good, mult: boom ? def.boom : def.glut,
+      name: boom ? `${HOMESTEAD.goods[good].name} shortage in ${postTown(c.id)}` : `${HOMESTEAD.goods[good].name} glut in ${postTown(c.id)}`,
+      desc: boom ? `${postTown(c.id)}'s trading post is paying ${def.boom}× for ${HOMESTEAD.goods[good].name}. Haul it in while it lasts.` : `${postTown(c.id)} is drowning in ${HOMESTEAD.goods[good].name}: it pays less than half. Sell it elsewhere.` });
+  }
+  worldEvents.set(e.id, e);
+  feed(`📣 ${e.name}`);
+  pushWorldEvents({ announce: e.id });
+  return e;
+}
+function geoRoad(name) {
+  const r = map.highways.find((h) => h.name === name);
+  if (!r) return null;
+  return r.pts.filter(([x, z]) => Math.abs(x) < map.half - 100 && Math.abs(z) < map.half - 100);
+}
+function payout(e, def, x, z, label) {
+  dropBag(x, z, [], def.reward || {}, label);
+  for (const tok of e.hitters) { const o = onlineByToken(tok); if (o) award(o, def.xp, e.name); }
+}
+function endEvent(e, outcome) {
+  worldEvents.delete(e.id);
+  const def = EV[e.type];
+  if (e.type === 'riot' || e.type === 'convoy') for (const id of e.bots || []) bots.delete(id);
+  if (e.type === 'convoy') bots.delete(e.truck);
+  if (e.type === 'hoghunt' && outcome !== 'won') bots.delete(e.boss);
+  if (e.type === 'fair') {
+    const ranked = Object.entries(e.board).sort((a, b) => b[1].meat - a[1].meat);
+    ranked.forEach(([tok, row], i) => {
+      const prize = def.prizes[i] || 0;
+      const total = prize + row.meat * def.perMeat;
+      const o = onlineByToken(tok);
+      if (o) { o.cash = (o.cash || 0) + total; award(o, def.xp, `County fair${prize ? ` — ${['1st', '2nd', '3rd'][i]} place` : ''}`); toast(o, `🏆 Hunting contest: ${prize ? `${['1st', '2nd', '3rd'][i]} place, ` : ''}$${total}`); dirty(o); }
+      else if (db.characters[tok]) db.characters[tok].cash = (db.characters[tok].cash || 0) + total;
+    });
+    if (ranked.length) feed(`🏆 ${e.town} hunting contest won by ${ranked[0][1].name} (${ranked[0][1].meat} meat)`);
+  }
+  if (outcome === 'won') feed(`✔ ${e.name}: done`);
+  else if (outcome === 'escaped') feed(`The supply convoy got through`);
+  pushWorldEvents();
+}
+function eventBotDown(b, attacker) {
+  const e = worldEvents.get(b.eventId);
+  if (!e) return;
+  if (attacker && !attacker.isBot) e.hitters.add(attacker.token);
+  const def = EV[e.type];
+  if (e.type === 'riot' && !e.bots.some((id) => id !== b.id && bots.get(id) && !bots.get(id).dead)) {
+    payout(e, def, e.x, e.z, 'Riot cache');
+    endEvent(e, 'won');
+  }
+  if (e.type === 'hoghunt' && b.id === e.boss) { payout(e, def, b.x, b.z, 'Monster boar'); endEvent(e, 'won'); }
+  if (e.type === 'convoy' && b.id === e.truck) { payout(e, def, b.x, b.z, 'Convoy cargo'); endEvent(e, 'won'); }
+}
+function tickEvents(now, dt) {
+  const every = Number(process.env.EVENT_EVERY_MS || EV.everyMs);
+  if (now >= nextEventAt) {
+    nextEventAt = now + every * (0.75 + Math.random() * 0.5);
+    if (worldEvents.size < EV.maxActive && players.size) {
+      const types = Object.keys(EV).filter((k) => EV[k]?.weight && ![...worldEvents.values()].some((x) => x.type === k));
+      let r = Math.random() * types.reduce((a, k) => a + EV[k].weight, 0);
+      for (const k of types) { r -= EV[k].weight; if (r <= 0) { startEvent(k); break; } }
+    }
+  }
+  for (const e of [...worldEvents.values()]) {
+    if (now > e.endsAt) { endEvent(e, e.type === 'convoy' ? 'escaped' : 'expired'); continue; }
+    if (e.type === 'convoy') {
+      const t = bots.get(e.truck);
+      if (!t) { endEvent(e, 'expired'); continue; }
+      const [tx, tz] = t.route[t.leg];
+      const dx = tx - t.x, dz = tz - t.z, d = Math.hypot(dx, dz), step = EV.convoy.speed * dt;
+      if (d <= step) { t.x = tx; t.z = tz; t.leg++; if (t.leg >= t.route.length) { endEvent(e, 'escaped'); continue; } }
+      else { t.x += dx / d * step; t.z += dz / d * step; t.yaw = Math.atan2(dx, dz); }
+      e.x = t.x; e.z = t.z;
+      for (const id of e.bots) {
+        const b = bots.get(id);
+        if (!b || b.dead) continue;
+        b.homeX = t.x + b.offset[0]; b.homeZ = t.z + b.offset[1];
+        // Nobody around to see: the escorts just ride along.
+        if (![...players.values()].some((p) => dist2(p, b) < BOT_ACTIVE_RANGE ** 2)) { b.x = b.homeX; b.z = b.homeZ; }
+      }
+    }
+  }
+}
+function fairSubmit(p) {
+  const e = inFair(p.x, p.z);
+  if (!e) return toast(p, 'Hand in meat at the county fair');
+  if (!(p.meat > 0)) return toast(p, 'Bring raw meat for the hunting contest — hunt deer and hogs');
+  const row = e.board[p.token] || (e.board[p.token] = { name: p.name, meat: 0 });
+  row.meat += p.meat;
+  toast(p, `Handed in ${p.meat} meat — you're on ${row.meat}`);
+  p.meat = 0;
+  dirty(p);
+  pushWorldEvents();
+}
+
+// ---- NPC life: travelling merchants and settlers
+function spawnMerchant(town) {
+  const c = townContact(town);
+  const d = NPC.merchant;
+  const b = { id: uid('m'), name: d.name, isBot: true, npc: true, kind: 'merchant', serial: botSerial++, x: c.x + 4, z: c.z + 4, yaw: 0, hp: d.hp, maxHp: d.hp, dead: false, target: null, stuckFor: 0 };
+  bots.set(b.id, b);
+  return b;
+}
+const merchantRespawns = [];
+function keepMerchants(now) {
+  const alive = [...bots.values()].filter((b) => b.kind === 'merchant').length;
+  for (let i = merchantRespawns.length - 1; i >= 0; i--) if (merchantRespawns[i] <= now) merchantRespawns.splice(i, 1);
+  for (let i = alive + merchantRespawns.length; i < NPC.merchant.count; i++) spawnMerchant(pick(map.towns));
+}
+const settlerHomes = map.lootSpawns.filter((l) => l.zone === 'farm' || l.zone === 'lake').filter((_, i) => i % NPC.settler.every === 0)
+  .map((l, i) => ({ i, x: l.x + 3, z: l.z + 3, zone: l.zone, goneUntil: 0, bot: null }));
+function keepSettlers(now) {
+  const alive = [...players.values()].filter((p) => !p.dead && !p.deploying);
+  for (const h of settlerHomes) {
+    const near = alive.some((p) => Math.abs(p.x - h.x) < NPC.settler.spawnWithin && Math.abs(p.z - h.z) < NPC.settler.spawnWithin);
+    const b = h.bot && bots.get(h.bot);
+    if (b && !alive.some((p) => Math.hypot(p.x - b.x, p.z - b.z) < NPC.settler.despawn)) { bots.delete(b.id); h.bot = null; continue; }
+    if (!b && near && h.goneUntil <= now) {
+      const s = { id: uid('s'), name: h.zone === 'lake' ? 'Fisherman' : 'Farmer', isBot: true, npc: true, kind: 'settler', home: h.i, serial: botSerial++, x: h.x, z: h.z, homeX: h.x, homeZ: h.z, yaw: 0, hp: NPC.settler.hp, maxHp: NPC.settler.hp, dead: false, wander: null, zone: h.zone };
+      bots.set(s.id, s);
+      h.bot = s.id;
+    }
+  }
+}
+function updateNpc(b, dt, now) {
+  if (b.kind === 'merchant') {
+    // Walk from town to town; if stuck (a river in the way), pick another town.
+    if (!b.target || Math.hypot(b.target.x - b.x, b.target.z - b.z) < 6) {
+      const t = pick(map.towns);
+      const c = townContact(t);
+      b.target = { x: c.x + 4, z: c.z + 4, town: t.name };
+      b.pauseUntil = now + 60_000;   // trade in town for a minute
+    }
+    if (now < (b.pauseUntil || 0)) return;
+    const dx = b.target.x - b.x, dz = b.target.z - b.z, d = Math.hypot(dx, dz), step = NPC.merchant.speed * dt;
+    const np = moveWithCollision(b.x, b.z, dx / d * step, dz / d * step, PLAYER_RADIUS, solidsNear(b.x, b.z, step + 2), terrain);
+    if (Math.hypot(np.x - b.x, np.z - b.z) < step * 0.2) { b.stuckFor += dt; if (b.stuckFor > 8) { b.target = null; b.stuckFor = 0; } } else b.stuckFor = 0;
+    b.x = np.x; b.z = np.z; b.yaw = Math.atan2(dx, dz);
+  } else if (b.kind === 'settler') {
+    if (!b.wander || Math.hypot(b.wander.x - b.x, b.wander.z - b.z) < 1 || Math.random() < 0.003) b.wander = { x: b.homeX + (Math.random() - 0.5) * 16, z: b.homeZ + (Math.random() - 0.5) * 16 };
+    if (Math.random() < 0.5) return;
+    const dx = b.wander.x - b.x, dz = b.wander.z - b.z, d = Math.hypot(dx, dz) || 1, step = 1.2 * dt;
+    const np = moveWithCollision(b.x, b.z, dx / d * step, dz / d * step, PLAYER_RADIUS, solidsNear(b.x, b.z, 3), terrain);
+    b.x = np.x; b.z = np.z; b.yaw = Math.atan2(dx, dz);
+  }
+}
+function npcDown(b, attacker) {
+  if (b.kind === 'merchant') {
+    dropBag(b.x, b.z, [], NPC.merchant.loot, "Merchant's pack");
+    merchantRespawns.push(Date.now() + NPC.merchant.respawnMs);
+    if (attacker && !attacker.isBot) feed(`${attacker.name} robbed a travelling merchant`);
+  } else if (b.kind === 'settler') {
+    const h = settlerHomes[b.home];
+    if (h) { h.goneUntil = Date.now() + NPC.settler.goneMs; h.bot = null; }
+    dropBag(b.x, b.z, [], { ...NPC.settler.loot, ...(b.zone === 'lake' ? { fish: 6 } : { corn: 8, seeds: 2 }) }, `${b.name}'s goods`);
+    if (attacker && !attacker.isBot) feed(`${attacker.name} killed a ${b.name.toLowerCase()}`);
+  }
+}
+/** What a friendly NPC buys and sells. Merchants pay near the best price anywhere; settlers sell their produce cheap. */
+function npcTradeView(b) {
+  const best = (g) => Math.max(...map.contacts.map((c) => priceAt(c.id, g)));
+  if (b.kind === 'merchant') {
+    return { town: 'travelling', who: b.name,
+      sells: Object.keys(ECONOMY.prices).map((g) => ({ good: g, pays: Math.max(1, Math.floor(best(g) * NPC.merchant.buyRate)), name: HOMESTEAD.goods[g]?.name || g })),
+      shop: Object.entries(NPC.merchant.shop).map(([k, price]) => ({ id: k, name: ECONOMY.shop[k]?.name || HOMESTEAD.goods[k]?.name || k, price, qty: ECONOMY.shop[k]?.qty || 1 })) };
+  }
+  const produce = b.zone === 'lake' ? ['fish', 'meals'] : ['corn', 'peanuts', 'seeds'];
+  return { town: b.zone === 'lake' ? 'fish camp' : 'farm', who: b.name,
+    sells: ['meat', 'parts', 'tech', 'salvage'].map((g) => ({ good: g, pays: Math.max(1, Math.round(ECONOMY.prices[g] * NPC.settler.buyRate)), name: HOMESTEAD.goods[g]?.name || g })),
+    shop: produce.map((g) => ({ id: g, name: HOMESTEAD.goods[g].name, price: Math.max(1, Math.round((ECONOMY.prices[g] || 3) * NPC.settler.sellRate * ECONOMY.buyMarkup)), qty: 1 })) };
+}
+function friendlyNpcNear(p) {
+  for (const b of bots.values()) if (b.npc && !b.dead && (b.kind === 'merchant' || b.kind === 'settler') && Math.hypot(b.x - p.x, b.z - p.z) < 2.6) return b;
+  return null;
+}
+function npcView(p, b) {
+  return { t: 'contact', id: null, npc: b.id, name: b.name, offers: [], active: [], comms: p.comms, trade: npcTradeView(b) };
+}
+
+// ---- commerce: freight (haul jobs), player stalls, the market board, player-to-player trades
+const hauls = new Map();   // contactId -> [{ id, from, to, toTown, label, pay }]
+let haulsAt = 0;
+function refreshHauls(now) {
+  if (now - haulsAt < COM.haul.refreshMs && hauls.size) return;
+  haulsAt = now;
+  hauls.clear();
+  for (const c of map.contacts) {
+    const list = [];
+    for (let i = 0; i < COM.haul.perPost; i++) {
+      const to = pick(map.contacts.filter((o) => o.id !== c.id));
+      const km = Math.hypot(to.x - c.x, to.z - c.z) / 1000;
+      const good = pick(['corn', 'peanuts', 'cotton', 'fish', 'meat', 'parts', 'tech', 'salvage']);
+      list.push({ id: uid('h'), from: c.id, to: to.id, toTown: postTown(to.id), label: `${HOMESTEAD.goods[good]?.name || good} freight`, pay: Math.round(COM.haul.base + km * COM.haul.perKm * 10) });
+    }
+    hauls.set(c.id, list);
+  }
+}
+const hasCargo = (p) => p.inv.pack.some((i) => i.kind === 'cargo');
+function takeHaul(p, msg) {
+  const ct = map.contacts[msg.contactId];
+  if (!ct || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return;
+  const list = hauls.get(ct.id) || [];
+  const job = list.find((j) => j.id === msg.id);
+  if (!job) return toast(p, 'That job has been taken');
+  if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+  list.splice(list.indexOf(job), 1);
+  p.inv.pack.push({ id: uid('cargo'), kind: 'cargo', name: `${job.label} → ${job.toTown}`, dest: job.to, destTown: job.toTown, pay: job.pay });
+  toast(p, `Freight loaded: take it to ${job.toTown}'s trading post for $${job.pay}. No helicopters or fast travel with freight.`);
+  dirty(p);
+  send(p.ws, contactView(p, ct.id));
+}
+function deliverCargo(p, contactId) {
+  const mine = p.inv.pack.filter((i) => i.kind === 'cargo' && i.dest === contactId);
+  if (!mine.length) return;
+  let pay = 0;
+  for (const c of mine) pay += c.pay;
+  p.inv.pack = p.inv.pack.filter((i) => !mine.includes(i));
+  p.cash = (p.cash || 0) + pay;
+  award(p, COM.haul.xp * mine.length, 'Freight delivered');
+  toast(p, `📦 Delivered ${mine.length} freight load${mine.length > 1 ? 's' : ''}: +$${pay}`);
+  dirty(p);
+}
+function stallView(p, st) {
+  const mine = canManage(p, st);
+  return { t: 'contact', id: null, stall: st.id, name: mine ? 'Your market stall' : `${st.ownerName}'s market stall`, offers: [], active: [], comms: p.comms,
+    stallData: { mine, till: mine ? st.till || 0 : null, listings: (st.listings || []).map((l, i) => ({ i, res: l.res, qty: l.qty, price: l.price, name: HOMESTEAD.goods[l.res]?.name || l.res })), max: COM.stall.maxListings } };
+}
+function stallAction(p, msg) {
+  const st = structs.get(msg.id);
+  if (!st || !PIECES[st.type].stall || boxDist(structBox(st), p.x, p.z) > INTERACT_RANGE + 1) return;
+  st.listings ??= []; st.till ??= 0;
+  const mine = canManage(p, st);
+  if (msg.action === 'list' && mine) {
+    const res = String(msg.res), qty = Math.floor(Number(msg.qty)), price = Math.floor(Number(msg.price));
+    if (!RESOURCES.includes(res) || res === 'cash' || res === 'intel') return;
+    if (!(qty > 0) || (p[res] || 0) < qty) return toast(p, 'You don\'t have that many');
+    if (!(price > 0) || price > COM.stall.maxPrice) return toast(p, 'Set a price per unit');
+    if (st.listings.length >= COM.stall.maxListings) return toast(p, 'The stall is full');
+    p[res] -= qty;
+    const same = st.listings.find((l) => l.res === res && l.price === price);
+    if (same) same.qty += qty; else st.listings.push({ res, qty, price });
+  } else if (msg.action === 'unlist' && mine) {
+    const l = st.listings[msg.i];
+    if (!l) return;
+    p[l.res] = (p[l.res] || 0) + l.qty;
+    st.listings.splice(msg.i, 1);
+  } else if (msg.action === 'collect' && mine) {
+    p.cash = (p.cash || 0) + st.till;
+    toast(p, `Collected $${st.till}`);
+    st.till = 0;
+  } else if (msg.action === 'buy') {
+    const l = st.listings[msg.i];
+    if (!l) return toast(p, 'Sold out');
+    const qty = Math.min(l.qty, Math.max(1, msg.qty === 'all' ? l.qty : Math.floor(Number(msg.qty) || 1)));
+    const cost = qty * l.price;
+    if ((p.cash || 0) < cost) return toast(p, `That's $${cost} — you have $${p.cash || 0}`);
+    p.cash -= cost; p[l.res] = (p[l.res] || 0) + qty;
+    st.till += cost; l.qty -= qty;
+    if (!l.qty) st.listings.splice(msg.i, 1);
+    toast(p, `Bought ${qty} ${HOMESTEAD.goods[l.res]?.name || l.res} for $${cost}`);
+    const owner = onlineByToken(st.owner);
+    if (owner && owner !== p) toast(owner, `💰 ${p.name} bought ${qty} ${HOMESTEAD.goods[l.res]?.name || l.res} at your stall (+$${cost})`);
+    else logAway(st.owner, `${p.name} bought ${qty} ${HOMESTEAD.goods[l.res]?.name || l.res} at your stall for $${cost}`);
+  } else return;
+  dirty(p);
+  send(p.ws, stallView(p, st));
+}
+/** Every stall's listings, for the market board at trading posts. */
+function marketBoard(fromX, fromZ) {
+  const rows = [];
+  for (const st of structs.values()) {
+    if (!PIECES[st.type].stall || !(st.listings || []).length) continue;
+    const near = map.towns.reduce((a, t) => (!a || Math.hypot(t.x - st.x, t.z - st.z) < Math.hypot(a.x - st.x, a.z - st.z) ? t : a), null);
+    for (const l of st.listings) rows.push({ seller: st.ownerName, res: l.res, name: HOMESTEAD.goods[l.res]?.name || l.res, qty: l.qty, price: l.price, x: Math.round(st.x), z: Math.round(st.z), near: near?.name || '', dist: Math.round(Math.hypot(st.x - fromX, st.z - fromZ)) });
+  }
+  return rows.sort((a, b) => a.res.localeCompare(b.res) || a.price - b.price).slice(0, 40);
+}
+// Face-to-face trades: both sides put up goods/items/cash, both confirm, then it swaps at once.
+const trades = new Map();   // token -> session
+function tradeEmpty() { return { res: {}, items: [] }; }
+function tradePush(sess) {
+  for (const [me, them] of [[sess.a, sess.b], [sess.b, sess.a]]) {
+    const pm = onlineByToken(me), pt = onlineByToken(them);
+    if (!pm) continue;
+    const show = (o, owner) => ({ res: o.res, items: o.items.map((id) => owner.inv.pack.find((i) => i.id === id)).filter(Boolean) });
+    send(pm.ws, { t: 'ptrade', state: 'open', with: pt?.name, you: show(sess.offer[me], pm), them: pt ? show(sess.offer[them], pt) : tradeEmpty(), youOk: !!sess.ok[me], themOk: !!sess.ok[them] });
+  }
+}
+function tradeClose(sess, why) {
+  for (const tok of [sess.a, sess.b]) { trades.delete(tok); const o = onlineByToken(tok); if (o) send(o.ws, { t: 'ptrade', state: 'closed', why }); }
+}
+function playerTrade(p, msg) {
+  const now = Date.now();
+  if (msg.action === 'request') {
+    const t = players.get(msg.id);
+    if (!t || t === p || t.dead || Math.hypot(t.x - p.x, t.z - p.z) > COM.trade.range) return toast(p, 'Get closer to trade');
+    if (trades.has(t.token)) return toast(p, `${t.name} is busy trading`);
+    t.tradeAsk = { from: p.token, until: now + 30_000 };
+    send(t.ws, { t: 'ptrade', state: 'ask', from: p.name, fromId: p.id });
+    return toast(p, `Asked ${t.name} to trade`);
+  }
+  if (msg.action === 'accept') {
+    const ask = p.tradeAsk;
+    p.tradeAsk = null;
+    const o = ask && ask.until > now && onlineByToken(ask.from);
+    if (!o || Math.hypot(o.x - p.x, o.z - p.z) > COM.trade.range) return toast(p, 'They\'re gone');
+    if (trades.has(o.token) || trades.has(p.token)) return toast(p, 'Already trading');
+    const sess = { a: o.token, b: p.token, offer: { [o.token]: tradeEmpty(), [p.token]: tradeEmpty() }, ok: {} };
+    trades.set(o.token, sess); trades.set(p.token, sess);
+    return tradePush(sess);
+  }
+  const sess = trades.get(p.token);
+  if (!sess) return;
+  const otherTok = sess.a === p.token ? sess.b : sess.a, other = onlineByToken(otherTok);
+  if (msg.action === 'cancel' || !other || Math.hypot(other.x - p.x, other.z - p.z) > COM.trade.range + 2) return tradeClose(sess, msg.action === 'cancel' ? `${p.name} cancelled` : 'Too far apart');
+  if (msg.action === 'offer') {
+    const res = {};
+    for (const [k, v] of Object.entries(msg.res || {})) { const n = Math.floor(Number(v)); if (RESOURCES.includes(k) && n > 0) res[k] = Math.min(n, p[k] || 0); }
+    const items = (Array.isArray(msg.items) ? msg.items : []).filter((id) => p.inv.pack.some((i) => i.id === id && i.kind !== 'cargo')).slice(0, PACK_SIZE);
+    sess.offer[p.token] = { res, items };
+    sess.ok = {};   // any change needs both to confirm again
+    return tradePush(sess);
+  }
+  if (msg.action === 'confirm') {
+    sess.ok[p.token] = true;
+    if (!sess.ok[otherTok]) return tradePush(sess);
+    // Both confirmed: check everything is still there, then swap.
+    const A = onlineByToken(sess.a), B = onlineByToken(sess.b);
+    const valid = (who, o) => Object.entries(o.res).every(([k, v]) => (who[k] || 0) >= v) && o.items.every((id) => who.inv.pack.some((i) => i.id === id));
+    const oa = sess.offer[sess.a], ob = sess.offer[sess.b];
+    if (!valid(A, oa) || !valid(B, ob)) return tradeClose(sess, 'Something changed — trade cancelled');
+    if (A.inv.pack.length - oa.items.length + ob.items.length > PACK_SIZE || B.inv.pack.length - ob.items.length + oa.items.length > PACK_SIZE) return tradeClose(sess, 'Not enough backpack space');
+    const move = (from, to, o) => {
+      for (const [k, v] of Object.entries(o.res)) { from[k] -= v; to[k] = (to[k] || 0) + v; }
+      for (const id of o.items) { const i = from.inv.pack.findIndex((x) => x.id === id); to.inv.pack.push(from.inv.pack.splice(i, 1)[0]); }
+    };
+    move(A, B, oa); move(B, A, ob);
+    dirty(A); dirty(B);
+    tradeClose(sess, 'Trade complete');
+  }
+}
+
+// ---- defenses: tripwires, motion alarms, sentry guns, guard dogs. They work while you're offline.
+const isDefense = (st) => !!PIECES[st.type].defense;
+function hostilesNear(st, r) {
+  const out = [];
+  for (const p of players.values()) {
+    if (p.dead || p.deploying || tokenInSquadWith(p, st.owner) || (p.protectedUntil || 0) > Date.now()) continue;
+    if (Math.hypot(p.x - st.x, p.z - st.z) <= r) out.push(p);
+  }
+  for (const b of bots.values()) {
+    if (b.dead || b.animal || b.npc || b.dog) continue;
+    if (Math.hypot(b.x - st.x, b.z - st.z) <= r) out.push(b);
+  }
+  return out;
+}
+const sentryWeapon = { ...weaponStats(makeWeapon('carbine')), damage: DEF.sentry.damage };
+function tickDefenses(now) {
+  for (const st of structs.values()) {
+    const kind = PIECES[st.type].defense;
+    if (!kind) continue;
+    if (kind === 'tripwire') {
+      if ((st.rearmAt || 0) > now) continue;
+      const b = structBox(st);
+      const hit = hostilesNear(st, 4).find((c) => c.x > b.minX - 0.45 && c.x < b.maxX + 0.45 && c.z > b.minZ - 0.45 && c.z < b.maxZ + 0.45);
+      if (!hit) continue;
+      st.rearmAt = now + DEF.tripwire.rearmMs;
+      stun(hit, DEF.tripwire.stunMs, null);
+      if (!hit.isBot) { exposeToTeam(hit, st.owner, DEF.tripwire.exposeMs); toast(hit, '⚡ You tripped a wire!'); }
+      warnTeam(st.owner, `⚠ ${hit.name} tripped your wire`, st.x, st.z, 'Tripwire');
+    } else if (kind === 'alarm') {
+      if ((st.alarmAt || 0) > now) continue;
+      const hit = hostilesNear(st, DEF.alarm.radius).find((c) => c.isBot || !camoActive(c));
+      if (!hit) continue;
+      st.alarmAt = now + DEF.alarm.cooldownMs;
+      if (!hit.isBot) exposeToTeam(hit, st.owner, DEF.alarm.exposeMs);
+      warnTeam(st.owner, `⚠ Motion alarm: ${hit.name} at your camp`, st.x, st.z, 'Motion alarm');
+    } else if (kind === 'sentry') {
+      if (!(st.ammo > 0) || (st.nextShot || 0) > now) continue;
+      const eye = st.y0 + 1.3;
+      let target = null, td = DEF.sentry.range;
+      for (const c of hostilesNear(st, DEF.sentry.range)) {
+        const d = Math.hypot(c.x - st.x, c.z - st.z);
+        if (d < td && lineOfSight(st.x, eye, st.z, c.x, gy(c) + 1.2, c.z)) { td = d; target = c; }
+      }
+      if (!target) continue;
+      st.nextShot = now + 60_000 / DEF.sentry.rpm;
+      st.ammo--;
+      const shooter = { id: st.id, name: `${st.ownerName}'s sentry`, isBot: true, x: st.x, z: st.z, crouch: true, weapon: sentryWeapon };
+      fire(shooter, [target.x - st.x, gy(target) + 1.1 - eye, target.z - st.z], true, 1.4);
+      if (!st.warned || now - st.warned > 30_000) { st.warned = now; warnTeam(st.owner, `⚠ Your sentry is firing at ${target.name}`, st.x, st.z, 'Sentry'); }
+    } else if (kind === 'kennel') {
+      // Hungry dogs don't guard. One meal an hour.
+      if ((st.fedUntil || 0) < now && (st.meat || 0) > 0) { st.meat--; st.fedUntil = now + DEF.kennel.mealEveryMs; }
+      const fed = (st.fedUntil || 0) > now;
+      const dog = st.dog && bots.get(st.dog);
+      const someone = [...players.values()].some((p) => !p.dead && Math.hypot(p.x - st.x, p.z - st.z) < DEF.kennel.activeWithin);
+      if (dog && (!fed || !someone)) { bots.delete(dog.id); st.dog = null; continue; }
+      if (!dog && fed && someone && (st.dogDeadUntil || 0) <= now) {
+        const d = { id: uid('dog'), name: `${st.ownerName}'s dog`, isBot: true, dog: true, kind: 'dog', owner: st.owner, kennel: st.id, serial: botSerial++, x: st.x + 1.5, z: st.z + 1.5, homeX: st.x, homeZ: st.z, yaw: 0, hp: DEF.kennel.dogHp, maxHp: DEF.kennel.dogHp, dead: false, wander: null };
+        bots.set(d.id, d);
+        st.dog = d.id;
+      }
+    }
+  }
+}
+function updateDog(b, dt, now) {
+  const K = DEF.kennel;
+  const st = structs.get(b.kennel);
+  if (!st) { bots.delete(b.id); return; }
+  let target = null, td = K.guardRange;
+  for (const c of hostilesNear(st, K.chaseRange)) {
+    const d = Math.hypot(c.x - st.x, c.z - st.z);
+    if (d < td || (b.target === c.id && d < K.chaseRange)) { td = d; target = c; }
+  }
+  let gx, gz, speed;
+  if (target) {
+    if (b.target !== target.id) { b.target = target.id; warnTeam(st.owner, `⚠ Your dog is going after ${target.name}`, st.x, st.z, 'Guard dog'); }
+    gx = target.x; gz = target.z; speed = K.speed;
+    if (Math.hypot(target.x - b.x, target.z - b.z) < 1.7 && now >= (b.nextBite || 0)) {
+      b.nextBite = now + K.biteEveryMs;
+      applyDamage(target, K.bite, b, !!target.isBot);
+    }
+  } else {
+    b.target = null;
+    if (!b.wander || Math.hypot(b.wander.x - b.x, b.wander.z - b.z) < 1 || Math.random() < 0.01) b.wander = { x: st.x + (Math.random() - 0.5) * 24, z: st.z + (Math.random() - 0.5) * 24 };
+    gx = b.wander.x; gz = b.wander.z; speed = 2;
+  }
+  const dx = gx - b.x, dz = gz - b.z, d = Math.hypot(dx, dz);
+  if (d < 1.2) return;
+  const step = speed * dt;
+  const np = moveWithCollision(b.x, b.z, dx / d * step, dz / d * step, 0.4, solidsNear(b.x, b.z, step + 2), terrain);
+  b.x = np.x; b.z = np.z; b.yaw = Math.atan2(dx, dz);
+}
+function defenseInteract(p, st) {
+  const kind = PIECES[st.type].defense;
+  if (kind === 'sentry') {
+    const room = DEF.sentry.maxAmmo - (st.ammo || 0);
+    const n = Math.min(room, p.ammo, DEF.sentry.loadAtOnce);
+    if (!n) return toast(p, room ? 'You have no ammo to load' : `Sentry full (${st.ammo} rounds)`);
+    p.ammo -= n; st.ammo = (st.ammo || 0) + n;
+    toast(p, `Loaded ${n} rounds — sentry has ${st.ammo}`);
+    return dirty(p);
+  }
+  if (kind === 'kennel') {
+    const room = DEF.kennel.maxMeat - (st.meat || 0);
+    const n = Math.min(room, p.meat || 0);
+    if (!n) return toast(p, room ? 'Bring raw meat to feed your dog (hunt deer and hogs)' : `The kennel's full (${st.meat} meat)`);
+    p.meat -= n; st.meat = (st.meat || 0) + n;
+    toast(p, `Fed the kennel ${n} meat — enough for ${st.meat + ((st.fedUntil || 0) > Date.now() ? 1 : 0)} hours`);
+    return dirty(p);
+  }
+  if (kind === 'tripwire') return toast(p, (st.rearmAt || 0) > Date.now() ? 'Tripwire re-arming…' : 'Tripwire armed');
+  if (kind === 'alarm') return toast(p, `Motion alarm on — it watches ${feet(DEF.alarm.radius)} around it`);
 }
 
 // ---------------------------------------------------------------- crews ("leadership")
@@ -770,9 +1316,36 @@ function finishFishing(p) {
   send(p.ws, { t: 'hack', done: true, text: `+${n} fish` });
   dirty(p);
 }
+function tradeNpc(p, msg) {
+  const b = bots.get(msg.npcId);
+  if (!b || b.dead || !b.npc || Math.hypot(b.x - p.x, b.z - p.z) > 4) return toast(p, 'They\'ve moved on');
+  const view = npcTradeView(b);
+  if (msg.action === 'sell') {
+    const row = view.sells.find((x) => x.good === msg.good);
+    const have = p[msg.good] || 0;
+    const qty = msg.qty === 'all' ? have : Math.min(have, 1);
+    if (!row || qty < 1) return;
+    p[msg.good] -= qty; p.cash = (p.cash || 0) + qty * row.pays;
+    toast(p, `Sold ${qty} ${row.name} for $${qty * row.pays}`);
+  } else if (msg.action === 'buy') {
+    const it = view.shop.find((x) => x.id === msg.item);
+    if (!it) return;
+    if ((p.cash || 0) < it.price) return toast(p, `That costs $${it.price}`);
+    const sh = ECONOMY.shop[it.id];
+    if (sh && (sh.kind === 'tool' || sh.kind === 'medkit') && p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+    p.cash -= it.price;
+    if (!sh || sh.kind === 'good') p[it.id] = (p[it.id] || 0) + (it.qty || 1);
+    else if (sh.kind === 'tool') p.inv.pack.push(makeTool(it.id));
+    else if (sh.kind === 'medkit') p.inv.pack.push(makeConsumable('medkit'));
+    else if (sh.kind === 'ammo') p.ammo += sh.qty || 60;
+    toast(p, `Bought ${it.name} for $${it.price}`);
+  }
+  dirty(p);
+  send(p.ws, npcView(p, b));
+}
 // Trading posts: every Contact buys and sells, at prices set by what its town has plenty of.
 function postTown(contactId) { const c = map.contacts[contactId]; return map.towns[c.townId]?.name || ''; }
-function priceAt(contactId, good) { return Math.max(1, Math.round(ECONOMY.prices[good] * (ECONOMY.towns[postTown(contactId)]?.[good] ?? 1))); }
+function priceAt(contactId, good) { return Math.max(1, Math.round(ECONOMY.prices[good] * (ECONOMY.towns[postTown(contactId)]?.[good] ?? 1) * priceSwing(contactId, good))); }
 function tradeView(contactId) {
   return {
     town: postTown(contactId),
@@ -781,6 +1354,7 @@ function tradeView(contactId) {
   };
 }
 function trade(p, msg) {
+  if (msg.npcId) return tradeNpc(p, msg);
   const ct = map.contacts[msg.contactId];
   if (!ct || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return toast(p, 'Trade at a Contact\'s trading post');
   if (msg.action === 'sell') {
@@ -864,7 +1438,7 @@ function tickStuns(now) {
 function enemyAtReach(p, range) {
   let best = null, bd = range;
   for (const c of [...players.values(), ...bots.values()]) {
-    if (c === p || c.dead || c.animal || (!c.isBot && sameSquad(c, p))) continue;
+    if (c === p || c.dead || c.animal || c.npc || (c.dog && tokenInSquadWith(p, c.owner)) || (!c.isBot && sameSquad(c, p))) continue;
     const d = Math.hypot(c.x - p.x, c.z - p.z);
     if (d < bd) { bd = d; best = c; }
   }
@@ -916,7 +1490,7 @@ function terminalScan(p, term) {
   const now = Date.now(), key = squadKey(p), R = ACTIVITIES.terminal.scanRadius, ms = ACTIVITIES.terminal.scanMs;
   const ids = [];
   for (const c of [...players.values(), ...bots.values()]) {
-    if (c.dead || c.animal || (!c.isBot && sameSquad(c, p)) || Math.hypot(c.x - term.x, c.z - term.z) > R) continue;
+    if (c.dead || c.animal || c.npc || (!c.isBot && sameSquad(c, p)) || Math.hypot(c.x - term.x, c.z - term.z) > R) continue;
     expose(c, key, ms);
     ids.push(c.id);
   }
@@ -1139,6 +1713,7 @@ function tickDowned(now) {
 }
 function applyDamage(target, amount, attacker, isBot, headshot = false) {
   if (target.dead) return;
+  if (!isBot && attacker && !attacker.isBot && (inFair(target.x, target.z) || inFair(attacker.x, attacker.z))) return;   // the fairgrounds are a safe zone
   if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
   if (!isBot && target.downed) {
     // Shooting someone who's down finishes them off.
@@ -1154,6 +1729,7 @@ function applyDamage(target, amount, attacker, isBot, headshot = false) {
   target.hp -= dmg;
   target.lastHit = Date.now();
   if (target.animal) { target.hurtUntil = Date.now() + 6000; target.lastAttacker = attacker; }
+  if (target.eventId && attacker && !attacker.isBot) worldEvents.get(target.eventId)?.hitters.add(attacker.token);
   if (!isBot) { breakCamo(target, 3000); dirty(target); }
   if (target.hp <= 0) { target.hp = 0; if (isBot) killBot(target, attacker, headshot); else if (canGoDown(target)) goDown(target, attacker, headshot); else killPlayer(target, attacker, headshot); }
 }
@@ -1198,6 +1774,15 @@ function killPlayer(p, attacker, headshotKill) {
 
 function killBot(b, attacker, headshotKill) {
   b.dead = true;
+  if (b.eventId) eventBotDown(b, attacker);
+  if (b.npc && b.kind !== 'convoy') { npcDown(b, attacker); bots.delete(b.id); return; }
+  if (b.kind === 'convoy') { bots.delete(b.id); return; }
+  if (b.dog) {
+    const st = structs.get(b.kennel);
+    if (st) { st.dogDeadUntil = Date.now() + DEF.kennel.respawnMs; st.dog = null; warnTeam(b.owner, `⚠ ${attacker?.name || 'Someone'} killed your guard dog`, b.x, b.z, 'Dog down'); }
+    bots.delete(b.id);
+    return;
+  }
   if (b.animal) {
     const a = HOMESTEAD.animals[b.kind];
     dropBag(b.x, b.z, [], { meat: a.meat }, `${a.name} carcass`);
@@ -1353,6 +1938,18 @@ function manageAnimals() {
 }
 function updateAnimal(b, dt, alive) {
   const a = ANIMALS[b.kind];
+  if (b.aggressive) {
+    // The hog-hunt boar charges whoever is closest.
+    let prey = null, pd = 30;
+    for (const p of alive) { const d = Math.hypot(p.x - b.x, p.z - b.z); if (d < pd && !p.downed) { pd = d; prey = p; } }
+    if (prey) {
+      const dx = prey.x - b.x, dz = prey.z - b.z, step = a.speed * dt;
+      const np = moveWithCollision(b.x, b.z, dx / pd * step, dz / pd * step, 0.6, solidsNear(b.x, b.z, step + 2), terrain);
+      b.x = np.x; b.z = np.z; b.yaw = Math.atan2(dx, dz);
+      if (pd < 2.2 && Date.now() >= (b.nextBite || 0)) { b.nextBite = Date.now() + 1000; applyDamage(prey, EV.hoghunt.boarBite, b, false); }
+      return;
+    }
+  }
   let threat = null, td = a.fleeRange;
   for (const p of alive) {
     const d = Math.hypot(p.x - b.x, p.z - b.z) * (p.crouch ? 1.6 : 1) * (camoActive(p) ? 3 : 1);   // sneak up crouched
@@ -1402,6 +1999,8 @@ function updateBots(dt, now) {
   const alive = [...players.values()].filter((p) => !p.dead);
   for (const b of bots.values()) {
     if (b.dead || isStunned(b, now)) continue;
+    if (b.dog) { updateDog(b, dt, now); continue; }
+    if (b.npc) { if (b.kind !== 'convoy') updateNpc(b, dt, now); continue; }
     if (b.animal) { updateAnimal(b, dt, alive); continue; }
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
     let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue).sightRange;
@@ -1554,7 +2153,11 @@ function abandonContract(p, id) {
   dirty(p);
 }
 function contactView(p, contactId) {
-  return { t: 'contact', id: contactId, name: map.contacts[contactId].name, offers: contactOffers(p, contactId), active: p.contracts.map((c) => c.id), comms: p.comms, trade: tradeView(contactId) };
+  refreshHauls(Date.now());
+  const ct = map.contacts[contactId];
+  return { t: 'contact', id: contactId, name: ct.name, offers: contactOffers(p, contactId), active: p.contracts.map((c) => c.id), comms: p.comms, trade: tradeView(contactId),
+    hauls: (hauls.get(contactId) || []).map((h) => ({ id: h.id, label: h.label, toTown: h.toTown, pay: h.pay, km: +(Math.hypot(map.contacts[h.to].x - ct.x, map.contacts[h.to].z - ct.z) / 1000).toFixed(1) })),
+    board: marketBoard(ct.x, ct.z), fair: !!inFair(ct.x, ct.z) };
 }
 function requisition(p, msg) {
   const contact = map.contacts[msg.contactId];
@@ -1756,6 +2359,7 @@ function nearestInteractable(p) {
       if (res) consider(boxDist(b, p.x, p.z) + 0.6, { kind: 'harvest', ref: b, res });
     }
   }
+  if (best) best.d = bestD;
   return best;
 }
 function containerView(p, kind, id) {
@@ -1796,6 +2400,13 @@ function interact(p) {
   for (const m of squadMembersOnline(p)) {
     if (m !== p && m.downed && !m.dead && Math.hypot(m.x - p.x, m.z - p.z) <= DOWNED.reviveRange) return startHack(p, 'revive', m.id);
   }
+  // Friendly NPCs trade.
+  // (Unless something else is closer: a crate at a farmer's feet still gets picked up.)
+  const npc = friendlyNpcNear(p);
+  if (npc) {
+    const near = nearestInteractable(p);
+    if (!near || Math.hypot(npc.x - p.x, npc.z - p.z) < near.d) return send(p.ws, npcView(p, npc));
+  }
   // Then an enemy at arm's length: data-hack them if they're stunned or down, take them down from behind.
   const foe = enemyAtReach(p, DATAHACK.range);
   if (foe) {
@@ -1835,6 +2446,7 @@ function interact(p) {
       p.inv.pack = p.inv.pack.filter((i) => i !== pkg);
       completeContract(p, c);
     }
+    deliverCargo(p, it.ref.id);
     return send(p.ws, contactView(p, it.ref.id));
   }
   if (it.kind === 'loot') {
@@ -1884,6 +2496,8 @@ function structInteract(p, st) {
   const def = PIECES[st.type];
   const stage = stageDef(st);
   if (def.farm && !msg_upgradeIntent(p)) return farmInteract(p, st);
+  if (def.stall && !msg_upgradeIntent(p)) return send(p.ws, stallView(p, st));
+  if (def.defense && canManage(p, st) && !msg_upgradeIntent(p)) return defenseInteract(p, st);
   if (def.cook && !msg_upgradeIntent(p) && (canManage(p, st) || !p.buildIntent)) return cookInteract(p, st);
   if (canManage(p, st)) {
     if (def.container && st.stage >= 0 && !(msg_upgradeIntent(p))) {
@@ -2203,6 +2817,7 @@ function handleDeploy(p, msg) {
 function handleTravel(p, msg) {
   if (p.dead || !atOwnStash(p)) return toast(p, 'Fast travel leaves from your stash house');
   if (Date.now() - (p.lastHit || 0) < 10_000) return toast(p, 'Can\'t travel while in combat');
+  if (hasCargo(p)) return toast(p, 'You can\'t fast travel with freight');
   if (msg.kind === 'contact') {
     if (!p.discovered.includes(msg.id)) return toast(p, 'Discover that Contact on foot first');
     const c = map.contacts[msg.id];
@@ -2245,6 +2860,7 @@ function callExtraction(p) {
   const now = Date.now();
   const site = extractSite(p);
   if (!site) return toast(p, `Call extraction within ${feet(EXTRACT.callRange)} of a Contact or landing zone`);
+  if (hasCargo(p)) return toast(p, 'The helicopter won\'t carry freight — deliver it by land (or river)');
   if (!claimOf(p)) return toast(p, 'You need a stash house for the helicopter to fly you to — plant a claim marker first');
   for (const e of extractions.values()) {
     if (e.owner === p.token || (Math.hypot(e.x - site.x, e.z - site.z) < EXTRACT.radius * 2 && tokenInSquadWith(p, e.owner))) return toast(p, `Extraction already inbound — ${Math.ceil((e.arrivesAt - now) / 1000)}s. Hold the zone.`);
@@ -2341,6 +2957,8 @@ function handleJoin(ws, msg) {
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
+  send(ws, { t: 'worldEvents', list: [...worldEvents.values()].map(eventView) });
+  if (db.characters[token]?.awayLog?.length) { send(ws, { t: 'awayLog', entries: db.characters[token].awayLog }); db.characters[token].awayLog = []; }
   // Contracts whose targets were finished while offline pay out now.
   for (const ct of [...p.contracts]) {
     if (ct.ready) completeContract(p, ct);
@@ -2499,6 +3117,10 @@ wss.on('connection', (ws) => {
       case 'abandonContract': return abandonContract(p, msg.id);
       case 'requisition': return !p.dead && requisition(p, msg);
       case 'trade': return !p.dead && trade(p, msg);
+      case 'haul': return !p.dead && takeHaul(p, msg);
+      case 'stall': return !p.dead && stallAction(p, msg);
+      case 'ptrade': return !p.dead && playerTrade(p, msg);
+      case 'fairSubmit': return !p.dead && fairSubmit(p);
       case 'squad': return squadAction(p, msg);
       case 'rally': return !p.dead && rally(p);
       case 'mark': return !p.dead && markTarget(p, msg);
@@ -2518,6 +3140,10 @@ wss.on('connection', (ws) => {
         if (process.env.ALLOW_DEV !== '1') return;
         if (msg.kill) return !p.dead && killPlayer(p, null);
         if (Number.isFinite(msg.damage)) return applyDamage(p, msg.damage, null, false);
+        if (msg.event) { const e = startEvent(msg.event); if (e && Number.isFinite(msg.x)) { e.x = msg.x; e.z = msg.z; } return; }
+        if (msg.endEvent) { const e = [...worldEvents.values()].find((x) => x.type === msg.endEvent); if (e) endEvent(e, 'expired'); return; }
+        if (msg.give && typeof msg.give === 'object') { for (const [k, v] of Object.entries(msg.give)) if (RESOURCES.includes(k) && Number.isFinite(v)) p[k] = (p[k] || 0) + v; dirty(p); return; }
+        if (msg.killEventBots) { for (const b of [...bots.values()]) if (b.eventId && !b.dead && (!msg.only || b.kind === msg.only)) { applyDamage(b, 99999, p, true); } return; }
         if (Number.isFinite(msg.x) && Number.isFinite(msg.z)) placeAt(p, msg.x, msg.z);
         return;
     }
@@ -2551,7 +3177,7 @@ function snapshotFor(r, views, now) {
     houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0 }; }),
     terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
     objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
-    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
+    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   };
 }
@@ -2564,11 +3190,15 @@ const loop = setInterval(() => {
   tickHacks(now);
   if (tick % 5 === 0) { tickExtractions(now); tickDowned(now); }
   tickStuns(now);
+  tickEvents(now, dt);
+  if (tick % 4 === 0) tickDefenses(now);
   for (const c of [...charges.values()]) if (c.detAt <= now) explode(c, now);
   if (tick % 10 === 0) tickSensors(now);
   if (tick % TICK_HZ === 0) {
     manageAmbientBots();
     manageAnimals();
+    keepMerchants(now);
+    keepSettlers(now);
     scheduleDrop(now);
     for (const [id, d] of drops) if (d.expires < now) { drops.delete(id); sendEvents(); }
     for (const p of players.values()) {
