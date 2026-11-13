@@ -65,7 +65,10 @@
       "intel": 3,
       "tech": 10
     },
-    "cooldownMs": 180000
+    "cooldownMs": 180000,
+    "scanRadius": 150,
+    "scanMs": 10000,
+    "_about": "Hacking a terminal scans the area: every enemy within scanRadius metres lights up for your crew for scanMs. It also pays out tech and intel."
   },
   "hackMs": {
     "terminal": 5000,
@@ -357,13 +360,15 @@
       "door",
       "gatehack",
       "drop",
-      "crate"
+      "crate",
+      "datahack"
     ],
     "exposes": [
       "terminal",
       "door",
       "gatehack",
-      "drop"
+      "drop",
+      "datahack"
     ]
   }
 }

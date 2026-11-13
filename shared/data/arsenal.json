@@ -613,6 +613,12 @@
       "level": 4,
       "field": 5,
       "desc": "Keep up to 3 intel when you die."
+    },
+    "jammer": {
+      "name": "Intel jammer",
+      "level": 7,
+      "field": 4,
+      "desc": "When your crew gets data-hacked, you light up for 10 s instead of 20 s."
     }
   }
 }

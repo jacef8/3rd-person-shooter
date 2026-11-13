@@ -6,21 +6,21 @@
       "level": 1,
       "cost": 0,
       "key": "F",
-      "desc": "Tag the enemy under your crosshair; your squad sees them through walls for 8s."
+      "desc": "Tag the enemy under your crosshair; your crew sees them through walls for 8s."
     },
     "hack": {
-      "name": "Terminal Hacking",
+      "name": "Data Hack",
       "level": 1,
       "cost": 0,
       "key": "E",
-      "desc": "Hack data terminals for intel and tech. Stand still for 5s."
+      "desc": "Stun or down an enemy, then hold E on them for 2 s: their whole crew lights up for your crew (through walls, on the map) for 20 s, and you learn where their stash house is."
     },
     "sensor": {
       "name": "Sensor Grenade",
       "level": 2,
       "cost": 10,
       "key": "G",
-      "desc": "Reveals everyone within 18m of where it lands to your squad for 10s — including cloaked players."
+      "desc": "Reveals everyone within 18m of where it lands to your squad for 10s \u2014 including cloaked players."
     },
     "camo": {
       "name": "Optical Camo",
@@ -42,6 +42,20 @@
       "cost": 0,
       "key": "T",
       "desc": "Leader only: restores 50% armor and gives +20% damage for 10s to squadmates within 30m. 90s cooldown."
+    },
+    "stun": {
+      "name": "Stun Grenade",
+      "level": 3,
+      "cost": 15,
+      "key": "G",
+      "desc": "Thrown flashbang: enemies within 20 ft who can see the blast are stunned for up to 4 s, ready to be data-hacked. Z switches grenade."
+    },
+    "takedown": {
+      "name": "Takedown",
+      "level": 1,
+      "cost": 0,
+      "key": "E",
+      "desc": "Get behind an enemy and press E to stun them for 4 s without a shot."
     }
   },
   "markMs": 8000,
@@ -57,5 +71,27 @@
     "radius": 30,
     "buffMs": 10000,
     "cooldown": 90000
+  },
+  "stun": {
+    "radius": 6,
+    "fuseMs": 1000,
+    "durationMs": 4000,
+    "minDurationMs": 2000,
+    "throwRange": 30,
+    "cooldown": 15000
+  },
+  "takedown": {
+    "range": 1.6,
+    "stunMs": 4000,
+    "_behind": "Works only from behind: the angle between their facing and you must be over ~110 degrees."
+  },
+  "dataHack": {
+    "_about": "Hack a stunned or downed enemy. The target stays pinned while you hack.",
+    "ms": 2000,
+    "range": 2.2,
+    "exposeMs": 20000,
+    "jammerExposeMs": 10000,
+    "stashIntelMs": 900000,
+    "rogueRevealRadius": 300
   }
 }

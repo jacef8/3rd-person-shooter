@@ -332,3 +332,69 @@ test('any enterable building can be claimed: stash locker inside, lockable doors
   a.send({ t: 'interact' });
   await e.got((m) => m.t === 'snap' && m.structs.some((s) => s.type === 'door' && s.open));
 });
+
+test('hacking: stun or take down an enemy, data-hack them to light up their crew and find their stash; terminals scan', async (t) => {
+  const file = path.join(dir, 'datahack.json');
+  const A = tok('1a'), E = tok('2e'), F = tok('3f'), G = tok('4b');
+  const lz = map.landingZones[9];
+  const term = map.terminals[7];
+  const enemyHome = map.houses.find((h) => h.kind === 'room');
+  const db = {
+    [A]: character('Ace', lz.x, lz.z),
+    [E]: character('Eve', lz.x + 5, lz.z),           // enemy, 5 m away
+    [F]: character('Fox', lz.x + 900, lz.z + 900),   // Eve's crewmate, far away
+    [G]: character('Gil', lz.x - 40, lz.z, { yaw: 0 }), // facing +Z
+  };
+  writeDb(file, db);
+  // Eve's crew owns a stash house.
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw.houses[enemyHome.id] = { ...raw.houses[enemyHome.id], owner: E, ownerName: 'Eve', hxp: 0, upg: {} };
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const srv = await startServer(file);
+  t.after(() => srv.proc.kill('SIGKILL'));
+  const a = await conn(srv.port, 'Ace', A), e = await conn(srv.port, 'Eve', E), f = await conn(srv.port, 'Fox', F), g = await conn(srv.port, 'Gil', G);
+  await until(() => a.you && e.you && f.you && g.you);
+  e.send({ t: 'squad', action: 'create', name: 'Vipers' });
+  await until(() => e.squad?.id);
+  e.send({ t: 'squad', action: 'invite', id: f.welcome.id });
+  await f.got((m) => m.t === 'invite');
+  f.send({ t: 'squad', action: 'accept' });
+  await until(() => f.squad?.id);
+  await until(() => e.you.claim?.crew === 'Vipers');
+
+  // Stun grenade at Eve's feet.
+  a.send({ t: 'stun', x: lz.x + 5, z: lz.z });
+  await e.got((m) => m.t === 'stunned', 4000);
+  assert.ok(a.you.tech < 100, 'costs tech');
+  // Stunned: Eve can't act.
+  e.send({ t: 'reload' });
+  await sleep(150);
+  assert.ok(!e.you.reloading);
+  // Ace runs over and data-hacks her.
+  await a.tp(lz.x + 4, lz.z);
+  a.send({ t: 'interact' });
+  await a.got((m) => m.t === 'hack' && m.kind === 'datahack');
+  await a.got((m) => m.t === 'hack' && m.done && /Hacked Eve/.test(m.text), 5000);
+  const ex = a.msgs.find((m) => m.t === 'expose' && m.kind === 'mark' && m.ids.includes(f.welcome.id));
+  assert.ok(ex && ex.ids.includes(e.welcome.id), 'Eve and her crewmate Fox light up');
+  const intel = await a.got((m) => m.t === 'intel');
+  assert.equal(intel.stash.owner, 'Vipers');
+  assert.ok(Math.hypot(intel.stash.x - enemyHome.crate.x, intel.stash.z - enemyHome.crate.z) < 1, 'their stash house is located');
+  // Fox is 1.3 km away but now shows in Ace's snapshots.
+  await a.got((m) => m.t === 'snap' && m.players.some((p) => p.id === f.welcome.id), 3000);
+  await f.toast(/hacked Eve/);
+
+  // Takedown from behind: Gil faces +Z, so Ace comes in from -Z.
+  await a.tp(lz.x - 40, lz.z - 1.1);
+  a.send({ t: 'interact' });
+  await g.got((m) => m.t === 'stunned', 3000);
+
+  // Terminal: an area scan lights up enemies nearby.
+  await sleep(4500);   // let Gil's stun wear off so he can be moved
+  g.send({ t: 'dev', x: term.x + 30, z: term.z });
+  await a.tp(term.x, term.z + 1.2);
+  const n = a.msgs.length;
+  a.send({ t: 'interact' });
+  await until(() => a.msgs.slice(n).find((m) => m.t === 'hack' && m.done && /Area scan: 1 hostile/.test(m.text)), 9000);
+  assert.ok(a.msgs.slice(n).some((m) => m.t === 'expose' && m.ids.includes(g.welcome.id)));
+});

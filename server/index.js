@@ -352,7 +352,7 @@ function privateState(p) {
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
-    downed: !!p.downed, downedUntil: p.downedUntil || 0, bleed: p.downed ? Math.max(0, Math.round(p.bleedHp)) : 0,
+    downed: !!p.downed, downedUntil: p.downedUntil || 0, stunnedUntil: p.stunnedUntil || 0, stunReadyAt: p.stunReadyAt || 0, bleed: p.downed ? Math.max(0, Math.round(p.bleedHp)) : 0,
   };
 }
 
@@ -648,6 +648,122 @@ function throwSensor(p, msg) {
   sendSquad(p, { t: 'sensor', x, z, until: now + SENSOR.duration, radius });
   dirty(p);
 }
+// ---- stuns and data hacking (Future Soldier-style)
+// Stun an enemy (stun grenade, or a takedown from behind) or down them, then data-hack them: their
+// whole crew lights up for your crew and you learn where their stash house is.
+const STUN = GADGET_DATA.stun, TAKEDOWN = GADGET_DATA.takedown, DATAHACK = GADGET_DATA.dataHack;
+const stunBlasts = [];   // pending grenades: { x, z, y, at, owner }
+const isStunned = (c, now = Date.now()) => (c.stunnedUntil || 0) > now;
+function stun(c, ms, by) {
+  const now = Date.now();
+  if (c.dead || (!c.isBot && (c.protectedUntil || 0) > now)) return false;
+  c.stunnedUntil = Math.max(c.stunnedUntil || 0, now + ms);
+  c.stunnedBy = by?.token || null;
+  if (!c.isBot) {
+    cancelHack(c, 'Stunned');
+    c.camoOn = false;
+    send(c.ws, { t: 'stunned', until: c.stunnedUntil, by: by?.name || null });
+    dirty(c);
+  }
+  return true;
+}
+function throwStun(p, msg) {
+  const now = Date.now();
+  if (level(p) < GADGETS.stun.level) return toast(p, `Stun grenades unlock at level ${GADGETS.stun.level}`);
+  if (now < (p.stunReadyAt || 0)) return;
+  if (p.tech < GADGETS.stun.cost) return toast(p, `A stun grenade needs ${GADGETS.stun.cost} tech`);
+  let x = Number(msg.x), z = Number(msg.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+  const d = Math.hypot(x - p.x, z - p.z);
+  if (d > STUN.throwRange) { x = p.x + (x - p.x) * STUN.throwRange / d; z = p.z + (z - p.z) * STUN.throwRange / d; }
+  p.tech -= GADGETS.stun.cost;
+  p.stunReadyAt = now + STUN.cooldown;
+  stunBlasts.push({ x, z, y: terrain.height(x, z) + 0.4, at: now + STUN.fuseMs, owner: p });
+  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'stunThrow', x, z, from: [p.x, gy(p) + 1.5, p.z], at: now + STUN.fuseMs });
+  dirty(p);
+}
+function tickStuns(now) {
+  for (let i = stunBlasts.length - 1; i >= 0; i--) {
+    const g = stunBlasts[i];
+    if (g.at > now) continue;
+    stunBlasts.splice(i, 1);
+    for (const o of players.values()) if (Math.abs(o.x - g.x) < INTEREST && Math.abs(o.z - g.z) < INTEREST) send(o.ws, { t: 'stunBlast', x: g.x, y: g.y, z: g.z });
+    let n = 0;
+    for (const c of [...players.values(), ...bots.values()]) {
+      if (c.dead || (!c.isBot && sameSquad(c, g.owner))) continue;
+      const d = Math.hypot(c.x - g.x, c.z - g.z);
+      if (d > STUN.radius || !lineOfSight(g.x, g.y + 0.5, g.z, c.x, gy(c) + 1.4, c.z)) continue;
+      const ms = STUN.minDurationMs + (STUN.durationMs - STUN.minDurationMs) * Math.max(0, 1 - Math.max(0, d - 3) / (STUN.radius - 3));
+      if (stun(c, ms, g.owner)) n++;
+    }
+    if (n && players.has(g.owner.id)) toast(g.owner, `Stunned ${n} — get in and data-hack them (E)`);
+  }
+}
+/** Enemy at reach for a takedown or a data hack (player or Rogue). */
+function enemyAtReach(p, range) {
+  let best = null, bd = range;
+  for (const c of [...players.values(), ...bots.values()]) {
+    if (c === p || c.dead || (!c.isBot && sameSquad(c, p))) continue;
+    const d = Math.hypot(c.x - p.x, c.z - p.z);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+/** Is `p` behind `t`? (t's facing points away from p.) */
+function behind(p, t) {
+  const fx = Math.sin(t.yaw || 0), fz = Math.cos(t.yaw || 0);
+  const dx = p.x - t.x, dz = p.z - t.z, l = Math.hypot(dx, dz) || 1;
+  return (fx * dx + fz * dz) / l < -0.35;
+}
+function takedown(p, t) {
+  if (!stun(t, TAKEDOWN.stunMs, p)) return toast(p, `${t.name} just deployed — spawn protection for a few more seconds`);
+  feed(`${p.name} took down ${t.name}`);
+  award(p, XP.takedown, `Takedown: ${t.name}`);
+  toast(p, `${t.name} is stunned — data-hack them now (E)`);
+}
+function finishDataHack(p, id) {
+  const t = findCharacter(id);
+  if (!t || t.dead || !(isStunned(t) || t.downed)) return send(p.ws, { t: 'hack', done: true, text: 'They shook it off' });
+  const now = Date.now();
+  const key = squadKey(p);
+  if (t.isBot) {
+    // A Rogue's radio: every Rogue nearby lights up.
+    const ids = [];
+    for (const b of bots.values()) if (!b.dead && Math.hypot(b.x - t.x, b.z - t.z) <= DATAHACK.rogueRevealRadius) { expose(b, key, DATAHACK.exposeMs); ids.push(b.id); }
+    sendSquad(p, { t: 'expose', ids, until: now + DATAHACK.exposeMs, kind: 'mark', by: p.name });
+    award(p, Math.round(XP.dataHack / 2), 'Rogue comms hacked', true);
+    return send(p.ws, { t: 'hack', done: true, text: `Rogue comms hacked: ${ids.length} Rogue${ids.length === 1 ? '' : 's'} nearby revealed` });
+  }
+  // A player: their whole crew lights up for your crew, and you learn where they live.
+  const victims = squadMembersOnline(t).filter((m) => !m.dead);
+  const ids = [];
+  for (const m of victims) {
+    const ms = hasField(m, 'jammer') ? DATAHACK.jammerExposeMs : DATAHACK.exposeMs;
+    expose(m, key, ms);
+    ids.push(m.id);
+    toast(m, m === t ? `⚠ ${p.name} hacked you — your crew is exposed!` : `⚠ ${p.name} hacked ${t.name} — you're exposed for ${Math.round(ms / 1000)}s!`);
+  }
+  sendSquad(p, { t: 'expose', ids, until: now + DATAHACK.exposeMs, kind: 'mark', by: p.name });
+  const home = claimOfToken(t.token);
+  if (home) sendSquad(p, { t: 'intel', stash: { x: home.x, z: home.z, owner: storeOwnerLabel(home.store), until: now + DATAHACK.stashIntelMs } });
+  feed(`${p.name} data-hacked ${t.name}`);
+  award(p, XP.dataHack, `Data hack: ${t.name}`, true);
+  send(p.ws, { t: 'hack', done: true, text: `Hacked ${t.name}: ${victims.length} enemy${victims.length === 1 ? '' : ' crew'} lit up${home ? ', stash house marked on your map' : ''}` });
+}
+/** Hacking a terminal scans the area around it. */
+function terminalScan(p, term) {
+  const now = Date.now(), key = squadKey(p), R = ACTIVITIES.terminal.scanRadius, ms = ACTIVITIES.terminal.scanMs;
+  const ids = [];
+  for (const c of [...players.values(), ...bots.values()]) {
+    if (c.dead || (!c.isBot && sameSquad(c, p)) || Math.hypot(c.x - term.x, c.z - term.z) > R) continue;
+    expose(c, key, ms);
+    ids.push(c.id);
+  }
+  sendSquad(p, { t: 'expose', ids, until: now + ms, kind: 'sensor' });
+  sendSquad(p, { t: 'scan', x: term.x, z: term.z, r: R, until: now + 1500 });
+  return ids.length;
+}
+
 function tickSensors(now) {
   for (let i = sensors.length - 1; i >= 0; i--) {
     const s = sensors[i];
@@ -665,10 +781,11 @@ function tickSensors(now) {
 function startHack(p, kind, id, extra = {}) {
   const now = Date.now();
   let src;
-  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding') {
-    const ms = kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
+  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack') {
+    const ms = kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
+    if (kind === 'datahack') toast(p, 'Hacking shows your position to enemies nearby — have your crew cover you.');
     if (kind === 'raid' || kind === 'gatehack') {
       const st = structs.get(id);
       const team = st ? teamOfToken(st.owner) : [];
@@ -731,12 +848,20 @@ function tickHacks(now) {
     }
     if (p.dead || p.downed) { cancelHack(p, 'You went down'); continue; }
     if (h.kind === 'revive') { const t = players.get(h.id); if (!t || !t.downed || t.dead) { cancelHack(p, 'Too late'); continue; } }
+    if (h.kind === 'datahack') {
+      // The target stays pinned while you hack them.
+      const t = findCharacter(h.id);
+      if (!t || t.dead || Math.hypot(t.x - p.x, t.z - p.z) > DATAHACK.range + 1) { cancelHack(p, 'Lost them'); continue; }
+      if (isStunned(t, now)) t.stunnedUntil = Math.max(t.stunnedUntil, now + 600);
+      else if (!t.downed) { cancelHack(p, 'They shook it off'); continue; }
+    }
     if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Interrupted — you moved'); continue; }
     if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
     if (now < h.until) continue;
     p.hack = null;
     if (h.kind === 'claim') { finishClaim(p, h.id); continue; }
     if (h.kind === 'claimBuilding') { finishClaimBuilding(p, h.id); continue; }
+    if (h.kind === 'datahack') { finishDataHack(p, h.id); continue; }
     if (h.kind === 'revive') {
       const t = players.get(h.id);
       if (t && t.downed && !t.dead && Math.hypot(t.x - p.x, t.z - p.z) <= DOWNED.reviveRange + 0.5) { revive(t, p); send(p.ws, { t: 'hack', done: true, text: `${t.name} is back up` }); }
@@ -784,7 +909,8 @@ function tickHacks(now) {
       p.intel += TERMINAL_REWARD.intel;
       p.tech += TERMINAL_REWARD.tech;
       award(p, XP.hackTerminal, 'Terminal hacked', true);
-      send(p.ws, { t: 'hack', done: true, text: `+${TERMINAL_REWARD.intel} intel, +${TERMINAL_REWARD.tech} tech. Bank intel at your stash for XP.` });
+      const seen = terminalScan(p, map.terminals[h.id]);
+      send(p.ws, { t: 'hack', done: true, text: `Area scan: ${seen} hostile${seen === 1 ? '' : 's'} within ${feet(ACTIVITIES.terminal.scanRadius, 50)} lit up · +${TERMINAL_REWARD.tech} tech, +${TERMINAL_REWARD.intel} intel` });
       for (const c of [...p.contracts]) if (c.type === 'heist' && c.terminalId === h.id) completeContract(p, c);
     } else if (h.kind === 'door') {
       const house = db.houses[h.id];
@@ -1052,7 +1178,7 @@ function manageAmbientBots() {
 function updateBots(dt, now) {
   const alive = [...players.values()].filter((p) => !p.dead);
   for (const b of bots.values()) {
-    if (b.dead) continue;
+    if (b.dead || isStunned(b, now)) continue;
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
     let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue).sightRange;
     for (const p of alive) {
@@ -1445,6 +1571,12 @@ function interact(p) {
   // A downed crewmate within reach comes first.
   for (const m of squadMembersOnline(p)) {
     if (m !== p && m.downed && !m.dead && Math.hypot(m.x - p.x, m.z - p.z) <= DOWNED.reviveRange) return startHack(p, 'revive', m.id);
+  }
+  // Then an enemy at arm's length: data-hack them if they're stunned or down, take them down from behind.
+  const foe = enemyAtReach(p, DATAHACK.range);
+  if (foe) {
+    if (isStunned(foe) || foe.downed) return startHack(p, 'datahack', foe.id);
+    if (Math.hypot(foe.x - p.x, foe.z - p.z) <= TAKEDOWN.range && behind(p, foe)) return takedown(p, foe);
   }
   const it = nearestInteractable(p);
   // Nothing else here: at a landing zone, E calls the extraction helicopter.
@@ -1975,7 +2107,7 @@ function handleState(p, msg) {
   if (!Number.isFinite(tx) || !Number.isFinite(tz)) return;
   if ((msg.tp || 0) !== (p.tp || 0)) return;   // sent before the latest teleport
   let dx = tx - p.x, dz = tz - p.z;
-  const maxStep = (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
+  const maxStep = isStunned(p, now) ? 0.05 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
   const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain);
@@ -2069,6 +2201,8 @@ wss.on('connection', (ws) => {
     try { msg = JSON.parse(raw); } catch { return; }
     const p = ws.player;
     if (!p) { if (msg.t === 'join') handleJoin(ws, msg); return; }
+    // Stunned: nothing but talking to your crew until it wears off.
+    if (isStunned(p) && !p.dead && !p.downed && !['state', 'squad', 'leaderboard', 'closeContainer', 'dev'].includes(msg.t)) return;
     // While downed you can crawl, talk to your crew, or give up; nothing else.
     if (p.downed && !p.dead) {
       if (msg.t === 'giveUp') return killPlayer(p, p.downedBy, p.downedHead);
@@ -2107,6 +2241,7 @@ wss.on('connection', (ws) => {
       case 'rally': return !p.dead && rally(p);
       case 'mark': return !p.dead && markTarget(p, msg);
       case 'sensor': return !p.dead && throwSensor(p, msg);
+      case 'stun': return !p.dead && throwStun(p, msg);
       case 'camo':
         if (p.dead) return;
         if (level(p) < GADGETS.camo.level) return toast(p, `Optical camo unlocks at level ${GADGETS.camo.level}`);
@@ -2142,13 +2277,13 @@ function snapshotFor(r, views, now) {
   const list = [];
   for (const [p, v] of views) {
     const squad = sameSquad(r, p);
-    if (!squad && !near(p)) continue;
+    if (!squad && !near(p) && !exposedTo(p, r)) continue;   // hacked enemies show wherever they are
     if (p !== r && v.camo && !squad && !exposedTo(p, r) && Math.hypot(p.x - r.x, p.z - r.z) > CAMO_REVEAL_DIST) continue;
     list.push(squad && p !== r ? { ...v, sq: 1 } : v);
   }
   return {
     t: 'snap', players: list,
-    bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp })),
+    bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp, stun: isStunned(b, now) ? 1 : 0 })),
     loot: [...loot.values()].filter((l) => near(l, 140)).map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, name: l.item.name, amount: l.item.amount || 0 })),
     bags: db.bags.filter((b) => near(b, 200)).map((b) => ({ id: b.id, x: b.x, z: b.z, label: b.label })),
     houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0 }; }),
@@ -2166,6 +2301,7 @@ const loop = setInterval(() => {
   updateBots(dt, now);
   tickHacks(now);
   if (tick % 5 === 0) { tickExtractions(now); tickDowned(now); }
+  tickStuns(now);
   for (const c of [...charges.values()]) if (c.detAt <= now) explode(c, now);
   if (tick % 10 === 0) tickSensors(now);
   if (tick % TICK_HZ === 0) {
@@ -2195,7 +2331,7 @@ const loop = setInterval(() => {
   if (tick % SNAPSHOT_EVERY === 0 && players.size) {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
-      crouch: p.crouch, dead: p.dead, downed: p.downed ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
+      crouch: p.crouch, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
     }]));

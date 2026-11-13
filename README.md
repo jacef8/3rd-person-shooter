@@ -21,9 +21,10 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   or steal them from stashes. You spend them to build new guns and armor from the blueprints you've
   unlocked. Swapping attachments is free. Guns are physical items, so you can lose them, loot them
   and stash them. Your level and unlocks can never be taken from you.
-- **Tech, Future Soldier-style.** Tag targets for your squad (F), sensor grenades that reveal
-  everyone nearby, cloaked players included (G), optical camo (V), hack data terminals for intel and tech
-  (E), and at higher levels hack enemy stash locks silently.
+- **Tech and hacking, Future Soldier-style.** Stun an enemy (stun grenade, or a takedown from
+  behind), then **data-hack** them: their whole crew lights up for your crew through walls and on
+  the map, and you learn where their stash house is. Hacking a terminal scans the area for enemies.
+  Also: tag targets (F), sensor grenades (G), optical camo (V), and silent lock bypass.
 - **Crews: a team game.** Permanent crews of up to 6 (leader, officers, members) that survive
   logging off. They share one stash house, revive each other when downed, hack faster together
   (while the hacker shows up to enemies nearby), split contract rewards and climb a crew board.
@@ -104,7 +105,7 @@ npm start                                    # picks up data/real/ automatically
 
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
-H medkit · Tab inventory · F tag · G sensor grenade · V optical camo · T rally (squad leader) ·
+H medkit · Tab inventory · F tag · G throw grenade (Z switches sensor/stun) · V optical camo · T rally (squad leader) ·
 B crew ping · P crew panel and leaderboards · M map · X build mode (1-5 piece, R rotate, click
 place, E upgrade, Q dismantle). Controller layout below. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
 
@@ -125,7 +126,7 @@ smaller HUD for landscape.
 | A | Interact: loot, doors, stash, hack terminals | Select |
 | B | Crouch | Back |
 | X / Y | Reload / swap weapon | Y: gunsmith exploded view |
-| RB / LB | Tag target / sensor grenade | |
+| RB / LB | Tag target / throw grenade (hold LB to switch sensor/stun) | |
 | R3 (click right stick) | Optical camo | |
 | D-pad ▲ ▼ ◀ ▶ | Medkit · squad ping · Rally (leader) · build mode | Move highlight |
 | View (⧉) / Menu (☰) | Inventory (squad panel button inside) / map | Map: LT/RT zoom |

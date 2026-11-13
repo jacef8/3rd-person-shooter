@@ -489,6 +489,8 @@ function drawMinimap() {
   for (const ct of state.contracts) edge(ct.x, ct.z, '#ffc53d', 7);
   for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
   for (const e of state.extracts) edge(e.x, e.z, '#ff2a2a', 8);
+  if (state.enemyStash && state.enemyStash.untilPerf > performance.now()) edge(state.enemyStash.x, state.enemyStash.z, '#ff8a2a', 8);
+  for (const [id, e] of state.exposed) { if (e.until < performance.now()) continue; const c = state.players.get(id)?.data; if (c && !c.dead && !c.sq) edge(c.x, c.z, '#ff4d4d', 6); }
   const hp0 = homePos();
   if (hp0) edge(hp0.x, hp0.z, '#4fbf6a', 7);
   g.translate(R, R);
@@ -628,7 +630,7 @@ function handle(m) {
         const prev = state.exposed.get(id);
         state.exposed.set(id, { until: performance.now() + (m.until - Date.now()), kind: prev?.kind === 'mark' && m.kind === 'sensor' ? 'mark' : m.kind });
       }
-      if (m.kind === 'mark' && m.by && m.by !== state.myName) toast(`${m.by} tagged a target`);
+      if (m.kind === 'mark' && m.by && m.by !== state.myName) toast(m.ids.length > 1 ? `${m.by} lit up ${m.ids.length} targets` : `${m.by} tagged a target`);
       break;
     case 'sensor': {
       const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff9b21 }));
@@ -637,6 +639,24 @@ function handle(m) {
       ring.rotation.x = -Math.PI / 2; ring.position.set(m.x, ground(m.x, m.z) + 0.3, m.z);
       scene.add(mesh, ring);
       state.sensors.push({ meshes: [mesh, ring], until: performance.now() + (m.until - Date.now()) });
+      break;
+    }
+    case 'stunThrow': stunThrowFx(m); break;
+    case 'stunBlast': stunBlastFx(m.x, m.y, m.z); break;
+    case 'stunned':
+      state.stunnedUntil = performance.now() + (m.until - Date.now());
+      $('stunfx').style.opacity = 1;
+      toast(m.by ? `⚡ Stunned by ${m.by}!` : '⚡ Stunned!');
+      break;
+    case 'intel':
+      state.enemyStash = { ...m.stash, untilPerf: performance.now() + (m.stash.until - Date.now()) };
+      toast(`🏠 Enemy stash house located: ${m.stash.owner} — marked on your map`);
+      break;
+    case 'scan': {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(m.r - 1.5, m.r, 96), new THREE.MeshBasicMaterial({ color: 0x16c2ff, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2; ring.position.set(m.x, ground(m.x, m.z) + 1, m.z);
+      scene.add(ring);
+      state.sensors.push({ meshes: [ring, ring], until: performance.now() + 1500 });
       break;
     }
     case 'ping':
@@ -1047,7 +1067,7 @@ function renderMapScreen() {
     first: 'Pick where to start. Then find a place to call home and plant your claim marker in it: a town house or apartment room, a limestone cave, rock outcrop, hollow cypress, river fish camp, an abandoned RV, bus, box truck or houseboat — or plant it as a claim flag on open ground.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
-    view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares · blue ✦ Contacts (dim = undiscovered) · green = home & squad. Call extraction at any Contact or landing zone.',
+    view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad. Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
@@ -1072,6 +1092,14 @@ function drawMapCanvas() {
   for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: '#cfcfcf', size: 4, label: state.mapMode === 'redeploy' ? lz.name : '' });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
+  // Enemies lit up by a hack, a scan, a tag or a sensor, and any enemy stash house you've located.
+  const pnow = performance.now();
+  for (const [id, e] of state.exposed) {
+    if (e.until < pnow) continue;
+    const c = state.players.get(id)?.data || state.bots.get(id)?.data;
+    if (c && !c.dead) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: '#ff4d4d', size: 6, label: state.players.has(id) ? c.name : '' });
+  }
+  if (state.enemyStash && state.enemyStash.untilPerf > pnow) markers.push({ x: state.enemyStash.x, z: state.enemyStash.z, kind: 'diamond', color: '#ff8a2a', size: 9, label: `🏠 ${state.enemyStash.owner}'s stash` });
   for (const e of state.extracts) markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#ff2a2a', size: 8, label: `🚁 Extraction (${e.by})` });
   for (const m of state.squad.members) if (m.online && m.id !== state.id) markers.push({ x: m.x, z: m.z, color: '#7dff9a', size: 5, label: m.name });
   for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
@@ -1336,7 +1364,12 @@ function doAction(a) {
   switch (a) {
     case 'interact': send({ t: 'interact' }); break;
     case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
-    case 'sensor': { const p = aimPoint(); send({ t: 'sensor', x: p.x, z: p.z }); break; }
+    case 'sensor': { const p = aimPoint(); send({ t: state.grenade === 'stun' ? 'stun' : 'sensor', x: p.x, z: p.z }); break; }
+    case 'switchGrenade':
+      state.grenade = state.grenade === 'stun' ? 'sensor' : 'stun';
+      toast(`Grenade: ${state.grenade === 'stun' ? 'Stun grenade' : 'Sensor grenade'}`);
+      updateGadgetBar();
+      break;
     case 'camo': send({ t: 'camo' }); break;
     case 'rally': send({ t: 'rally' }); break;
     case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
@@ -1390,7 +1423,7 @@ addEventListener('keydown', (e) => {
 }, true);
 addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
-  KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
+  KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
   KeyQ: 'swap', Digit1: 'swap', Digit2: 'swap', KeyH: 'heal', KeyC: 'crouch', ControlLeft: 'crouch',
 };
 addEventListener('keydown', (e) => {
@@ -1482,6 +1515,17 @@ function nearestInteractable() {
   for (const [, b] of state.bags) consider(Math.hypot(b.data.x - state.x, b.data.z - state.z), `Search ${b.data.label}`);
   for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; consider(Math.hypot(t.x - state.x, t.z - state.z), ready ? 'Hack terminal (stand still 5s) — intel + tech' : 'Terminal rebooting'); }
   for (const c of state.map.contacts) if (Math.abs(c.x - state.x) < 5 && Math.abs(c.z - state.z) < 5) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.8, `Talk to ${c.name} — contracts & field gear`);
+  // Enemies at arm's length: data-hack the stunned or downed, take down from behind.
+  for (const c of [...[...state.players.values()].map((r) => r.data).filter((d) => !d.sq), ...[...state.bots.values()].map((r) => r.data)]) {
+    if (!c || c.dead) continue;
+    const d = Math.hypot(c.x - state.x, c.z - state.z);
+    if (d > 2.2) continue;
+    if (c.stun || c.downed) consider(d - 2, `⚡ Data hack ${c.name} (2s) — ${state.bots.has(c.id) ? 'reveals Rogues nearby' : 'lights up their whole crew + their stash'}`);
+    else if (d <= 1.6) {
+      const fx = Math.sin(c.yaw || 0), fz = Math.cos(c.yaw || 0), dot = (fx * (state.x - c.x) + fz * (state.z - c.z)) / (d || 1);
+      if (dot < -0.35) consider(d - 1.5, `✊ Takedown ${c.name} — stun them`);
+    }
+  }
   for (const [, r] of state.players) if (r.data.sq && r.data.downed && !r.data.dead) consider(Math.hypot(r.data.x - state.x, r.data.z - state.z) - 1.5, `✚ Revive ${r.data.name} (stand still ${COMBAT_RULES.downed.reviveMs / 1000}s)`);
   for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
   if (!best && state.me?.claim && !state.extracts.length) for (const lz of state.map.landingZones) if (Math.hypot(lz.x - state.x, lz.z - state.z) < EXTRACT.callRange) best = `Call extraction — fire a flare, hold ${feet(EXTRACT.radius)} for ${EXTRACT.holdMs / 1000}s, fly home with your loot`;
@@ -1581,6 +1625,11 @@ function drawMarkers() {
       const d = Math.hypot(c.x - state.x, c.z - state.z);
       marker(`x${id}`, e.kind === 'mark' ? 'tag' : 'sensed', e.kind === 'mark' ? `◆ ${distText(d)}` : '●', new THREE.Vector3(c.x, ground(c.x, c.z) + (c.crouch ? 1.2 : 1.8) + 0.5, c.z));
     }
+    for (const [id, r] of [...state.players, ...state.bots]) {
+      const c = r.data;
+      if (!c || c.sq || c.dead || !c.stun || Math.hypot(c.x - state.x, c.z - state.z) > 60) continue;
+      marker(`z${id}`, 'objective', '⚡ STUNNED — hack (E)', new THREE.Vector3(c.x, ground(c.x, c.z) + 2.4, c.z));
+    }
     for (const [id, r] of state.players) {
       if (!r.data.sq || r.data.dead) continue;
       if (r.data.downed) marker(`s${id}`, 'alert', `✚ ${r.data.name} DOWN · ${distText(Math.hypot(r.data.x - state.x, r.data.z - state.z))}`, new THREE.Vector3(r.data.x, ground(r.data.x, r.data.z) + 1.4, r.data.z));
@@ -1610,8 +1659,11 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
   } else hb.hidden = true;
+  // Stun flash fades out over the stun.
+  const sf = $('stunfx'), sLeft = (state.stunnedUntil || 0) - performance.now();
+  sf.style.opacity = sLeft > 0 ? Math.min(0.85, 0.25 + sLeft / 4000) : 0;
   // Downed: bleed-out timer.
   const dbar = $('downbar');
   if (state.me?.downed && !state.me.dead) {
@@ -1639,7 +1691,9 @@ function updateGadgetBar() {
   const now = Date.now();
   const items = [
     ['F', 'Tag', GADGETS.mark.level, ''],
-    ['G', 'Sensor', GADGETS.sensor.level, me.sensorReadyAt > now ? 'cooldown' : me.tech < GADGETS.sensor.cost ? 'notech' : ''],
+    state.grenade === 'stun'
+      ? ['G', 'Stun ⇄', GADGETS.stun.level, me.stunReadyAt > now ? 'cooldown' : me.tech < GADGETS.stun.cost ? 'notech' : '']
+      : ['G', 'Sensor ⇄', GADGETS.sensor.level, me.sensorReadyAt > now ? 'cooldown' : me.tech < GADGETS.sensor.cost ? 'notech' : ''],
     ['V', me.camoOn ? (me.camoActive ? 'Camo ON' : 'Camo (move slow)') : 'Camo', GADGETS.camo.level, me.camoOn ? 'on' : ''],
     ['T', 'Rally', GADGETS.rally.level, !leader ? 'notleader' : me.rallyReadyAt > now ? 'cooldown' : ''],
     ['B', 'Ping', 1, state.squad.id ? '' : 'notleader'],
@@ -1872,7 +1926,12 @@ function pollPad(dt, now) {
     const firing = val(BTN.RT) > 0.35;
     if (firing && !state.mouseDown) state.firedThisPress = false;
     state.mouseDown = firing;
-    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (just(Number(i))) doAction(action);
+    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (Number(i) !== BTN.LB && just(Number(i))) doAction(action);
+    // LB: tap throws your grenade, hold to switch between sensor and stun.
+    const lb = !!g.buttons[BTN.LB]?.pressed;
+    if (lb && !pad.prev[BTN.LB]) { pad.lbAt = performance.now(); pad.lbSwitched = false; }
+    if (lb && !pad.lbSwitched && performance.now() - pad.lbAt > 400) { pad.lbSwitched = true; doAction('switchGrenade'); }
+    if (!lb && pad.prev[BTN.LB] && !pad.lbSwitched) doAction('sensor');
   }
   pad.prev = g.buttons.map((x) => x.pressed);
 }
@@ -1964,6 +2023,32 @@ function syncCharges(list) {
     chargeVis.set(c.id, m);
   }
   for (const [id, m] of chargeVis) if (!seen.has(id)) { scene.remove(m); chargeVis.delete(id); }
+}
+function stunThrowFx(m) {
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshBasicMaterial({ color: 0xe8f2ff }));
+  scene.add(ball);
+  const [fx, fy, fz] = m.from, ty = ground(m.x, m.z) + 0.3, ms = Math.max(300, m.at - Date.now());
+  const t0 = performance.now();
+  const step = () => {
+    const f = Math.min(1, (performance.now() - t0) / ms);
+    ball.position.set(fx + (m.x - fx) * f, fy + (ty - fy) * f + Math.sin(f * Math.PI) * 4, fz + (m.z - fz) * f);
+    if (f < 1) requestAnimationFrame(step); else setTimeout(() => scene.remove(ball), 50);
+  };
+  step();
+}
+function stunBlastFx(x, y, z) {
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1 }));
+  ball.position.set(x, y + 0.5, z);
+  scene.add(ball);
+  const t0 = performance.now();
+  const step = () => {
+    const f = (performance.now() - t0) / 350;
+    if (f >= 1) { scene.remove(ball); ball.geometry.dispose(); return; }
+    ball.scale.setScalar(1 + f * 7);
+    ball.material.opacity = 1 - f;
+    requestAnimationFrame(step);
+  };
+  step();
 }
 function boomFx(x, y, z) {
   const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.9 }));
@@ -2103,18 +2188,19 @@ function frame(now) {
     const ws = weaponStats(me.inv[me.active]);
     const mobility = (ws ? ws.mobility : 1.05) + armorStats(me.inv.armor).mobility;
     if (me.downed) state.sprint = false;
+    const stunnedNow = performance.now() < (state.stunnedUntil || 0);
     const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
     const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
     const rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
     let mx = fx * pf + rx * pr, mz = fz * pf + rz * pr;
     const len = Math.hypot(mx, mz);
-    if (len > 0.05) {
+    if (len > 0.05 && !stunnedNow) {
       if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
       const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain);
       state.x = p.x; state.z = p.z;
     }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
-    else if (state.mouseDown && !me.downed) tryFire(now); else state.firedThisPress = false;
+    else if (state.mouseDown && !me.downed && !stunnedNow) tryFire(now); else state.firedThisPress = false;
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;

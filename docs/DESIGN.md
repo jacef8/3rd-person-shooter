@@ -222,14 +222,40 @@ So the loot loop is:
 
 ## Tech (Future Soldier-style gadgets)
 
-| Gadget | Key | Unlock | Effect |
+**Hacking is a combat tool, not a chore.** It's about lighting up the other crew so you can kill
+them.
+
+1. **Take an enemy down without killing them:**
+   - throw a **stun grenade** at them;
+   - sneak up behind them for a **takedown** (E);
+   - or down them in a fight (crews go down instead of dying).
+2. **Data-hack them:** hold E next to them for 2 s. They stay pinned while you hack, but you show up
+   to enemies nearby, so your crew has to cover you. Each crewmate within ~30 ft speeds the hack up.
+3. **The payoff:**
+   - their **whole crew lights up** for your crew for 20 s: through walls, on the minimap and on the map, at any distance, camo included;
+   - you also **learn where their stash house is**, which is marked on your map for 15 minutes.
+4. Hacking a stunned **Rogue** taps their radio and lights up every Rogue within ~1,000 ft.
+5. **Counterplay:**
+   - the hacked crew is told immediately;
+   - a crewmate can shoot the hacker off;
+   - the **Intel jammer** field perk halves how long you stay lit up.
+
+**Terminals** are for scouting. Hacking one (5 s) **scans the area**: every enemy within ~500 ft lights
+up for your crew for 10 s. It also pays tech and intel. Hack one before you push a town.
+
+| Gadget | Key (controller) | Unlock | Effect |
 | --- | --- | --- | --- |
-| Target tagging | F | 1 | Tag the enemy under your crosshair; your squad sees them through walls for 8 s |
-| Terminal hacking | E | 1 | 5 s, stand still; interrupted by moving or taking damage |
-| Sensor grenade | G | 2 | Reveals everyone within 18 m of where it lands to your squad for 10 s, cloaked players included |
-| Optical camo | V | 4 | Near-invisible while crouched or moving slowly; firing, sprinting or taking damage breaks it |
-| Lock bypass | E | 8 | Silently hack open a locked stash house door (8 s); the owner is alerted |
-| Rally | T | 5 | Squad leader only: +50% armor and +20% damage to squadmates within 30 m; 90 s cooldown |
+| Data hack | E (A) next to a stunned/downed enemy | 1 | 2 s: lights up their whole crew for 20 s and marks their stash house |
+| Takedown | E (A) from behind | 1 | Stuns them for 4 s, ready to hack (+30 XP) |
+| Target tagging | F (RB) | 1 | Tag the enemy under your crosshair; your crew sees them through walls for 8 s |
+| Sensor grenade | G (tap LB) | 2 | Reveals everyone within 60 ft of where it lands to your crew for 10 s, cloaked players included |
+| Stun grenade | Z / hold LB to switch, then G / tap LB | 3 | 15 tech: after 1 s, enemies within 20 ft who can see it are stunned for 2-4 s |
+| Optical camo | V (R3) | 4 | Near-invisible while crouched or moving slowly; firing, sprinting or taking damage breaks it |
+| Rally | T (◀) | 5 | Crew leader only: +50% armor and +20% damage to crewmates within 100 ft; 90 s cooldown |
+| Lock bypass | E (A) on a locked door | 8 | Silently hack open a locked stash house door (8 s); the owner is alerted |
+
+Stunned players can't move, shoot or use anything until it wears off. Numbers live in
+`shared/data/gadgets.json` (`stun`, `takedown`, `dataHack`) and `activities.json` (`terminal`).
 
 Camo is enforced by the server: cloaked enemies are left out of your network updates unless
 they're within 9 m or a tag or sensor has exposed them, so it can't be beaten by reading traffic.

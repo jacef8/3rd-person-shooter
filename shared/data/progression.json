@@ -20,6 +20,8 @@
     "breach": 150,
     "survivalPerMinute": 25,
     "pickup": 5,
-    "build": 40
+    "build": 40,
+    "dataHack": 150,
+    "takedown": 30
   }
 }
