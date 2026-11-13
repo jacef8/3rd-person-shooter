@@ -10,8 +10,13 @@ characters persist between sessions and redeploys. A change to the save format w
 
 - **Computer:** open the link, enter a callsign, pick a town to deploy to. Click the game to capture
   the mouse. WASD + mouse, E interact, M map, P crew panel, Tab inventory.
-- **Phone + Backbone One:** open the same link in Safari (iPhone) or Chrome (Android), landscape.
-  Press any controller button so the browser sees it. The A button joins.
+- **Phone, touch only:** open the link in Chrome (Android) or Safari (iPhone), landscape.
+  - **Move:** put your left thumb anywhere on the left half and drag; push past the ring to sprint.
+  - **Look:** drag anywhere on the right half.
+  - **Act:** FIRE, AIM, USE (= E), RELOAD, CROUCH, SWAP, GRENADE, TAG and HEAL are on the right; MAP, BAG, CREW, CAMO, PING, grenade switch and BUILD are along the top.
+  - **Close a screen:** use ✕ Close, top right.
+- **Phone + Backbone One:** same link. Press any controller button so the browser sees it; the
+  touch buttons then hide. The A button joins.
 - Your character is tied to the browser you play in. Clearing its storage, or using another
   browser, makes a new character.
 

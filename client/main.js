@@ -2181,8 +2181,8 @@ function frame(now) {
     const k = state.keys;
     const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
-    const pf = f + pad.moveY, pr = r + pad.moveX;
-    state.sprint = (k.has('ShiftLeft') || pad.sprint) && pf > 0.3 && !state.aiming;
+    const pf = f + pad.moveY + touch.moveY, pr = r + pad.moveX + touch.moveX;
+    state.sprint = (k.has('ShiftLeft') || pad.sprint || touch.sprint) && pf > 0.3 && !state.aiming;
     if (state.sprint) state.crouch = false;
     // Mobility comes from the active weapon build and the armor you wear.
     const ws = weaponStats(me.inv[me.active]);
@@ -2278,3 +2278,89 @@ requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
 window.__dz = { state, send };
+
+// ------------------------------------------------------------------ touch controls
+// Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
+// on the right to look, and buttons for everything else. Hidden while a controller is in use.
+const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null };
+const TOUCH_BTNS = [
+  // [label, action, class]   'fire' is held; 'aim' toggles
+  ['FIRE', 'fire', 'big fire'], ['AIM', 'aim', 'mid aim'], ['USE', 'interact', 'mid use'], ['RELOAD', 'reload', 'sm r1'],
+  ['CROUCH', 'crouch', 'sm r2'], ['SWAP', 'swap', 'sm r3'], ['GRENADE', 'sensor', 'sm r4'], ['TAG', 'tag', 'sm r5'], ['HEAL', 'heal', 'sm r6'],
+];
+const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ NADE', 'switchGrenade'], ['BUILD', 'build']];
+function buildTouchUI() {
+  const ui = $('touch');
+  ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div>' +
+    TOUCH_BTNS.map(([l, a, c]) => `<button class="tbtn ${c}" data-act="${a}">${l}</button>`).join('') +
+    `<div class="ttop">${TOUCH_TOP.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>`;
+  for (const b of ui.querySelectorAll('.tbtn')) {
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const a = b.dataset.act;
+      if (a === 'fire') {
+        state.mouseDown = true; state.firedThisPress = false; b.classList.add('on'); b.setPointerCapture(e.pointerId);
+        // A quick tap can end before the next frame looks at the trigger, so fire right away.
+        if (state.me && !state.me.dead && !state.me.downed && !build.on && !state.invOpen) tryFire(performance.now());
+        return;
+      }
+      if (a === 'aim') { state.aiming = !state.aiming; b.classList.toggle('on', state.aiming); return; }
+      doAction(a);
+    });
+    if (b.dataset.act === 'fire') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { state.mouseDown = false; b.classList.remove('on'); });
+  }
+  const knob = $('tknob'), base = $('tstick');
+  ui.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.tbtn')) return;
+    e.preventDefault();
+    ui.setPointerCapture(e.pointerId);
+    if (e.clientX < innerWidth * 0.45 && !touch.stick) {
+      touch.stick = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      Object.assign(base.style, { left: `${e.clientX - 60}px`, top: `${e.clientY - 60}px`, display: 'block' });
+      knob.style.transform = 'translate(0px, 0px)';
+    } else if (!touch.look) touch.look = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  });
+  ui.addEventListener('pointermove', (e) => {
+    if (touch.stick?.id === e.pointerId) {
+      let dx = e.clientX - touch.stick.x, dy = e.clientY - touch.stick.y;
+      const d = Math.hypot(dx, dy), R = 60;
+      if (d > R) { dx *= R / d; dy *= R / d; }
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      touch.moveX = dx / R; touch.moveY = -dy / R;
+      touch.sprint = d > R * 1.15;   // push past the ring to sprint
+    } else if (touch.look?.id === e.pointerId) {
+      const sens = (state.aiming ? 0.004 * camera.fov / 70 : 0.006) * pad.settings.lookSpeed / 2.6;
+      state.yaw -= (e.clientX - touch.look.x) * sens;
+      state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - (e.clientY - touch.look.y) * sens));
+      touch.look.x = e.clientX; touch.look.y = e.clientY;
+    }
+  });
+  const end = (e) => {
+    if (touch.stick?.id === e.pointerId) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; base.style.display = 'none'; }
+    if (touch.look?.id === e.pointerId) touch.look = null;
+  };
+  ui.addEventListener('pointerup', end);
+  ui.addEventListener('pointercancel', end);
+  // A close button for any open screen (phones have no Esc / Tab / P keys).
+  $('tclose').addEventListener('click', closeTopPanel);
+}
+function closeTopPanel() {
+  if (state.gunsmithOpen) return closeGunsmith();
+  if (state.contactOpen) return closeContact();
+  if (state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) return closeMapScreen();
+  if (state.panelOpen) return closeSquadPanel();
+  if (state.invOpen) return doAction('inventory');
+}
+const touchCapable = MOBILE || 'ontouchstart' in window;
+if (touchCapable) buildTouchUI();
+setInterval(() => {
+  if (!touchCapable) return;
+  const panel = topPanel();
+  const playing = !!state.me && state.inputMode !== 'pad' && !state.me.dead;
+  $('touch').hidden = !playing || !!panel;
+  document.body.classList.toggle('touchui', !$('touch').hidden || (touchCapable && !!state.me && state.inputMode !== 'pad'));
+  // Close button for screens that otherwise need a keyboard to leave.
+  $('tclose').hidden = !(state.inputMode !== 'pad' && panel && panel.id !== 'login' && !(panel.id === 'mapscreen' && state.mapMode !== 'view' && state.mapMode !== 'travel'));
+  if ($('touch').hidden && touch.stick) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; }
+  $('touch').querySelector('.aim')?.classList.toggle('on', state.aiming);
+}, 200);

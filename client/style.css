@@ -219,3 +219,46 @@ body.building #gadgets { display: none; }
 #downbar b { color: #ff5a5a; letter-spacing: 0.12em; }
 body:has(#downbar:not([hidden])) #game { filter: saturate(0.3) brightness(0.8); }
 #stunfx { position: fixed; inset: 0; background: radial-gradient(circle, rgba(255,255,255,0.95), rgba(220,230,255,0.75)); opacity: 0; pointer-events: none; transition: opacity 0.25s; }
+
+/* ---- touch controls ---- */
+#touch { position: fixed; inset: 0; z-index: 5; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+#tstick { position: absolute; display: none; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.2); pointer-events: none; }
+#tknob { position: absolute; left: 35px; top: 35px; width: 50px; height: 50px; border-radius: 50%; background: rgba(255,255,255,0.45); }
+.tbtn { position: absolute; pointer-events: auto; border-radius: 50%; border: 2px solid rgba(255,255,255,0.4); background: rgba(20,24,30,0.45); color: #fff; font: 700 11px/1 'Segoe UI', sans-serif; letter-spacing: 0.04em; touch-action: none; padding: 0; }
+.tbtn.on { background: rgba(255,138,42,0.6); border-color: #ff8a2a; }
+.tbtn.big { width: 86px; height: 86px; right: calc(28px + env(safe-area-inset-right)); bottom: 70px; font-size: 14px; }
+.tbtn.fire { background: rgba(170,30,30,0.5); }
+.tbtn.mid { width: 60px; height: 60px; }
+.tbtn.aim { right: calc(126px + env(safe-area-inset-right)); bottom: 62px; }
+.tbtn.use { right: calc(40px + env(safe-area-inset-right)); bottom: 168px; }
+.tbtn.sm { width: 50px; height: 50px; font-size: 9px; }
+.tbtn.r1 { right: calc(110px + env(safe-area-inset-right)); bottom: 140px; }
+.tbtn.r2 { right: calc(196px + env(safe-area-inset-right)); bottom: 40px; }
+.tbtn.r3 { right: calc(176px + env(safe-area-inset-right)); bottom: 110px; }
+.tbtn.r4 { right: calc(120px + env(safe-area-inset-right)); bottom: 200px; }
+.tbtn.r5 { right: calc(40px + env(safe-area-inset-right)); bottom: 240px; }
+.tbtn.r6 { right: calc(250px + env(safe-area-inset-right)); bottom: 40px; }
+.ttop { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+.tbtn.tiny { position: static; border-radius: 6px; width: auto; height: 30px; padding: 0 10px; font-size: 10px; }
+#tclose { position: fixed; top: 10px; right: 10px; z-index: 50; padding: 10px 16px; font-size: 15px; background: rgba(20,24,30,0.9); color: #fff; border: 1px solid #ff8a2a; border-radius: 6px; }
+/* Touch layout: the gadget hints go (the buttons replace them); ammo and resources move to the
+   bottom centre so the right-hand thumb cluster has room below the minimap. */
+body.touchui #gadgets { display: none; }
+body.touchui #weapon { right: auto; left: 50%; transform: translateX(-50%); bottom: 6px; text-align: center; }
+body.touchui #weapon #wname, body.touchui #weapon #wextra { display: inline-block; margin: 0 6px; }
+body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); bottom: 88px; white-space: nowrap; }
+@media (max-height: 520px) {
+  body.touchui #housestatus { top: 32px; right: auto; left: 50%; transform: translateX(-50%); width: auto; }
+  .ttop { top: 4px; gap: 4px; } .tbtn.tiny { height: 24px; padding: 0 7px; font-size: 9px; }
+  .tbtn.big { width: 74px; height: 74px; right: calc(16px + env(safe-area-inset-right)); bottom: 20px; font-size: 13px; }
+  .tbtn.mid { width: 54px; height: 54px; }
+  .tbtn.sm { width: 44px; height: 44px; font-size: 8px; }
+  .tbtn.use { right: calc(26px + env(safe-area-inset-right)); bottom: 104px; }
+  .tbtn.aim { right: calc(100px + env(safe-area-inset-right)); bottom: 14px; }
+  .tbtn.r5 { right: calc(32px + env(safe-area-inset-right)); bottom: 168px; }   /* tag */
+  .tbtn.r1 { right: calc(94px + env(safe-area-inset-right)); bottom: 82px; }    /* reload */
+  .tbtn.r4 { right: calc(90px + env(safe-area-inset-right)); bottom: 140px; }   /* grenade */
+  .tbtn.r3 { right: calc(152px + env(safe-area-inset-right)); bottom: 66px; }   /* swap */
+  .tbtn.r2 { right: calc(162px + env(safe-area-inset-right)); bottom: 12px; }   /* crouch */
+  .tbtn.r6 { right: calc(214px + env(safe-area-inset-right)); bottom: 40px; }   /* heal */
+}
