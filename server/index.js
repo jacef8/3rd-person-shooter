@@ -79,6 +79,11 @@ const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.ro
 const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation } : null;
 const grid = map.grid;
 const terrain = map.terrain;
+/** Look something up by a key a client sent: only the table's own entries count (never 'constructor'
+ *  and friends, never a "_about" note). */
+const own = (table, key) => (typeof key === 'string' && key[0] !== '_' && Object.hasOwn(table, key) ? table[key] : undefined);
+/** An entry of a list by an index a client sent: whole numbers only. */
+const nth = (list, i) => { const k = typeof i === 'string' && /^\d+$/.test(i) ? Number(i) : i; return Number.isInteger(k) && k >= 0 && k < list.length ? list[k] : undefined; };
 const gy = (c) => (c.boat ? 0.25 : terrain.height(c.x, c.z));   // ground height under a character (or the boat deck)
 const MAP_SUM = mapChecksum(map);
 
@@ -554,7 +559,7 @@ function endEvent(e, outcome) {
   if (e.type === 'fair') {
     const ranked = Object.entries(e.board).sort((a, b) => b[1].meat - a[1].meat);
     ranked.forEach(([tok, row], i) => {
-      const prize = def.prizes[i] || 0;
+      const prize = ranked.length >= def.minHunters ? def.prizes[i] || 0 : 0;   // it takes a contest to win a prize
       const total = prize + row.meat * def.perMeat;
       const o = onlineByToken(tok);
       if (o) { o.cash = (o.cash || 0) + total; award(o, def.xp, `County fair${prize ? ` — ${['1st', '2nd', '3rd'][i]} place` : ''}`); toast(o, `🏆 Hunting contest: ${prize ? `${['1st', '2nd', '3rd'][i]} place, ` : ''}$${total}`); dirty(o); }
@@ -785,6 +790,7 @@ function boatState(p, msg) {
     placeOccupants(b);
   }
   p.speed = rt.speed;
+  if (rt.speed > 0.5) p.lastActive = now;
 }
 /** Boats and landing posts within reach, as an interactable: { d, run }. */
 function riverInteractable(p) {
@@ -894,10 +900,10 @@ function launchSpot(d) {
   return { x: d.wx, z: d.wz };
 }
 function dockAction(p, msg) {
-  const d = map.docks[msg.id];
+  const d = nth(map.docks, msg.id);
   if (!d || Math.hypot(d.x - p.x, d.z - p.z) > 6) return;
   if (msg.action === 'buy') {
-    const def = BOATS[msg.type];
+    const def = own(BOATS, msg.type);
     if (!def) return;
     if (db.boats.filter((b) => b.owner === p.token).length >= RV.rules.maxBoatsEach) return toast(p, `You can own ${RV.rules.maxBoatsEach} boats at a time`);
     if (msg.pay === 'craft') {
@@ -953,6 +959,19 @@ function keepTraders() {
     }
   });
 }
+// A camp only has so much to sell: it holds an hour's worth of what it makes and restocks steadily,
+// and that stock is shared by everyone who comes to buy.
+const campStock = new Map();   // trader post -> { good: { n, at } }
+function campStockOf(post, good, now = Date.now()) {
+  const per = RV.camps.trader.stockPerHour?.[good];
+  if (!per) return null;
+  let s = campStock.get(post);
+  if (!s) campStock.set(post, (s = {}));
+  const e = s[good] || (s[good] = { n: per, at: now });
+  e.n = Math.min(per, e.n + ((now - e.at) / 3_600_000) * per);
+  e.at = now;
+  return e;
+}
 function traderView(b) {
   const t = traderPosts[b.post];
   const G = (g) => HOMESTEAD.goods[g]?.name || g;
@@ -960,7 +979,7 @@ function traderView(b) {
     const T = RV.camps.trader;
     return { town: t.camp.name, who: b.name,
       sells: Object.entries(T.pays).filter(([g, m]) => m > 0 && ECONOMY.prices[g]).map(([g, m]) => ({ good: g, pays: Math.max(1, Math.round(ECONOMY.prices[g] * m)), name: G(g) })),
-      shop: [...Object.entries(T.sellsCheap).map(([g, price]) => ({ id: g, name: G(g), price, qty: 1 })), ...Object.entries(T.shop).map(([k, price]) => ({ id: k, name: ECONOMY.shop[k]?.name || G(k), price, qty: ECONOMY.shop[k]?.qty || 1 }))] };
+      shop: [...Object.entries(T.sellsCheap).map(([g, price]) => { const left = Math.floor(campStockOf(b.post, g)?.n ?? Infinity); return { id: g, name: Number.isFinite(left) ? `${G(g)} (${left} left)` : G(g), price, qty: 1 }; }), ...Object.entries(T.shop).map(([k, price]) => ({ id: k, name: ECONOMY.shop[k]?.name || G(k), price, qty: ECONOMY.shop[k]?.qty || 1 }))] };
   }
   const town = map.towns[t.dock.townId]?.name;
   return { town: `${town} landing`, who: b.name,
@@ -981,14 +1000,14 @@ function refreshHauls(now) {
       const to = pick(map.contacts.filter((o) => o.id !== c.id));
       const km = Math.hypot(to.x - c.x, to.z - c.z) / 1000;
       const good = pick(['corn', 'peanuts', 'cotton', 'fish', 'meat', 'parts', 'tech', 'salvage']);
-      list.push({ id: uid('h'), from: c.id, to: to.id, toTown: postTown(to.id), label: `${HOMESTEAD.goods[good]?.name || good} freight`, pay: Math.round(COM.haul.base + km * COM.haul.perKm * 10) });
+      list.push({ id: uid('h'), from: c.id, to: to.id, toTown: postTown(to.id), label: `${HOMESTEAD.goods[good]?.name || good} freight`, pay: Math.round(COM.haul.base + km * COM.haul.perKm) });
     }
     hauls.set(c.id, list);
   }
 }
 const hasCargo = (p) => p.inv.pack.some((i) => i.kind === 'cargo');
 function takeHaul(p, msg) {
-  const ct = map.contacts[msg.contactId];
+  const ct = nth(map.contacts, msg.contactId);
   if (!ct || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return;
   const list = hauls.get(ct.id) || [];
   const job = list.find((j) => j.id === msg.id);
@@ -1031,19 +1050,21 @@ function stallAction(p, msg) {
     const same = st.listings.find((l) => l.res === res && l.price === price);
     if (same) same.qty += qty; else st.listings.push({ res, qty, price });
   } else if (msg.action === 'unlist' && mine) {
-    const l = st.listings[msg.i];
+    const l = nth(st.listings, msg.i);
     if (!l) return;
     p[l.res] = (p[l.res] || 0) + l.qty;
     st.listings.splice(msg.i, 1);
   } else if (msg.action === 'collect' && mine) {
+    if (!Number.isFinite(st.till)) st.till = 0;
     p.cash = (p.cash || 0) + st.till;
     toast(p, `Collected $${st.till}`);
     st.till = 0;
   } else if (msg.action === 'buy') {
-    const l = st.listings[msg.i];
+    const l = nth(st.listings, msg.i);
     if (!l) return toast(p, 'Sold out');
     const qty = Math.min(l.qty, Math.max(1, msg.qty === 'all' ? l.qty : Math.floor(Number(msg.qty) || 1)));
     const cost = qty * l.price;
+    if (!(qty > 0) || !Number.isFinite(cost)) return;
     if ((p.cash || 0) < cost) return toast(p, `That's $${cost} — you have $${p.cash || 0}`);
     p.cash -= cost; p[l.res] = (p[l.res] || 0) + qty;
     st.till += cost; l.qty -= qty;
@@ -1107,7 +1128,7 @@ function playerTrade(p, msg) {
   if (msg.action === 'offer') {
     const res = {};
     for (const [k, v] of Object.entries(msg.res || {})) { const n = Math.floor(Number(v)); if (RESOURCES.includes(k) && n > 0) res[k] = Math.min(n, p[k] || 0); }
-    const items = (Array.isArray(msg.items) ? msg.items : []).filter((id) => p.inv.pack.some((i) => i.id === id && i.kind !== 'cargo')).slice(0, PACK_SIZE);
+    const items = [...new Set(Array.isArray(msg.items) ? msg.items : [])].filter((id) => p.inv.pack.some((i) => i.id === id && i.kind !== 'cargo')).slice(0, PACK_SIZE);
     sess.offer[p.token] = { res, items };
     sess.ok = {};   // any change needs both to confirm again
     return tradePush(sess);
@@ -1603,7 +1624,10 @@ function tradeNpc(p, msg) {
     const it = view.shop.find((x) => x.id === msg.item);
     if (!it) return;
     if ((p.cash || 0) < it.price) return toast(p, `That costs $${it.price}`);
-    const sh = ECONOMY.shop[it.id];
+    const stock = b.kind === 'trader' && traderPosts[b.post].camp ? campStockOf(b.post, it.id) : null;
+    if (stock && stock.n < 1) return toast(p, 'Sold out for now. The camp restocks through the day.');
+    if (stock) stock.n -= 1;
+    const sh = own(ECONOMY.shop, it.id);
     if (sh && (sh.kind === 'tool' || sh.kind === 'medkit') && p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
     p.cash -= it.price;
     if (!sh || sh.kind === 'good') p[it.id] = (p[it.id] || 0) + (it.qty || 1);
@@ -1627,7 +1651,7 @@ function tradeView(contactId) {
 }
 function trade(p, msg) {
   if (msg.npcId) return tradeNpc(p, msg);
-  const ct = map.contacts[msg.contactId];
+  const ct = nth(map.contacts, msg.contactId);
   if (!ct || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return toast(p, 'Trade at a Contact\'s trading post');
   if (msg.action === 'sell') {
     const g = msg.good;
@@ -1639,7 +1663,7 @@ function trade(p, msg) {
     p[g] -= qty; p.cash = (p.cash || 0) + pay;
     toast(p, `Sold ${qty} ${HOMESTEAD.goods[g]?.name || g} for $${pay}`);
   } else if (msg.action === 'buy') {
-    const it = ECONOMY.shop[msg.item];
+    const it = own(ECONOMY.shop, msg.item);
     if (!it || msg.item.startsWith('_')) return;
     const price = tradeView(msg.contactId).shop.find((x) => x.id === msg.item).price;
     if ((p.cash || 0) < price) return toast(p, `That costs $${price} — you have $${p.cash || 0}`);
@@ -1733,6 +1757,9 @@ function finishDataHack(p, id) {
   if (!t || t.dead || !(isStunned(t) || t.downed)) return send(p.ws, { t: 'hack', done: true, text: 'They shook it off' });
   const now = Date.now();
   const key = squadKey(p);
+  // Their radio only gives up its secrets once in a while: no hacking the same target over and over.
+  if ((t.hackedUntil || 0) > now) return send(p.ws, { t: 'hack', done: true, text: 'Nothing new on their radio yet' });
+  t.hackedUntil = now + DATAHACK.repeatMs;
   if (t.isBot) {
     // A Rogue's radio: every Rogue nearby lights up.
     const ids = [];
@@ -2042,7 +2069,12 @@ function killPlayer(p, attacker, headshotKill) {
   const by = attacker ? attacker.name : 'the city';
   if (attacker && !attacker.isBot) {
     attacker.kills++;
-    award(attacker, XP.playerKill + 20 * level(p) + (headshotKill ? XP.headshotKill : 0), `Killed ${p.name}`, true);
+    // The same victim again within ten minutes is worth half as much each time (no trading kills for XP).
+    const again = (attacker.recentKills ??= new Map());
+    const prev = again.get(p.token);
+    const streak = prev && Date.now() - prev.at < XP.repeatKillMs ? prev.n + 1 : 0;
+    again.set(p.token, { at: Date.now(), n: streak });
+    award(attacker, Math.round((XP.playerKill + 20 * level(p) + (headshotKill ? XP.headshotKill : 0)) / 2 ** streak), `Killed ${p.name}`, true);
   }
   feed(`${by} ➜ ${p.name}`);
   send(p.ws, { t: 'died', by, deploy: deployOptions(p) });
@@ -2397,7 +2429,7 @@ function pushContracts(p) {
   send(p.ws, { t: 'contracts', list: p.contracts.map((c) => ({ id: c.id, type: c.type, x: c.x, z: c.z, expires: c.expires, contactId: c.contactId })) });
 }
 function acceptContract(p, msg) {
-  const contact = map.contacts[msg.contactId];
+  const contact = nth(map.contacts, msg.contactId);
   if (!contact || Math.hypot(contact.x - p.x, contact.z - p.z) > 6) return;
   const offers = contactOffers(p, contact.id);
   const idx = offers.findIndex((o) => o.id === msg.id);
@@ -2455,10 +2487,10 @@ function contactView(p, contactId) {
     board: marketBoard(ct.x, ct.z), fair: !!inFair(ct.x, ct.z) };
 }
 function requisition(p, msg) {
-  const contact = map.contacts[msg.contactId];
+  const contact = nth(map.contacts, msg.contactId);
   if (!contact || Math.hypot(contact.x - p.x, contact.z - p.z) > 6) return;
-  const table = { part: PARTS, paint: PAINTS, armor: ARMORS, perk: FIELD_PERKS }[msg.kind];
-  const def = table?.[msg.id];
+  const table = own({ part: PARTS, paint: PAINTS, armor: ARMORS, perk: FIELD_PERKS }, msg.kind);
+  const def = table && own(table, msg.id);
   if (!def?.field) return;
   if (hasField(p, msg.id)) return toast(p, 'Already requisitioned');
   if (level(p) < (def.level || 1)) return toast(p, `Requires level ${def.level}`);
@@ -2498,7 +2530,7 @@ function payCarried(p, cost) {
 const costText = (c) => Object.entries(c).map(([k, v]) => `${v} ${k}`).join(', ');
 
 function handleBuild(p, msg) {
-  const def = PIECES[msg.piece];
+  const def = own(PIECES, msg.piece);
   if (!def) return;
   const x = Number(msg.x), z = Number(msg.z), rot = msg.rot ? 1 : 0;
   if (!Number.isFinite(x) || !Number.isFinite(z)) return;
@@ -2568,6 +2600,13 @@ function removeStruct(st, destroyed) {
   db.structures = db.structures.filter((o) => o !== st);
   // A claimed building's doors go with its stash locker.
   if (PIECES[st.type].claim && st.building != null) for (const d of [...structs.values()]) if (d.claimOf === st.id) removeStruct(d, false);
+  if (PIECES[st.type].stall && ((st.listings || []).length || st.till)) {
+    // A wrecked (or packed-up) stall spills what was on it: the goods and the till.
+    const goods = { cash: Number.isFinite(st.till) ? st.till : 0 };
+    for (const l of st.listings || []) goods[l.res] = (goods[l.res] || 0) + l.qty;
+    dropBag(st.x, st.z, [], goods, destroyed ? `Wreck of ${st.ownerName}'s stall` : 'Stall goods');
+    if (destroyed) logAway(st.owner, 'Your market stall was wrecked; its goods and till spilled on the ground');
+  }
   if (PIECES[st.type].container) {
     dropBag(st.x, st.z, st.items, st, destroyed ? 'Wrecked crate' : 'Crate contents');
     for (const p of players.values()) if (p.openContainer?.kind === 'crate' && p.openContainer.id === st.id) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
@@ -2611,7 +2650,7 @@ function explode(c, now) {
 }
 
 function craft(p, msg) {
-  const def = CRAFTS[msg.item];
+  const def = own(CRAFTS, msg.item);
   if (!def) return;
   const store = craftStore(p);
   if (!store) return toast(p, 'Craft at your stash house or one of your crates');
@@ -2909,7 +2948,7 @@ function gunsmithAction(p, msg) {
     const w = findOwnedWeapon(p, msg.itemId);
     if (!w || w.kind !== 'weapon') return;
     if (msg.action === 'attach') {
-      const part = PARTS[msg.partId];
+      const part = own(PARTS, msg.partId);
       if (!part || !SLOTS.includes(msg.slot) || part.slot !== msg.slot) return;
       if (!partFits(msg.partId, w.archetype)) return toast(p, `${part.name} doesn't fit a ${ARCHETYPES[w.archetype].label}`);
       if (!isUnlocked(part, msg.partId, p)) return toast(p, part.field && level(p) >= part.level ? `${part.name} is field gear — requisition it from a Contact` : `${part.name} unlocks at level ${part.level}`);
@@ -2917,14 +2956,14 @@ function gunsmithAction(p, msg) {
       const cap = weaponStats(w).mag;
       if ((p.mags[w.id] ?? 0) > cap) { p.ammo += p.mags[w.id] - cap; p.mags[w.id] = cap; }
     } else {
-      const paint = PAINTS[msg.paint];
+      const paint = own(PAINTS, msg.paint);
       if (!paint) return;
       if (!isUnlocked(paint, msg.paint, p)) return toast(p, paint.field && level(p) >= paint.level ? `${paint.name} is field gear — requisition it from a Contact` : `${paint.name} unlocks at level ${paint.level}`);
       w.paint = msg.paint;
     }
   } else if (msg.action === 'build' || msg.action === 'buildArmor') {
     const isArmor = msg.action === 'buildArmor';
-    const def = isArmor ? ARMORS[msg.type] : ARCHETYPES[msg.type];
+    const def = own(isArmor ? ARMORS : ARCHETYPES, msg.type);
     if (!def) return;
     const label = isArmor ? def.name : def.label;
     if (!isUnlocked(def, msg.type, p)) return toast(p, def.field && level(p) >= def.level ? `${label} is field gear — requisition it from a Contact` : `${label} unlocks at level ${def.level}`);
@@ -2936,7 +2975,7 @@ function gunsmithAction(p, msg) {
     if (!spend(p, { parts: cost })) return toast(p, `Needs ${cost} parts`);
     const item = isArmor ? makeArmor(msg.type) : makeWeapon(msg.type);
     if (roomInPack) p.inv.pack.push(item); else stash.items.push(item);
-    award(p, XP.build, `Built ${item.name}`);
+    if (cost > 0) award(p, XP.build, `Built ${item.name}`);   // a free sidearm teaches nothing
     toast(p, `Built ${item.name}${roomInPack ? '' : ' (sent to stash)'}`);
   } else return;
   dirty(p);
@@ -2944,7 +2983,7 @@ function gunsmithAction(p, msg) {
 }
 function upgradeAction(p, msg) {
   if (!atOwnStash(p)) return toast(p, 'Upgrades are installed at your stash house');
-  const track = UPGRADES[msg.track];
+  const track = own(UPGRADES, msg.track);
   if (!track) return;
   const c = claimOf(p);
   const h = c.store;
@@ -3090,14 +3129,15 @@ function handleDeploy(p, msg) {
   } else if (msg.kind === 'contact') {
     // First deploy: any town. After that: Contacts you've discovered.
     if (!p.discovered.includes(msg.id) && !p.deploying) return;
-    if (!map.contacts[msg.id]) return;
-    at = { x: map.contacts[msg.id].x + 3, z: map.contacts[msg.id].z + 3 };
+    const ct = nth(map.contacts, msg.id);
+    if (!ct) return;
+    at = { x: ct.x + 3, z: ct.z + 3 };
   } else if (msg.kind === 'crate') {
     const st = structs.get(msg.id);
     if (!st || st.owner !== p.token || !PIECES[st.type].container) return;
     at = { x: st.x, z: st.z + 1.4 };
   } else if (msg.kind === 'lz') {
-    at = map.landingZones[msg.id];
+    at = nth(map.landingZones, msg.id);
     if (!at) return;
   } else if (msg.kind === 'crew') {
     // Drop in next to a crewmate (not while they're in a firefight).
@@ -3131,7 +3171,7 @@ function handleTravel(p, msg) {
   if (hasCargo(p)) return toast(p, 'You can\'t fast travel with freight');
   if (msg.kind === 'contact') {
     if (!p.discovered.includes(msg.id)) return toast(p, 'Discover that Contact on foot first');
-    const c = map.contacts[msg.id];
+    const c = nth(map.contacts, msg.id);
     placeAt(p, c.x + 3, c.z + 3);
   } else if (msg.kind === 'squad') {
     const m = players.get(msg.id);
@@ -3298,6 +3338,7 @@ function handleState(p, msg) {
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
   const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain);
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
+  if (p.speed > 0.5) p.lastActive = now;
   p.x = np.x; p.z = np.z;
   p.yaw = Number(msg.yaw) || 0;
   p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
@@ -3378,10 +3419,16 @@ const server = TLS ? https.createServer(TLS, handler) : http.createServer(handle
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
+    // One bad message must never take the whole world down with it.
+    try { onMessage(ws, raw); } catch (e) { console.error(`Message from ${ws.player?.name || 'a new connection'} failed:`, e); }
+  });
+  function onMessage(ws, raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
     const p = ws.player;
     if (!p) { if (msg.t === 'join') handleJoin(ws, msg); return; }
+    if (msg.t !== 'state') p.lastActive = Date.now();   // doing anything counts as being active
     // Stunned: nothing but talking to your crew until it wears off.
     if (isStunned(p) && !p.dead && !p.downed && !['state', 'squad', 'leaderboard', 'closeContainer', 'dev'].includes(msg.t)) return;
     // While downed you can crawl, talk to your crew, or give up; nothing else.
@@ -3402,7 +3449,7 @@ wss.on('connection', (ws) => {
       case 'respawn': return handleDeploy(p, { kind: claimOf(p) ? 'home' : 'lz', id: 0 });
       case 'abandon': return abandonClaim(p);
       case 'buyMarker': {
-        const ct = map.contacts[msg.contactId];
+        const ct = nth(map.contacts, msg.contactId);
         if (!ct || p.dead || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return;
         if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
         if (!payCarried(p, CLAIM.markerPrice)) return toast(p, `A claim marker costs ${CLAIM.markerPrice.parts} parts`);
@@ -3453,7 +3500,7 @@ wss.on('connection', (ws) => {
         if (Number.isFinite(msg.x) && Number.isFinite(msg.z)) placeAt(p, msg.x, msg.z);
         return;
     }
-  });
+  }
   ws.on('close', () => {
     const p = ws.player;
     if (!p) return;
@@ -3525,7 +3572,8 @@ const loop = setInterval(() => {
     for (const p of players.values()) {
       if (p.dead) continue;
       discoverContacts(p);
-      p.aliveMs += 1000;
+      // Time alive pays while you're out and moving: not standing idle, not sitting in a safe camp.
+      if (now - (p.lastActive || 0) < XP.idleAfterMs && !inCamp(p.x, p.z) && !inFair(p.x, p.z)) p.aliveMs += 1000;
       if (p.aliveMs >= 60_000) { p.aliveMs -= 60_000; award(p, XP.survivalPerMinute, 'Survived another minute'); }
       if (now - (p.lastHit || 0) >= 6000 && p.armor < maxArmor(p) && p.food >= HUNGER.noRegenBelow) { p.armor = Math.min(maxArmor(p), p.armor + 3); dirty(p); }
       tickHunger(p, now);

@@ -32,7 +32,8 @@
       ],
       "perMeat": 3,
       "xp": 150,
-      "desc": "A safe zone: no shooting at the fairgrounds. Hand in meat for the hunting contest; the top three hunters win cash."
+      "desc": "A safe zone: no shooting at the fairgrounds. Hand in meat for the hunting contest; the top three hunters win cash.",
+      "minHunters": 2
     },
     "hoghunt": {
       "name": "Hog hunt",
@@ -112,10 +113,10 @@
   },
   "commerce": {
     "haul": {
-      "_about": "Freight jobs at trading posts: carry cargo to another town's post. Helicopters won't carry freight and you can't fast travel with it; if you die, whoever picks it up can deliver it.",
+      "_about": "Road freight: each trading post offers perPost jobs to other towns. pay = base + km * perKm. Cargo can't go by helicopter or fast travel.",
       "perPost": 2,
       "base": 25,
-      "perKm": 8,
+      "perKm": 15,
       "xp": 60,
       "refreshMs": 3600000
     },

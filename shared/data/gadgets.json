@@ -20,7 +20,7 @@
       "level": 2,
       "cost": 10,
       "key": "G",
-      "desc": "Reveals everyone within 18m of where it lands to your squad for 10s \u2014 including cloaked players."
+      "desc": "Reveals everyone within 18m of where it lands to your squad for 10s — including cloaked players."
     },
     "camo": {
       "name": "Optical Camo",
@@ -92,6 +92,7 @@
     "exposeMs": 20000,
     "jammerExposeMs": 10000,
     "stashIntelMs": 900000,
-    "rogueRevealRadius": 300
+    "rogueRevealRadius": 300,
+    "repeatMs": 120000
   }
 }

@@ -22,6 +22,9 @@
     "pickup": 5,
     "build": 40,
     "dataHack": 150,
-    "takedown": 30
+    "takedown": 30,
+    "repeatKillMs": 600000,
+    "idleAfterMs": 90000,
+    "_about": "XP for each thing you do. repeatKillMs: killing the same player again inside this window is worth half as much each time. idleAfterMs: time-alive XP stops this long after you last moved or did anything (and never counts inside a safe camp or the fair)."
   }
 }

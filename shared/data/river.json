@@ -64,7 +64,7 @@
     "minFromRoad": 500,
     "minApart": 3000,
     "trader": {
-      "_about": "sellsCheap: what the camp produces, at price per unit. pays: what the camp pays for what it can't make (multiple of the base price).",
+      "_about": "sellsCheap: what the camp produces, at price per unit; stockPerHour: how much of each it has to sell (it restocks that much an hour and holds one hour's worth, shared by everyone). pays: what the camp pays for what it can't make (multiple of the base price). Camps don't buy cooked meals: they sell the fish.",
       "sellsCheap": {
         "honey": 5,
         "shine": 8,
@@ -72,12 +72,10 @@
         "fish": 3
       },
       "pays": {
-        "ammo": 0,
         "parts": 1.4,
         "tech": 1.5,
         "salvage": 1.3,
         "seeds": 2.5,
-        "meals": 1.3,
         "corn": 1.5,
         "peanuts": 1.4
       },
@@ -85,6 +83,12 @@
         "rod": 18,
         "medkit": 30,
         "ammo": 14
+      },
+      "stockPerHour": {
+        "honey": 40,
+        "shine": 40,
+        "hide": 30,
+        "fish": 60
       }
     }
   },
