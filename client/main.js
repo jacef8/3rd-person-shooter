@@ -1882,7 +1882,8 @@ $('name').value = localStorage.getItem('dz_name') || '';
   } else {
     hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<br />'
       + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> swap weapon · <b>L3</b> sprint<br />'
-      + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build · <b>⧉</b> bag · <b>☰</b> map (hold: crew)';
+      + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
+      + 'The two small buttons: <b>⧉</b> (left) bag, hold to accept an invite · <b>☰</b> (right) map, hold for the crew panel';
   }
   if (MOBILE) document.body.classList.add('mobile');
 }
@@ -2399,6 +2400,7 @@ const OSK_ROWS = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL-', 'ZXCVBNM_.'];
 function openOsk(input) {
   osk.input = input; osk.sig = sigOf(input); osk.text = input.value || '';
   $('oskLabel').textContent = input.placeholder || 'Type';
+  $('oskText').dataset.hint = input.placeholder || '';   // shown inside the box on short screens
   const keys = $('oskKeys'); keys.innerHTML = '';
   for (const chars of OSK_ROWS) {
     const r = document.createElement('div'); r.className = 'oskrow';

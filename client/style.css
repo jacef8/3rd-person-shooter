@@ -45,6 +45,18 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 .oskkey.wide { flex: 2 1 0; font-size: 15px; }
 .oskkey.done { background: var(--hud-accent); color: #111; border-color: var(--hud-accent); }
 #osk .hint { margin-top: 4px; font-size: 14px; color: var(--hud-ink-2); text-align: center; }
+/* A phone on its side is short: the keyboard tightens up so all of it is on screen, and the name of
+   the box being filled in moves inside it. */
+@media (max-height: 460px) {
+  #osk { width: min(700px, 96vw); box-sizing: border-box; padding: 8px 10px; max-height: calc(100vh - 8px); max-height: calc(100dvh - 8px); overflow: auto; }
+  #oskLabel { display: none; }
+  #oskText { min-height: 36px; padding: 5px 10px; margin-bottom: 6px; font-size: 18px; }
+  #oskText.empty::before { content: attr(data-hint); color: rgba(255, 255, 255, 0.6); font-weight: 600; }
+  .oskrow { gap: 5px; margin-bottom: 5px; }
+  .oskkey { min-height: 36px; font-size: 16px; }
+  #osk .hint { margin-top: 2px; }
+}
+@media (max-height: 330px) { .oskkey, #oskText { min-height: 31px; } }
 /* Rangefinder sights: the range to what you're aiming at, on a solid chip beside the crosshair. */
 #rangefinder { position: absolute; top: calc(50% + 26px); left: calc(50% + 28px); padding: 3px 9px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 10px; font-size: 14px; font-weight: 700; color: var(--hud-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Gunsmith options: the part's name, then who it's for. */
