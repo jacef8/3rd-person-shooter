@@ -8,7 +8,9 @@
     "start": "node server/index.js",
     "test": "node --test test/*.test.js"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20.10"
+  },
   "dependencies": {
     "three": "^0.187.0",
     "ws": "^8.23.0"

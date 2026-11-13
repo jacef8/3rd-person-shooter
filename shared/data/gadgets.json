@@ -1,0 +1,61 @@
+{
+  "_about": "Future Soldier-style tech. cost is in tech. Distances in metres, times in ms.",
+  "gadgets": {
+    "mark": {
+      "name": "Target Tagging",
+      "level": 1,
+      "cost": 0,
+      "key": "F",
+      "desc": "Tag the enemy under your crosshair; your squad sees them through walls for 8s."
+    },
+    "hack": {
+      "name": "Terminal Hacking",
+      "level": 1,
+      "cost": 0,
+      "key": "E",
+      "desc": "Hack data terminals for intel and tech. Stand still for 5s."
+    },
+    "sensor": {
+      "name": "Sensor Grenade",
+      "level": 2,
+      "cost": 10,
+      "key": "G",
+      "desc": "Reveals everyone within 18m of where it lands to your squad for 10s — including cloaked players."
+    },
+    "camo": {
+      "name": "Optical Camo",
+      "level": 4,
+      "cost": 1,
+      "key": "V",
+      "desc": "Near-invisible while crouched or moving slowly. Drains 1 tech every 2s. Firing or taking damage breaks it."
+    },
+    "doorHack": {
+      "name": "Lock Bypass",
+      "level": 8,
+      "cost": 15,
+      "key": "E",
+      "desc": "Silently hack open a locked stash house door (8s). The owner is alerted."
+    },
+    "rally": {
+      "name": "Rally (squad leader)",
+      "level": 5,
+      "cost": 0,
+      "key": "T",
+      "desc": "Leader only: restores 50% armor and gives +20% damage for 10s to squadmates within 30m. 90s cooldown."
+    }
+  },
+  "markMs": 8000,
+  "camoRevealDistance": 9,
+  "sensor": {
+    "radius": 18,
+    "radiusMk2": 26,
+    "duration": 10000,
+    "throwRange": 30,
+    "cooldown": 12000
+  },
+  "rally": {
+    "radius": 30,
+    "buffMs": 10000,
+    "cooldown": 90000
+  }
+}

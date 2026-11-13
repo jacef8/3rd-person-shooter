@@ -1,0 +1,347 @@
+{
+  "_about": "Reasons to go out into the map: contracts, supply drops, terminals, loot tables, extraction. Times in ms, distances in metres.",
+  "contracts": {
+    "types": {
+      "heist": {
+        "name": "Data Heist",
+        "desc": "Hack the marked terminal.",
+        "xp": 250,
+        "reward": {
+          "comms": 2,
+          "salvage": 30,
+          "tech": 25,
+          "intel": 2
+        }
+      },
+      "camp": {
+        "name": "Clear Rogue Camp",
+        "desc": "Wipe out the rogue camp at the marked location.",
+        "xp": 400,
+        "reward": {
+          "comms": 3,
+          "salvage": 50,
+          "parts": 50
+        }
+      },
+      "recovery": {
+        "name": "Supply Recovery",
+        "desc": "Recover the marked crate and bring it to any Contact.",
+        "xp": 350,
+        "reward": {
+          "comms": 2,
+          "salvage": 80,
+          "parts": 30
+        }
+      },
+      "hvt": {
+        "name": "High-Value Target",
+        "desc": "Eliminate the rogue lieutenant near the marked location.",
+        "xp": 450,
+        "reward": {
+          "comms": 3,
+          "parts": 50,
+          "tech": 40
+        }
+      }
+    },
+    "maxActive": 2,
+    "durationMs": 3600000
+  },
+  "supplyDrop": {
+    "contents": {
+      "salvage": 120,
+      "parts": 80,
+      "tech": 40,
+      "ammo": 150,
+      "comms": 1
+    },
+    "everyMs": 600000,
+    "fallMs": 60000
+  },
+  "terminal": {
+    "reward": {
+      "intel": 3,
+      "tech": 10
+    },
+    "cooldownMs": 180000
+  },
+  "hackMs": {
+    "terminal": 5000,
+    "door": 8000,
+    "drop": 6000,
+    "crate": 3000
+  },
+  "loot": {
+    "respawnMs": 300000,
+    "zones": {
+      "town": [
+        {
+          "kind": "parts",
+          "name": "Parts Cache",
+          "amount": 15
+        },
+        {
+          "kind": "ammo",
+          "name": "Ammo Box",
+          "amount": 60
+        },
+        {
+          "kind": "medkit",
+          "name": "Medkit"
+        },
+        {
+          "kind": "parts",
+          "name": "Parts Cache",
+          "amount": 10
+        },
+        {
+          "kind": "tech",
+          "name": "Electronics",
+          "amount": 8
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 10
+        },
+        {
+          "kind": "tool",
+          "tool": "hammer",
+          "name": "Hammer"
+        },
+        {
+          "kind": "marker",
+          "name": "Claim marker"
+        }
+      ],
+      "industrial": [
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 25
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 20
+        },
+        {
+          "kind": "parts",
+          "name": "Parts Cache",
+          "amount": 20
+        },
+        {
+          "kind": "tool",
+          "tool": "pickaxe",
+          "name": "Pickaxe"
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 30
+        },
+        {
+          "kind": "tech",
+          "name": "Electronics",
+          "amount": 10
+        },
+        {
+          "kind": "tool",
+          "tool": "hammer",
+          "name": "Hammer"
+        }
+      ],
+      "farm": [
+        {
+          "kind": "wood",
+          "name": "Lumber",
+          "amount": 20
+        },
+        {
+          "kind": "ammo",
+          "name": "Ammo Box",
+          "amount": 60
+        },
+        {
+          "kind": "medkit",
+          "name": "Medkit"
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 15
+        },
+        {
+          "kind": "tool",
+          "tool": "hatchet",
+          "name": "Hatchet"
+        },
+        {
+          "kind": "parts",
+          "name": "Parts Cache",
+          "amount": 15
+        },
+        {
+          "kind": "marker",
+          "name": "Claim marker"
+        }
+      ],
+      "park": [
+        {
+          "kind": "tech",
+          "name": "Electronics",
+          "amount": 12
+        },
+        {
+          "kind": "medkit",
+          "name": "Medkit"
+        },
+        {
+          "kind": "ammo",
+          "name": "Ammo Box",
+          "amount": 60
+        },
+        {
+          "kind": "wood",
+          "name": "Lumber",
+          "amount": 15
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 12
+        }
+      ],
+      "forest": [
+        {
+          "kind": "wood",
+          "name": "Lumber",
+          "amount": 15
+        },
+        {
+          "kind": "tech",
+          "name": "Electronics",
+          "amount": 12
+        },
+        {
+          "kind": "medkit",
+          "name": "Medkit"
+        },
+        {
+          "kind": "tool",
+          "tool": "hatchet",
+          "name": "Hatchet"
+        },
+        {
+          "kind": "ammo",
+          "name": "Ammo Box",
+          "amount": 60
+        }
+      ],
+      "road": [
+        {
+          "kind": "parts",
+          "name": "Parts Cache",
+          "amount": 20
+        },
+        {
+          "kind": "ammo",
+          "name": "Ammo Box",
+          "amount": 60
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 12
+        },
+        {
+          "kind": "tech",
+          "name": "Electronics",
+          "amount": 8
+        }
+      ],
+      "desert": [
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 25
+        },
+        {
+          "kind": "ammo",
+          "name": "Ammo Box",
+          "amount": 60
+        },
+        {
+          "kind": "stone",
+          "name": "Stone",
+          "amount": 15
+        },
+        {
+          "kind": "parts",
+          "name": "Parts Cache",
+          "amount": 15
+        },
+        {
+          "kind": "tech",
+          "name": "Electronics",
+          "amount": 10
+        }
+      ],
+      "mountain": [
+        {
+          "kind": "stone",
+          "name": "Stone",
+          "amount": 20
+        },
+        {
+          "kind": "tech",
+          "name": "Electronics",
+          "amount": 12
+        },
+        {
+          "kind": "tool",
+          "tool": "pickaxe",
+          "name": "Pickaxe"
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 15
+        },
+        {
+          "kind": "medkit",
+          "name": "Medkit"
+        }
+      ],
+      "lake": [
+        {
+          "kind": "wood",
+          "name": "Lumber",
+          "amount": 15
+        },
+        {
+          "kind": "ammo",
+          "name": "Ammo Box",
+          "amount": 60
+        },
+        {
+          "kind": "salvage",
+          "name": "Salvage",
+          "amount": 12
+        },
+        {
+          "kind": "medkit",
+          "name": "Medkit"
+        }
+      ]
+    }
+  },
+  "extraction": {
+    "holdMs": 90000,
+    "radius": 25,
+    "callRange": 20,
+    "alertRange": 800,
+    "cooldownMs": 300000,
+    "xp": 30
+  }
+}

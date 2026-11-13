@@ -1,0 +1,562 @@
+{
+  "_about": "The real area around Bristol, Florida. All positions are real WGS84 [lat, lon]; widths and radii in metres. The game map is a square of sizeM metres centred centreOffsetM from the origin (east, north), at 1:1 scale. Rivers, lakes, highways and terrain regions were traced by hand from the real geography.",
+  "origin": {
+    "lat": 30.42556,
+    "lon": -84.97722,
+    "name": "Bristol, FL"
+  },
+  "sizeM": 30000,
+  "centreOffsetM": {
+    "east": 5000,
+    "north": 1500
+  },
+  "towns": [
+    {
+      "name": "Bristol",
+      "lat": 30.42556,
+      "lon": -84.97722,
+      "county": "Liberty",
+      "blocks": 9
+    },
+    {
+      "name": "Blountstown",
+      "lat": 30.44306,
+      "lon": -85.04556,
+      "county": "Calhoun",
+      "blocks": 11
+    },
+    {
+      "name": "Hosford",
+      "lat": 30.38667,
+      "lon": -84.79806,
+      "county": "Liberty",
+      "blocks": 5
+    },
+    {
+      "name": "Telogia",
+      "lat": 30.35083,
+      "lon": -84.81917,
+      "county": "Liberty",
+      "blocks": 5
+    },
+    {
+      "name": "Estiffanulga",
+      "lat": 30.30833,
+      "lon": -85.0325,
+      "county": "Liberty",
+      "blocks": 5
+    },
+    {
+      "name": "Lake Mystic",
+      "lat": 30.37944,
+      "lon": -85.00139,
+      "county": "Liberty",
+      "blocks": 5
+    },
+    {
+      "name": "Sumatra",
+      "lat": 30.02306,
+      "lon": -84.9825,
+      "county": "Liberty",
+      "blocks": 5
+    },
+    {
+      "name": "Altha",
+      "lat": 30.57139,
+      "lon": -85.12278,
+      "county": "Calhoun",
+      "blocks": 5
+    },
+    {
+      "name": "Clarksville",
+      "lat": 30.43694,
+      "lon": -85.18611,
+      "county": "Calhoun",
+      "blocks": 5
+    },
+    {
+      "name": "Kinard",
+      "lat": 30.28083,
+      "lon": -85.26389,
+      "county": "Calhoun",
+      "blocks": 5
+    },
+    {
+      "name": "Scotts Ferry",
+      "lat": 30.2953,
+      "lon": -85.1317,
+      "county": "Calhoun",
+      "blocks": 5
+    },
+    {
+      "name": "Chattahoochee",
+      "lat": 30.7,
+      "lon": -84.83333,
+      "county": "Gadsden",
+      "blocks": 11
+    },
+    {
+      "name": "Greensboro",
+      "lat": 30.57083,
+      "lon": -84.74444,
+      "county": "Gadsden",
+      "blocks": 7
+    },
+    {
+      "name": "Gretna",
+      "lat": 30.61556,
+      "lon": -84.6625,
+      "county": "Gadsden",
+      "blocks": 7
+    },
+    {
+      "name": "Quincy",
+      "lat": 30.56611,
+      "lon": -84.58583,
+      "county": "Gadsden",
+      "blocks": 13
+    },
+    {
+      "name": "Mount Pleasant",
+      "lat": 30.65722,
+      "lon": -84.69111,
+      "county": "Gadsden",
+      "blocks": 5
+    },
+    {
+      "name": "Sneads",
+      "lat": 30.70861,
+      "lon": -84.925,
+      "county": "Jackson",
+      "blocks": 9
+    },
+    {
+      "name": "Grand Ridge",
+      "lat": 30.71194,
+      "lon": -85.00194,
+      "county": "Jackson",
+      "blocks": 7
+    },
+    {
+      "name": "Marianna",
+      "lat": 30.77389,
+      "lon": -85.25472,
+      "county": "Jackson",
+      "blocks": 13
+    },
+    {
+      "name": "Cottondale",
+      "lat": 30.79556,
+      "lon": -85.37444,
+      "county": "Jackson",
+      "blocks": 7
+    },
+    {
+      "name": "Wewahitchka",
+      "lat": 30.12556,
+      "lon": -85.19222,
+      "county": "Gulf",
+      "blocks": 9
+    }
+  ],
+  "landmarks": [
+    {
+      "name": "Torreya State Park",
+      "lat": 30.56889,
+      "lon": -84.94806,
+      "kind": "park"
+    },
+    {
+      "name": "Three Rivers State Park",
+      "lat": 30.73984,
+      "lon": -84.93487,
+      "kind": "park"
+    },
+    {
+      "name": "Florida Caverns State Park",
+      "lat": 30.81389,
+      "lon": -85.23306,
+      "kind": "park"
+    },
+    {
+      "name": "Jim Woodruff Dam",
+      "lat": 30.70861,
+      "lon": -84.86389,
+      "kind": "dam"
+    },
+    {
+      "name": "Apalachicola National Forest",
+      "lat": 30.23611,
+      "lon": -84.66556,
+      "kind": "forest"
+    }
+  ],
+  "rivers": [
+    {
+      "name": "Apalachicola River",
+      "widthM": 140,
+      "swampWidthM": 1900,
+      "path": [
+        [30.708616, -84.863924],
+        [30.68081, -84.881654],
+        [30.631932, -84.911833],
+        [30.577624, -84.944526],
+        [30.528746, -84.965903],
+        [30.486385, -84.991052],
+        [30.442939, -85.012429],
+        [30.392975, -85.025003],
+        [30.347356, -85.03632],
+        [30.306081, -85.045122],
+        [30.251773, -85.060212],
+        [30.186603, -85.085361],
+        [30.121433, -85.109252],
+        [30.056262, -85.123084],
+        [29.984575, -85.135659]
+      ]
+    },
+    {
+      "name": "Chipola River",
+      "widthM": 45,
+      "swampWidthM": 800,
+      "path": [
+        [30.818753, -85.233111],
+        [30.751411, -85.229968],
+        [30.675379, -85.206076],
+        [30.577624, -85.177155],
+        [30.49073, -85.190987],
+        [30.436422, -85.206076],
+        [30.371252, -85.178412],
+        [30.296306, -85.133144],
+        [30.208326, -85.163323],
+        [30.154018, -85.185957],
+        [30.099709, -85.15955],
+        [30.064952, -85.116797]
+      ]
+    },
+    {
+      "name": "Ochlockonee River",
+      "widthM": 55,
+      "swampWidthM": 1000,
+      "path": [
+        [30.384286, -84.655312],
+        [30.327805, -84.677947],
+        [30.262635, -84.698066],
+        [30.186603, -84.718185],
+        [30.110571, -84.738304],
+        [30.034539, -84.760938],
+        [29.984575, -84.770998]
+      ]
+    }
+  ],
+  "lakes": [
+    {
+      "name": "Lake Seminole",
+      "_shape": "capsules: segment from-to, widened by radiusM",
+      "capsules": [
+        {
+          "from": [30.718826, -84.861534],
+          "to": [30.751411, -84.788602],
+          "radiusM": 2776
+        },
+        {
+          "from": [30.740549, -84.889198],
+          "to": [30.866545, -84.906803],
+          "radiusM": 1931
+        },
+        {
+          "from": [30.751411, -84.79489],
+          "to": [30.866545, -84.738304],
+          "radiusM": 2293
+        },
+        {
+          "from": [30.735118, -84.826326],
+          "to": [30.789427, -84.813751],
+          "radiusM": 2655
+        }
+      ]
+    },
+    {
+      "name": "Lake Talquin",
+      "_shape": "capsules: segment from-to, widened by radiusM",
+      "capsules": [
+        {
+          "from": [30.384286, -84.655312],
+          "to": [30.392975, -84.574836],
+          "radiusM": 905
+        },
+        {
+          "from": [30.392975, -84.574836],
+          "to": [30.400578, -84.466695],
+          "radiusM": 1086
+        }
+      ]
+    },
+    {
+      "name": "Dead Lakes",
+      "_shape": "capsules: segment from-to, widened by radiusM",
+      "capsules": [
+        {
+          "from": [30.197464, -85.193502],
+          "to": [30.137725, -85.183442],
+          "radiusM": 1448
+        }
+      ]
+    },
+    {
+      "name": "Lake Mystic",
+      "_shape": "capsules: segment from-to, widened by radiusM",
+      "capsules": [
+        {
+          "from": [30.382656, -85.004255],
+          "to": [30.376139, -84.998597],
+          "radiusM": 365
+        }
+      ]
+    },
+    {
+      "name": "Merritt's Mill Pond",
+      "_shape": "capsules: segment from-to, widened by radiusM",
+      "capsules": [
+        {
+          "from": [30.787254, -85.236255],
+          "to": [30.738377, -85.22871],
+          "radiusM": 338
+        }
+      ]
+    }
+  ],
+  "highways": [
+    {
+      "name": "SR 20",
+      "path": [
+        [30.432077, -85.487745],
+        [30.435336, -85.329306],
+        [30.436965, -85.186083],
+        [30.443047, -85.045625],
+        [30.42556, -84.97722],
+        [30.398406, -84.889198],
+        [30.386675, -84.798033],
+        [30.378855, -84.700581],
+        [30.37451, -84.650283],
+        [30.369079, -84.466695]
+      ]
+    },
+    {
+      "name": "SR 12",
+      "path": [
+        [30.42556, -84.97722],
+        [30.49073, -84.936982],
+        [30.545039, -84.851475],
+        [30.570781, -84.744466],
+        [30.566762, -84.662857],
+        [30.56611, -84.585775]
+      ]
+    },
+    {
+      "name": "SR 65",
+      "path": [
+        [30.386675, -84.798033],
+        [30.350832, -84.819158],
+        [30.251773, -84.8389],
+        [30.143156, -84.889198],
+        [30.023134, -84.982501],
+        [29.984575, -84.989795]
+      ]
+    },
+    {
+      "name": "SR 71",
+      "path": [
+        [30.773895, -85.25474],
+        [30.697102, -85.190987],
+        [30.571433, -85.122833],
+        [30.501592, -85.077816],
+        [30.443047, -85.045625],
+        [30.349528, -85.072786],
+        [30.262635, -85.11554],
+        [30.17031, -85.165838],
+        [30.12556, -85.19237],
+        [29.984575, -85.22871]
+      ]
+    },
+    {
+      "name": "SR 69",
+      "path": [
+        [30.443047, -85.045625],
+        [30.566762, -85.030033],
+        [30.664517, -85.009914],
+        [30.711983, -85.001992]
+      ]
+    },
+    {
+      "name": "SR 267",
+      "path": [
+        [30.56611, -84.585775],
+        [30.469007, -84.599985],
+        [30.384286, -84.637708]
+      ]
+    },
+    {
+      "name": "US 90",
+      "path": [
+        [30.787254, -85.487745],
+        [30.795618, -85.374449],
+        [30.773895, -85.25474],
+        [30.740549, -85.11554],
+        [30.711983, -85.001992],
+        [30.708616, -84.925036],
+        [30.703619, -84.874109],
+        [30.700035, -84.833368],
+        [30.68081, -84.763453],
+        [30.65724, -84.691024],
+        [30.610209, -84.625134],
+        [30.56611, -84.585775],
+        [30.539608, -84.466695]
+      ]
+    },
+    {
+      "name": "I-10",
+      "path": [
+        [30.767703, -85.487745],
+        [30.74598, -85.266434],
+        [30.718826, -85.102965],
+        [30.701447, -85.001992],
+        [30.69493, -84.925036],
+        [30.691672, -84.879139],
+        [30.686241, -84.833368],
+        [30.648225, -84.750879],
+        [30.612381, -84.66248],
+        [30.542866, -84.574836],
+        [30.514626, -84.466695]
+      ]
+    }
+  ],
+  "terrainRegions": {
+    "hills": [
+      {
+        "lat": 30.599347,
+        "lon": -84.889198,
+        "radiusM": 7483,
+        "weight": 1
+      },
+      {
+        "lat": 30.512454,
+        "lon": -84.929437,
+        "radiusM": 5432,
+        "weight": 0.9
+      },
+      {
+        "lat": 30.659086,
+        "lon": -84.85399,
+        "radiusM": 5432,
+        "weight": 0.8
+      },
+      {
+        "lat": 30.588485,
+        "lon": -84.763453,
+        "radiusM": 10863,
+        "weight": 0.7
+      },
+      {
+        "lat": 30.610209,
+        "lon": -84.637708,
+        "radiusM": 10863,
+        "weight": 0.75
+      },
+      {
+        "lat": 30.512454,
+        "lon": -84.562261,
+        "radiusM": 8449,
+        "weight": 0.6
+      },
+      {
+        "lat": 30.800288,
+        "lon": -85.241285,
+        "radiusM": 7846,
+        "weight": 0.7
+      }
+    ],
+    "sandhills": [
+      {
+        "lat": 30.461404,
+        "lon": -84.945784,
+        "radiusM": 2776,
+        "weight": 1
+      },
+      {
+        "lat": 30.349528,
+        "lon": -84.8389,
+        "radiusM": 3138,
+        "weight": 0.8
+      },
+      {
+        "lat": 30.132294,
+        "lon": -84.889198,
+        "radiusM": 10260,
+        "weight": 1
+      },
+      {
+        "lat": 30.175741,
+        "lon": -84.637708,
+        "radiusM": 8449,
+        "weight": 0.9
+      },
+      {
+        "lat": 30.088847,
+        "lon": -85.316732,
+        "radiusM": 9053,
+        "weight": 0.8
+      },
+      {
+        "lat": 30.045401,
+        "lon": -84.549687,
+        "radiusM": 7846,
+        "weight": 0.8
+      }
+    ],
+    "forest": [
+      {
+        "lat": 30.398406,
+        "lon": -84.788602,
+        "radiusM": 11467,
+        "weight": 0.85
+      },
+      {
+        "lat": 30.36039,
+        "lon": -84.889198,
+        "radiusM": 6035,
+        "weight": 0.7
+      },
+      {
+        "lat": 30.186603,
+        "lon": -84.776028,
+        "radiusM": 31382,
+        "weight": 1
+      },
+      {
+        "lat": 30.284358,
+        "lon": -84.914347,
+        "radiusM": 15691,
+        "weight": 0.9
+      },
+      {
+        "lat": 30.29522,
+        "lon": -85.266434,
+        "radiusM": 13277,
+        "weight": 0.6
+      },
+      {
+        "lat": 30.512454,
+        "lon": -85.36703,
+        "radiusM": 10863,
+        "weight": 0.5
+      },
+      {
+        "lat": 30.29522,
+        "lon": -84.549687,
+        "radiusM": 12070,
+        "weight": 0.9
+      }
+    ],
+    "_about": "hills = Torreya bluffs and Red Hills; sandhills = sandhill scrub (Apalachicola Bluffs & Ravines Preserve first); forest = pine plantations and national forest flatwoods."
+  }
+}

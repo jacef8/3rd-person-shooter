@@ -1,0 +1,25 @@
+{
+  "_about": "Player levels and where XP comes from. Level n needs firstLevelXp*(n-1) + extraPerLevelXp*(n-1)(n-2)/2 total XP.",
+  "maxLevel": 30,
+  "xpCurve": {
+    "firstLevelXp": 400,
+    "extraPerLevelXp": 60
+  },
+  "xp": {
+    "rogueKill": 100,
+    "contract": 0,
+    "supplyDrop": 200,
+    "discoverContact": 50,
+    "hackTerminal": 60,
+    "hackDoor": 120,
+    "intelBanked": 40,
+    "markAssist": 40,
+    "squadShare": 0.25,
+    "playerKill": 300,
+    "headshotKill": 50,
+    "breach": 150,
+    "survivalPerMinute": 25,
+    "pickup": 5,
+    "build": 40
+  }
+}

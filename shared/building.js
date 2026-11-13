@@ -1,73 +1,18 @@
 // Base building (DayZ-style): gather materials with tools, place a frame, then upgrade it in
 // stages. Shared so the client's placement preview applies the same rules the server enforces.
+// Numbers live in shared/data/building.json.
+import data from './data/building.json' with { type: 'json' };
 
-export const TOOLS = {
-  hammer:  { name: 'Hammer',  desc: 'Needed to place and upgrade anything you build.' },
-  hatchet: { name: 'Hatchet', desc: 'Chop trees for wood. Also chops through wooden walls and gates.' },
-  pickaxe: { name: 'Pickaxe', desc: 'Mine rocks for stone. Also breaks stone walls and gates.' },
-};
+export const TOOLS = data.tools;
 
 /** Things you can craft at your stash house (or one of your crates). */
-export const CRAFTS = {
-  hammer:  { name: 'Hammer',        level: 1, cost: { parts: 15 } },
-  hatchet: { name: 'Hatchet',       level: 1, cost: { parts: 20 } },
-  pickaxe: { name: 'Pickaxe',       level: 2, cost: { parts: 25 } },
-  marker:  { name: 'Claim marker',  level: 1, cost: { wood: 10, salvage: 10 }, desc: 'Plant it to claim a room, house, cave, vehicle or open ground as your stash house.' },
-  charge:  { name: 'Breach Charge', level: 7, cost: { salvage: 30, tech: 20, parts: 20 }, desc: 'Explodes 8 s after placing: wrecks walls, gates, doors and anyone standing too close.' },
-};
+export const CRAFTS = data.crafts;
 
 // Each piece has stages: [0] is the frame you place, later ones are upgrades.
 // size: [width along X, depth along Z, height] before rotation.
-export const PIECES = {
-  wall: {
-    name: 'Wall', size: [4, 0.4, 3], key: '1',
-    stages: [
-      { name: 'Wall frame', cost: { wood: 10 }, hp: 300, material: 'frame' },
-      { name: 'Wooden wall', cost: { wood: 15 }, hp: 1500, material: 'wood' },
-      { name: 'Stone wall', cost: { stone: 20, salvage: 10 }, hp: 4000, material: 'stone' },
-    ],
-  },
-  gate: {
-    name: 'Gate', size: [4, 0.4, 3], key: '2', door: true,
-    stages: [
-      { name: 'Gate frame', cost: { wood: 10 }, hp: 300, material: 'frame' },
-      { name: 'Wooden gate', cost: { wood: 15, salvage: 10 }, hp: 1400, material: 'wood' },
-      { name: 'Reinforced gate', cost: { stone: 15, salvage: 20 }, hp: 3500, material: 'stone' },
-    ],
-  },
-  barricade: {
-    name: 'Barricade', size: [2.4, 0.6, 1.1], key: '3',
-    stages: [{ name: 'Barricade', cost: { wood: 8 }, hp: 800, material: 'wood' }],
-  },
-  crate: {
-    name: 'Stash crate', size: [1.2, 0.8, 0.9], key: '4', container: true,
-    stages: [
-      { name: 'Wooden crate', cost: { wood: 20 }, hp: 800, material: 'wood', slots: 20 },
-      { name: 'Reinforced crate', cost: { stone: 10, salvage: 15 }, hp: 2000, material: 'stone', slots: 40 },
-    ],
-  },
-  flag: {
-    name: 'Claim flag', size: [1.2, 1.2, 4], key: '6', container: true, claim: true,
-    stages: [{ name: 'Claim flag', cost: { wood: 15 }, hp: 2500, material: 'flag', slots: 24 }],
-  },
-  charge: {
-    name: 'Breach charge', size: [0.4, 0.4, 0.3], key: '5', explosive: true,
-    stages: [{ name: 'Breach charge', cost: {}, hp: 1, material: 'charge' }],
-  },
-};
+export const PIECES = data.pieces;
 
-export const BUILD = {
-  reach: 5,                // how far from you a piece can be placed
-  maxPerPlayer: 80,
-  townMargin: 6,           // no building inside towns (plus this margin)
-  contactClear: 25,        // or right next to Contacts / landing zones
-  maxSlope: 1.6,           // max height difference across a piece's footprint
-  harvest: { wood: 6, stone: 5, uses: 4, regrowMs: 20 * 60_000, channelMs: 3000 },
-  upgradeMs: 3000,
-  raid: { hatchet: { ms: 6000, dmg: 350, vs: 'frame,wood,flag' }, pickaxe: { ms: 8000, dmg: 500, vs: 'frame,wood,stone,flag' } },
-  bulletMul: { frame: 0.5, wood: 0.15, stone: 0.04, flag: 0.1 },
-  charge: { fuseMs: 8000, damage: 2600, radius: 4.5, playerDamage: 140, playerRadius: 6 },
-};
+export const BUILD = data.build;
 
 /** The solid box a structure occupies. */
 export function pieceBox(type, x, z, rot, y0 = 0) {

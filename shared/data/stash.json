@@ -1,0 +1,246 @@
+{
+  "_about": "Stash houses: claiming, home levels and upgrades. Upgrade tier \"home\" = home level needed.",
+  "claim": {
+    "plantMs": 8000,
+    "markerCraft": {
+      "wood": 10,
+      "salvage": 10
+    },
+    "markerPrice": {
+      "parts": 40
+    },
+    "flagCost": {
+      "wood": 15
+    },
+    "flagHp": 2500,
+    "flagSlots": 24
+  },
+  "homeLevelXp": [
+    0,
+    300,
+    800,
+    1500,
+    2500,
+    4000,
+    6000,
+    8500,
+    11500,
+    15000
+  ],
+  "homeXp": {
+    "perMaterial": 1,
+    "intel": 20,
+    "build": 10,
+    "perHour": 60
+  },
+  "homePerks": {
+    "storagePerLevel": 4,
+    "doorMulPerLevel": 0.12,
+    "radiusBase": 15,
+    "radiusPerLevel": 5,
+    "buildCapBase": 30,
+    "buildCapPerLevel": 10
+  },
+  "homeLevelText": [
+    "Claimed",
+    "Steel door and perimeter alarm unlocked",
+    "Generator and workbench unlocked",
+    "Blast door unlocked",
+    "165 ft alarm unlocked",
+    "60-slot storage and 30/h generator unlocked",
+    "Vault door and -50% workbench unlocked",
+    "+12% door strength",
+    "60/h generator unlocked",
+    "Max level: fortress"
+  ],
+  "upgrades": {
+    "door": {
+      "name": "Reinforced Door",
+      "desc": "More door/lock HP before it breaks.",
+      "tiers": [
+        {
+          "label": "Basic door",
+          "hp": 1
+        },
+        {
+          "label": "Steel door",
+          "hp": 2,
+          "home": 2,
+          "cost": {
+            "salvage": 80,
+            "parts": 30
+          }
+        },
+        {
+          "label": "Blast door",
+          "hp": 3.5,
+          "home": 4,
+          "cost": {
+            "salvage": 200,
+            "parts": 80
+          }
+        },
+        {
+          "label": "Vault door",
+          "hp": 5.5,
+          "home": 7,
+          "cost": {
+            "salvage": 400,
+            "parts": 150,
+            "comms": 3
+          }
+        }
+      ]
+    },
+    "storage": {
+      "name": "Storage",
+      "desc": "More stash slots.",
+      "tiers": [
+        {
+          "label": "30 slots",
+          "slots": 30
+        },
+        {
+          "label": "45 slots",
+          "slots": 45,
+          "home": 1,
+          "cost": {
+            "salvage": 60
+          }
+        },
+        {
+          "label": "60 slots",
+          "slots": 60,
+          "home": 6,
+          "cost": {
+            "salvage": 150,
+            "parts": 50
+          }
+        },
+        {
+          "label": "90 slots",
+          "slots": 90,
+          "home": 8,
+          "cost": {
+            "salvage": 300,
+            "parts": 100,
+            "comms": 2
+          }
+        }
+      ]
+    },
+    "alarm": {
+      "name": "Perimeter Alarm",
+      "desc": "Alerts you (anywhere on the map) when an enemy gets near your home, and shows them.",
+      "tiers": [
+        {
+          "label": "None",
+          "radius": 0
+        },
+        {
+          "label": "80 ft alarm",
+          "radius": 25,
+          "home": 2,
+          "cost": {
+            "salvage": 50,
+            "tech": 30
+          }
+        },
+        {
+          "label": "165 ft alarm",
+          "radius": 50,
+          "home": 5,
+          "cost": {
+            "salvage": 120,
+            "tech": 60
+          }
+        }
+      ]
+    },
+    "generator": {
+      "name": "Generator",
+      "desc": "Produces parts and tech into your stash every hour, even offline. (Raiders can take it.)",
+      "tiers": [
+        {
+          "label": "None",
+          "rate": 0
+        },
+        {
+          "label": "12 / hour",
+          "rate": 12,
+          "home": 3,
+          "cost": {
+            "salvage": 100,
+            "parts": 60
+          }
+        },
+        {
+          "label": "30 / hour",
+          "rate": 30,
+          "home": 6,
+          "cost": {
+            "salvage": 250,
+            "parts": 120,
+            "comms": 2
+          }
+        },
+        {
+          "label": "60 / hour",
+          "rate": 60,
+          "home": 9,
+          "cost": {
+            "salvage": 500,
+            "parts": 200,
+            "comms": 4
+          }
+        }
+      ]
+    },
+    "infirmary": {
+      "name": "Infirmary",
+      "desc": "Redeploying at your home gives a light vest and 2 medkits.",
+      "tiers": [
+        {
+          "label": "None"
+        },
+        {
+          "label": "Installed",
+          "home": 2,
+          "cost": {
+            "salvage": 80,
+            "tech": 20
+          }
+        }
+      ]
+    },
+    "workbench": {
+      "name": "Workbench",
+      "desc": "Cheaper builds at your gunsmith.",
+      "tiers": [
+        {
+          "label": "Basic",
+          "discount": 0
+        },
+        {
+          "label": "-25% build cost",
+          "discount": 0.25,
+          "home": 3,
+          "cost": {
+            "salvage": 120,
+            "parts": 60
+          }
+        },
+        {
+          "label": "-50% build cost",
+          "discount": 0.5,
+          "home": 7,
+          "cost": {
+            "salvage": 300,
+            "parts": 120,
+            "comms": 2
+          }
+        }
+      ]
+    }
+  }
+}

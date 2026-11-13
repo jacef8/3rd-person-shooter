@@ -26,6 +26,9 @@ import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, investedCost, placementProblem 
 import { CLAIM, HOME_XP, homeLevel, homePerks } from '../shared/claims.js';
 import { EXTRACT } from '../shared/extraction.js';
 import { distText, feet } from '../shared/units.js';
+import COMBAT from '../shared/data/combat.json' with { type: 'json' };
+import GADGET_DATA from '../shared/data/gadgets.json' with { type: 'json' };
+import ACTIVITIES from '../shared/data/activities.json' with { type: 'json' };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -37,23 +40,23 @@ const SNAPSHOT_EVERY = 2;              // 10 Hz
 const INTEREST = 320;                  // metres: what each client is told about
 const AMBIENT_BOTS = Number(process.env.BOTS ?? 5);   // roaming rogues kept around each active player
 const BOT_ACTIVE_RANGE = 450;
-const PACK_SIZE = 12;
-const DOOR_HP = Number(process.env.DOOR_HP || 1500);
-const LOOT_RESPAWN_MS = 5 * 60_000;
-const BAG_LIFETIME_MS = 30 * 60_000;
+const PACK_SIZE = COMBAT.packSize;
+const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
+const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
+const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
 const DB_VERSION = 7;
-const SQUAD_MAX = 4;
+const SQUAD_MAX = COMBAT.squadMax;
 const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone'];   // carried; all drop on death, all stealable
-const CAMO_REVEAL_DIST = 9;
-const MARK_MS = 8000;
-const SENSOR = { radius: 18, radiusMk2: 26, duration: 10_000, throwRange: 30, cooldown: 12_000 };
-const HACK_MS = { terminal: 5000, door: 8000, drop: 6000, crate: 3000 };
-const RALLY = { radius: 30, buffMs: 10_000, cooldown: 90_000 };
-const SPAWN_PROTECT_MS = 10_000;
-const MAX_CONTRACTS = 2;
-const CONTRACT_MS = 60 * 60_000;
-const SUPPLY_EVERY_MS = Number(process.env.SUPPLY_EVERY_MS || 10 * 60_000);
-const SUPPLY_FALL_MS = Number(process.env.SUPPLY_FALL_MS || 60_000);
+const CAMO_REVEAL_DIST = GADGET_DATA.camoRevealDistance;
+const MARK_MS = GADGET_DATA.markMs;
+const SENSOR = GADGET_DATA.sensor;
+const HACK_MS = ACTIVITIES.hackMs;
+const RALLY = GADGET_DATA.rally;
+const SPAWN_PROTECT_MS = COMBAT.spawnProtectMs;
+const MAX_CONTRACTS = ACTIVITIES.contracts.maxActive;
+const CONTRACT_MS = ACTIVITIES.contracts.durationMs;
+const SUPPLY_EVERY_MS = Number(process.env.SUPPLY_EVERY_MS || ACTIVITIES.supplyDrop.everyMs);
+const SUPPLY_FALL_MS = Number(process.env.SUPPLY_FALL_MS || ACTIVITIES.supplyDrop.fallMs);
 
 // Optional real-world data (tools/import-real-data.mjs): every real building / road becomes a map object.
 const REAL_DIR = process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real');
@@ -711,9 +714,10 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
     const t = Math.min(hit.t, maxRange);
     tracers.push([+(ox + dx * t).toFixed(2), +(oy + dy * t).toFixed(2), +(oz + dz * t).toFixed(2), hit.kind ? 1 : 0]);
     if (!hit.kind || hit.kind === 'world') continue;
-    const falloff = t <= s.range ? 1 : Math.max(0.4, 1 - (t - s.range) / (s.range * 1.2) * 0.6);
+    const F = COMBAT.falloff;
+    const falloff = t <= s.range ? 1 : Math.max(F.minMul, 1 - (t - s.range) / (s.range * F.overRangeSpan) * F.maxDrop);
     let dmg = s.damage * falloff;
-    if (hit.headshot) dmg *= 1.5;
+    if (hit.headshot) dmg *= COMBAT.headshotMul;
     if (!isBot && (shooter.buffUntil || 0) > Date.now()) dmg *= 1.2;
     if (hit.kind === 'player' && !isBot && sameSquad(shooter, hit.target)) continue;
     if (hit.kind === 'struct') {
@@ -745,16 +749,17 @@ function notifyOwner(houseId, text) { const owner = onlineByToken(db.houses[hous
 
 // ---------------------------------------------------------------- AI ("Rogues")
 let botSerial = 0;
-const BOT_WEAPONS = ['carbine', 'smg', 'shotgun', 'lmg'];
+const BOT_WEAPONS = COMBAT.bots.weapons;
 function spawnBot(x, z, kind = 'ambient', extra = {}) {
-  const arche = kind === 'hvt' ? 'dmr' : BOT_WEAPONS[botSerial % BOT_WEAPONS.length];
+  const def = kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue;
+  const arche = def.weapon || BOT_WEAPONS[botSerial % BOT_WEAPONS.length];
   const w = weaponStats(makeWeapon(arche));
-  const hp = kind === 'hvt' ? 500 : 140;
+  const hp = def.hp;
   const p = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3), terrain.height(x, z));
   const b = {
-    id: uid('b'), name: kind === 'hvt' ? 'Rogue Lieutenant' : 'Rogue', isBot: true, kind, serial: botSerial++,
+    id: uid('b'), name: def.name, isBot: true, kind, serial: botSerial++,
     x: p.x, z: p.z, homeX: p.x, homeZ: p.z, yaw: 0, hp, maxHp: hp, dead: false,
-    weapon: { ...w, damage: w.damage * (kind === 'hvt' ? 0.45 : 0.55) },
+    weapon: { ...w, damage: w.damage * def.damageMul },
     nextShot: 0, wander: null, crouch: false, burst: 0, ...extra,
   };
   bots.set(b.id, b);
@@ -789,7 +794,7 @@ function updateBots(dt, now) {
   for (const b of bots.values()) {
     if (b.dead) continue;
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
-    let best = null, bestD = b.kind === 'hvt' ? 45 : 32;
+    let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue).sightRange;
     for (const p of alive) {
       const d = Math.hypot(p.x - b.x, p.z - b.z);
       if (d >= bestD) continue;
@@ -1457,7 +1462,7 @@ function invAction(p, msg) {
     if (idx < 0) return toast(p, 'No medkits');
     if (p.hp >= maxHp(p) && p.armor >= maxArmor(p)) return;
     inv.pack.splice(idx, 1);
-    p.hp = Math.min(maxHp(p), p.hp + 60);
+    p.hp = Math.min(maxHp(p), p.hp + COMBAT.medkitHeal);
     p.armor = Math.min(maxArmor(p), p.armor + 40);
   }
   dirty(p);

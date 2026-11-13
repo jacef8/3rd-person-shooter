@@ -1,0 +1,36 @@
+{
+  "_about": "Combat, survival and AI tuning. Distances in metres, times in ms.",
+  "packSize": 12,
+  "doorHp": 1500,
+  "bagLifetimeMs": 1800000,
+  "squadMax": 4,
+  "spawnProtectMs": 10000,
+  "headshotMul": 1.5,
+  "falloff": {
+    "minMul": 0.4,
+    "overRangeSpan": 1.2,
+    "maxDrop": 0.6
+  },
+  "medkitHeal": 60,
+  "bots": {
+    "weapons": [
+      "carbine",
+      "smg",
+      "shotgun",
+      "lmg"
+    ],
+    "rogue": {
+      "name": "Rogue",
+      "hp": 140,
+      "damageMul": 0.55,
+      "sightRange": 32
+    },
+    "hvt": {
+      "name": "Rogue Lieutenant",
+      "hp": 500,
+      "damageMul": 0.45,
+      "sightRange": 45,
+      "weapon": "dmr"
+    }
+  }
+}

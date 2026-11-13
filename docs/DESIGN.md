@@ -250,6 +250,20 @@ they're within 9 m or a tag or sensor has exposed them, so it can't be beaten by
   intel jammer.
 - Clans/factions above squads, with a shared clan stronghold.
 
+## Engine plan
+
+1. **Now: this browser prototype** (Three.js client, Node.js server). Changes are fastest here, and
+   it runs on a phone from a link. Use it to settle the design.
+2. **Then: Unreal Engine 5.** World Partition for streaming the real-scale map, Chaos vehicles,
+   real building interiors, Lyra as the online-shooter base, dedicated servers, native phone builds.
+   Godot was considered as a middle step and **skipped**.
+
+To make the move cheap, every rule and number is in engine-neutral data files
+(`shared/data/*.json`, see its README), in metres and milliseconds, with the map in real
+latitude/longitude. Unreal imports these directly. What carries over: the rules, balance, map and
+design. What gets rebuilt in Unreal: rendering, movement, networking and UI. The tests in `test/`
+describe how each system must behave.
+
 ## Parked work (to pick back up)
 
 - **Real 3D buildings:** importing the real FEMA/ORNL building footprints and OpenStreetMap roads

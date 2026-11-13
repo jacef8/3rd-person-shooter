@@ -1,0 +1,618 @@
+{
+  "_about": "Weapon platforms, gunsmith parts, paints and armor. Distances in metres, times in ms, spreads in radians. Part mods: fields ending in Mul multiply, others add. \"field\" = commendations needed (bought from Contacts).",
+  "fitGroups": {
+    "all": [
+      "sidearm",
+      "smg",
+      "carbine",
+      "shotgun",
+      "dmr",
+      "lmg"
+    ],
+    "longGuns": [
+      "smg",
+      "carbine",
+      "shotgun",
+      "dmr",
+      "lmg"
+    ]
+  },
+  "archetypes": {
+    "sidearm": {
+      "label": "Sidearm",
+      "level": 1,
+      "cost": 0,
+      "semi": true,
+      "damage": 30,
+      "range": 30,
+      "rpm": 320,
+      "mag": 12,
+      "reloadMs": 1500,
+      "hipSpread": 0.022,
+      "adsSpread": 0.01,
+      "recoil": 0.03,
+      "handling": 85,
+      "mobility": 1.05,
+      "pellets": 1,
+      "zoom": 1.2
+    },
+    "smg": {
+      "label": "SMG",
+      "level": 1,
+      "cost": 30,
+      "semi": false,
+      "damage": 19,
+      "range": 24,
+      "rpm": 860,
+      "mag": 32,
+      "reloadMs": 1900,
+      "hipSpread": 0.03,
+      "adsSpread": 0.016,
+      "recoil": 0.01,
+      "handling": 78,
+      "mobility": 1.03,
+      "pellets": 1,
+      "zoom": 1.25
+    },
+    "carbine": {
+      "label": "Carbine",
+      "level": 3,
+      "cost": 45,
+      "semi": false,
+      "damage": 26,
+      "range": 45,
+      "rpm": 640,
+      "mag": 30,
+      "reloadMs": 2200,
+      "hipSpread": 0.028,
+      "adsSpread": 0.009,
+      "recoil": 0.012,
+      "handling": 62,
+      "mobility": 1,
+      "pellets": 1,
+      "zoom": 1.35
+    },
+    "shotgun": {
+      "label": "Shotgun",
+      "level": 6,
+      "cost": 45,
+      "semi": true,
+      "damage": 14,
+      "range": 13,
+      "rpm": 80,
+      "mag": 7,
+      "reloadMs": 2800,
+      "hipSpread": 0.075,
+      "adsSpread": 0.06,
+      "recoil": 0.06,
+      "handling": 60,
+      "mobility": 0.98,
+      "pellets": 8,
+      "zoom": 1.2
+    },
+    "dmr": {
+      "label": "Marksman Rifle",
+      "level": 10,
+      "cost": 60,
+      "semi": true,
+      "damage": 90,
+      "range": 90,
+      "rpm": 120,
+      "mag": 10,
+      "reloadMs": 2600,
+      "hipSpread": 0.05,
+      "adsSpread": 0.003,
+      "recoil": 0.045,
+      "handling": 42,
+      "mobility": 0.95,
+      "pellets": 1,
+      "zoom": 1.6
+    },
+    "lmg": {
+      "label": "LMG",
+      "level": 15,
+      "cost": 70,
+      "semi": false,
+      "damage": 24,
+      "range": 50,
+      "rpm": 580,
+      "mag": 80,
+      "reloadMs": 4400,
+      "hipSpread": 0.036,
+      "adsSpread": 0.014,
+      "recoil": 0.014,
+      "handling": 30,
+      "mobility": 0.9,
+      "pellets": 1,
+      "zoom": 1.4
+    }
+  },
+  "slots": [
+    "optic",
+    "muzzle",
+    "barrel",
+    "underbarrel",
+    "magazine",
+    "stock",
+    "trigger"
+  ],
+  "slotLabels": {
+    "optic": "Optic",
+    "muzzle": "Muzzle",
+    "barrel": "Barrel",
+    "underbarrel": "Underbarrel",
+    "magazine": "Magazine",
+    "stock": "Stock",
+    "trigger": "Trigger",
+    "paint": "Paint"
+  },
+  "parts": {
+    "iron": {
+      "slot": "optic",
+      "name": "Iron Sights",
+      "level": 1,
+      "fits": "all",
+      "mods": {}
+    },
+    "reflex": {
+      "slot": "optic",
+      "name": "Reflex Sight",
+      "level": 2,
+      "fits": "all",
+      "mods": {
+        "zoom": 0.1,
+        "adsSpreadMul": 0.95
+      }
+    },
+    "holo": {
+      "slot": "optic",
+      "name": "Holographic Sight",
+      "level": 5,
+      "fits": "longGuns",
+      "mods": {
+        "zoom": 0.2,
+        "adsSpreadMul": 0.9,
+        "handling": -3
+      }
+    },
+    "acog": {
+      "slot": "optic",
+      "name": "4x Combat Scope",
+      "level": 9,
+      "fits": [
+        "carbine",
+        "dmr",
+        "lmg"
+      ],
+      "mods": {
+        "zoom": 1.4,
+        "adsSpreadMul": 0.75,
+        "handling": -10
+      }
+    },
+    "sniper": {
+      "slot": "optic",
+      "name": "8x Long Scope",
+      "level": 17,
+      "fits": [
+        "dmr"
+      ],
+      "mods": {
+        "zoom": 3.2,
+        "adsSpreadMul": 0.55,
+        "handling": -18,
+        "hipSpreadMul": 1.3
+      }
+    },
+    "noMuzzle": {
+      "slot": "muzzle",
+      "name": "Bare Muzzle",
+      "level": 1,
+      "fits": "all",
+      "mods": {}
+    },
+    "compensator": {
+      "slot": "muzzle",
+      "name": "Compensator",
+      "level": 3,
+      "fits": "all",
+      "mods": {
+        "recoilMul": 0.8,
+        "hipSpreadMul": 1.08
+      }
+    },
+    "suppressor": {
+      "slot": "muzzle",
+      "name": "Suppressor",
+      "level": 7,
+      "fits": "all",
+      "mods": {
+        "damageMul": 0.92,
+        "rangeMul": 0.9,
+        "suppressed": true
+      }
+    },
+    "brake": {
+      "slot": "muzzle",
+      "name": "Muzzle Brake",
+      "level": 12,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.68,
+        "handling": -6
+      }
+    },
+    "choke": {
+      "slot": "muzzle",
+      "name": "Tight Choke",
+      "level": 8,
+      "fits": [
+        "shotgun"
+      ],
+      "mods": {
+        "hipSpreadMul": 0.7,
+        "adsSpreadMul": 0.7,
+        "damageMul": 0.95
+      }
+    },
+    "stdBarrel": {
+      "slot": "barrel",
+      "name": "Standard Barrel",
+      "level": 1,
+      "fits": "all",
+      "mods": {}
+    },
+    "shortBarrel": {
+      "slot": "barrel",
+      "name": "Short Barrel",
+      "level": 4,
+      "fits": "all",
+      "mods": {
+        "rangeMul": 0.8,
+        "handling": 12,
+        "mobility": 0.04
+      }
+    },
+    "longBarrel": {
+      "slot": "barrel",
+      "name": "Extended Barrel",
+      "level": 8,
+      "fits": "longGuns",
+      "mods": {
+        "rangeMul": 1.25,
+        "damageMul": 1.04,
+        "handling": -12,
+        "mobility": -0.03
+      }
+    },
+    "matchBarrel": {
+      "slot": "barrel",
+      "name": "Match-Grade Barrel",
+      "level": 14,
+      "fits": [
+        "carbine",
+        "dmr",
+        "sidearm"
+      ],
+      "mods": {
+        "adsSpreadMul": 0.75,
+        "rpmMul": 0.92
+      }
+    },
+    "noUnder": {
+      "slot": "underbarrel",
+      "name": "None",
+      "level": 1,
+      "fits": "all",
+      "mods": {}
+    },
+    "vgrip": {
+      "slot": "underbarrel",
+      "name": "Vertical Grip",
+      "level": 2,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.85,
+        "handling": -3
+      }
+    },
+    "agrip": {
+      "slot": "underbarrel",
+      "name": "Angled Grip",
+      "level": 6,
+      "fits": "longGuns",
+      "mods": {
+        "handling": 12,
+        "recoilMul": 1.05
+      }
+    },
+    "laser": {
+      "slot": "underbarrel",
+      "name": "Laser Module",
+      "level": 10,
+      "fits": "all",
+      "mods": {
+        "hipSpreadMul": 0.7
+      }
+    },
+    "bipod": {
+      "slot": "underbarrel",
+      "name": "Bipod",
+      "level": 13,
+      "fits": [
+        "carbine",
+        "dmr",
+        "lmg"
+      ],
+      "mods": {
+        "crouchSpreadMul": 0.55,
+        "crouchRecoilMul": 0.5,
+        "handling": -8
+      }
+    },
+    "stdMag": {
+      "slot": "magazine",
+      "name": "Standard Magazine",
+      "level": 1,
+      "fits": "all",
+      "mods": {}
+    },
+    "extMag": {
+      "slot": "magazine",
+      "name": "Extended Magazine",
+      "level": 5,
+      "fits": "all",
+      "mods": {
+        "magMul": 1.4,
+        "reloadMsMul": 1.15,
+        "mobility": -0.02
+      }
+    },
+    "fastMag": {
+      "slot": "magazine",
+      "name": "Quick-Change Mag",
+      "level": 11,
+      "fits": "all",
+      "mods": {
+        "reloadMsMul": 0.7,
+        "magMul": 0.85
+      }
+    },
+    "drum": {
+      "slot": "magazine",
+      "name": "Drum Magazine",
+      "level": 18,
+      "fits": [
+        "smg",
+        "carbine",
+        "lmg",
+        "shotgun"
+      ],
+      "mods": {
+        "magMul": 2,
+        "reloadMsMul": 1.45,
+        "handling": -10,
+        "mobility": -0.03
+      }
+    },
+    "stdStock": {
+      "slot": "stock",
+      "name": "Standard Stock",
+      "level": 1,
+      "fits": "all",
+      "mods": {}
+    },
+    "lightStock": {
+      "slot": "stock",
+      "name": "Skeleton Stock",
+      "level": 3,
+      "fits": "longGuns",
+      "mods": {
+        "handling": 10,
+        "recoilMul": 1.1
+      }
+    },
+    "heavyStock": {
+      "slot": "stock",
+      "name": "Padded Heavy Stock",
+      "level": 9,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.8,
+        "handling": -10
+      }
+    },
+    "noStock": {
+      "slot": "stock",
+      "name": "Stockless",
+      "level": 16,
+      "fits": [
+        "smg",
+        "carbine",
+        "shotgun"
+      ],
+      "mods": {
+        "mobility": 0.07,
+        "handling": 15,
+        "recoilMul": 1.3,
+        "adsSpreadMul": 1.15
+      }
+    },
+    "stdTrigger": {
+      "slot": "trigger",
+      "name": "Standard Trigger",
+      "level": 1,
+      "fits": "all",
+      "mods": {}
+    },
+    "matchTrig": {
+      "slot": "trigger",
+      "name": "Match Trigger",
+      "level": 7,
+      "fits": "all",
+      "mods": {
+        "adsSpreadMul": 0.9,
+        "rpmMul": 0.95
+      }
+    },
+    "hairTrig": {
+      "slot": "trigger",
+      "name": "Hair Trigger",
+      "level": 12,
+      "fits": "all",
+      "mods": {
+        "rpmMul": 1.12,
+        "recoilMul": 1.12
+      }
+    },
+    "intSup": {
+      "slot": "muzzle",
+      "name": "Integrated Suppressor",
+      "level": 4,
+      "field": 3,
+      "fits": "all",
+      "mods": {
+        "suppressed": true,
+        "rangeMul": 0.97
+      }
+    },
+    "fieldOptic": {
+      "slot": "optic",
+      "name": "Field Hybrid Sight",
+      "level": 6,
+      "field": 3,
+      "fits": "longGuns",
+      "mods": {
+        "zoom": 0.8,
+        "adsSpreadMul": 0.8,
+        "handling": -4
+      }
+    },
+    "hardBarrel": {
+      "slot": "barrel",
+      "name": "Hardened Barrel",
+      "level": 8,
+      "field": 4,
+      "fits": "longGuns",
+      "mods": {
+        "damageMul": 1.06,
+        "rangeMul": 1.12,
+        "handling": -6
+      }
+    },
+    "fieldGrip": {
+      "slot": "underbarrel",
+      "name": "Operator Grip",
+      "level": 5,
+      "field": 3,
+      "fits": "longGuns",
+      "mods": {
+        "recoilMul": 0.82,
+        "handling": 6
+      }
+    }
+  },
+  "defaultParts": {
+    "optic": "iron",
+    "muzzle": "noMuzzle",
+    "barrel": "stdBarrel",
+    "underbarrel": "noUnder",
+    "magazine": "stdMag",
+    "stock": "stdStock",
+    "trigger": "stdTrigger"
+  },
+  "paints": {
+    "factory": {
+      "name": "Factory Black",
+      "level": 1,
+      "color": "#232323"
+    },
+    "urban": {
+      "name": "Urban Grey",
+      "level": 2,
+      "color": "#6b7076"
+    },
+    "desert": {
+      "name": "Desert Tan",
+      "level": 4,
+      "color": "#b39a6b"
+    },
+    "woodland": {
+      "name": "Woodland",
+      "level": 8,
+      "color": "#4d5e3a"
+    },
+    "arctic": {
+      "name": "Arctic White",
+      "level": 12,
+      "color": "#d9dde0"
+    },
+    "ember": {
+      "name": "Ember Orange",
+      "level": 20,
+      "color": "#e0661c"
+    },
+    "gold": {
+      "name": "Veteran Gold",
+      "level": 30,
+      "color": "#d4af37"
+    },
+    "field": {
+      "name": "Field Commander",
+      "level": 3,
+      "field": 2,
+      "color": "#3a4f6b"
+    }
+  },
+  "armors": {
+    "light": {
+      "name": "Light Vest",
+      "level": 1,
+      "cost": 20,
+      "armor": 60,
+      "mobility": 0
+    },
+    "medium": {
+      "name": "Plate Carrier",
+      "level": 6,
+      "cost": 45,
+      "armor": 110,
+      "mobility": -0.04
+    },
+    "heavy": {
+      "name": "Heavy Plates",
+      "level": 14,
+      "cost": 80,
+      "armor": 170,
+      "mobility": -0.1
+    },
+    "field": {
+      "name": "Field Plate",
+      "level": 8,
+      "cost": 50,
+      "armor": 140,
+      "mobility": -0.02,
+      "field": 4
+    }
+  },
+  "fieldPerks": {
+    "camoMk2": {
+      "name": "Camo battery Mk2",
+      "level": 6,
+      "field": 4,
+      "desc": "Optical camo drains half as much tech."
+    },
+    "sensorMk2": {
+      "name": "Sensor Mk2",
+      "level": 6,
+      "field": 4,
+      "desc": "Sensor grenades cover 85 ft instead of 60 ft."
+    },
+    "pouch": {
+      "name": "Secure pouch",
+      "level": 4,
+      "field": 5,
+      "desc": "Keep up to 3 intel when you die."
+    }
+  }
+}

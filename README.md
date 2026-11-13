@@ -53,6 +53,13 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   breached door by hand, and an intact door slowly repairs itself.
 - AI "Rogues" patrol the city, fight anyone they see, and drop parts, tech, intel and ammo.
 
+## Game rules are data
+
+Every number and table (weapons, gunsmith parts, levels, XP, gadgets, stash upgrades, home levels,
+building, contracts, loot, extraction, combat and AI tuning, and the real Bristol map) is in
+`shared/data/*.json`. Edit those to rebalance the game; see [shared/data/README.md](shared/data/README.md).
+They're engine-neutral so they carry over to the planned move to Unreal Engine 5.
+
 ## Run it
 
 ```bash
