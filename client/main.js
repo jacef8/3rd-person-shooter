@@ -11,6 +11,8 @@ import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import { createWorldView } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, placementProblem } from '/shared/building.js';
+import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks } from '/shared/claims.js';
+import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 
 const $ = (id) => document.getElementById(id);
 /** Terrain height under a point (0 before the world exists). */
@@ -59,6 +61,9 @@ const state = {
 // ------------------------------------------------------------------ world construction
 // The client regenerates the same world as the server from (seed, size) and streams it in chunks.
 const houseVis = new Map();     // houseId -> { door, label }
+/** Your stash house position (home, room, vehicle or claim flag), or null. */
+const homePos = () => (state.me?.claim ? { x: state.me.claim.x, z: state.me.claim.z } : null);
+const homeKindName = (h) => (h.kind === 'vehicle' ? VEHICLE_TYPES[h.vtype].name : HOME_KINDS[h.kind].name);
 const termVis = new Map();      // terminalId -> mesh
 const dropVis = new Map();      // supply drop id -> group
 const objVis = new Map();       // contract crate id -> mesh
@@ -96,7 +101,7 @@ function syncHouses(list) {
       door.position.set((d.minX + d.maxX) / 2, d.y0 + d.h / 2, (d.minZ + d.maxZ) / 2);
       door.castShadow = true;
       const label = makeLabel('', 0.012);
-      label.position.set(def.x, ground(def.x, def.z) + 5.2, def.z);
+      label.position.set(def.x, ground(def.x, def.z) + (def.kind === 'vehicle' ? 4.6 : def.kind === 'room' ? 6 : 5.2), def.z);
       scene.add(door, label);
       houseVis.set(h.id, (v = { door, label }));
     }
@@ -105,8 +110,8 @@ function syncHouses(list) {
     v.door.material.color.setRGB(0.35 + 0.5 * (1 - f), 0.37 * f + 0.05, 0.4 * f + 0.05 + h.upg.door * 0.08);
     const own = h.id === state.houseId;
     const status = h.hp <= 0 ? 'BREACHED' : h.open ? 'open' : `${Math.round(f * 100)}%`;
-    setLabel(v.label, `${own ? 'YOUR STASH' : (h.owner ? `${h.owner}'s stash` : 'Unclaimed stash')} · ${status}`, own ? '#7dff9a' : h.hp <= 0 ? '#ff6b6b' : '#ffd29a');
-    if (own) $('housestatus').textContent = `Your stash house: ${status}`;
+    const kn = homeKindName(def);
+    setLabel(v.label, h.owner ? `${own ? 'YOUR ' + kn.toUpperCase() : `${h.owner}'s ${kn.toLowerCase()}`} · Lv${h.hl} · ${status}` : `Unclaimed ${kn.toLowerCase()} · plant a claim marker`, own ? '#7dff9a' : !h.owner ? '#c9c9c9' : h.hp <= 0 ? '#ff6b6b' : '#ffd29a');
   }
   for (const [id, v] of houseVis) if (!seen.has(id)) { scene.remove(v.door, v.label); v.door.geometry.dispose(); houseVis.delete(id); state.houseState.delete(id); }
   state.doorSolids = list.filter((h) => h.hp > 0 && !h.open).map((h) => ({ ...state.map.houses[h.id].door, type: 'door' }));
@@ -344,7 +349,7 @@ function feedLine(text) {
 }
 
 // ------------------------------------------------------------------ minimap
-const MM_COLORS = { pine: '#1f3a24', boulder: '#6a6560', adobe: '#a88a64', cactus: '#3f6a33', cavewall: '#5a5550', caveroof: 'rgba(0,0,0,0)', rockwall: '#8c7258', logwall: '#5a3d24', plankwall: '#7a5e3e', canopy: 'rgba(0,0,0,0)', jetty: '#7a5e3e', building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
+const MM_COLORS = { roomwall: '#8a8a86', vehiclebody: '#d6c79a', dam: '#999', scrub: '#55603a', pine: '#1f3a24', boulder: '#6a6560', adobe: '#a88a64', cactus: '#3f6a33', cavewall: '#5a5550', caveroof: 'rgba(0,0,0,0)', rockwall: '#8c7258', logwall: '#5a3d24', plankwall: '#7a5e3e', canopy: 'rgba(0,0,0,0)', jetty: '#7a5e3e', building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
 const mmTerrain = { canvas: null, x: 0, z: 0, span: 1 };
 function drawMinimap() {
   const c = $('minimap'), g = c.getContext('2d');
@@ -390,7 +395,8 @@ function drawMinimap() {
   };
   for (const ct of state.contracts) edge(ct.x, ct.z, '#ffc53d', 7);
   for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
-  if (state.houseId !== null && state.houseId !== undefined) { const h = state.map.houses[state.houseId]; edge(h.x, h.z, '#4fbf6a', 7); }
+  const hp0 = homePos();
+  if (hp0) edge(hp0.x, hp0.z, '#4fbf6a', 7);
   g.translate(R, R);
   g.rotate(-state.yaw + Math.PI);
   g.fillStyle = '#5aa8ff';
@@ -565,6 +571,9 @@ function handle(m) {
       openContact();
       break;
     case 'boom': boomFx(m.x, m.y, m.z); break;
+    case 'homexp': if (m.amount >= 5) xpPopup(m.amount, `Home: ${m.reason}`); break;
+    case 'homeLevel': levelBanner(m.level, [{ name: HOME_LEVEL_TEXT[m.level - 1] }], 'STASH HOUSE LEVEL'); break;
+    case 'claimed': toast('This is now your stash house. Open its stash for the gunsmith, upgrades and home level.'); break;
     case 'contractDone':
       toast(`✔ Contract complete: ${m.name} — ${Object.entries(m.reward).map(([k, v]) => `+${v} ${k === 'comms' ? 'commendations' : k}`).join(', ')}`);
       break;
@@ -595,6 +604,7 @@ function updateHud() {
   $('reserve').textContent = me.ammo;
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
+  $('housestatus').textContent = me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}` : 'No stash house — plant a claim marker';
   $('resources').innerHTML = `<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades, building">⛭ ${me.salvage} salvage</span><span title="Building: chop trees with a hatchet">🪵 ${me.wood}</span><span title="Building: mine rocks with a pickaxe">⛰ ${me.stone}</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
   const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
   $('level').textContent = `LEVEL ${me.level}`;
@@ -605,6 +615,7 @@ function updateHud() {
 function statLine(item) {
   if (item.kind === 'tool') return TOOLS[item.tool]?.desc || '';
   if (item.kind === 'charge') return CRAFTS.charge.desc;
+  if (item.kind === 'marker') return CRAFTS.marker.desc;
   if (item.kind === 'package') return 'Contract crate — deliver to any Contact';
   if (item.kind === 'weapon') {
     const s = weaponStats(item);
@@ -689,6 +700,7 @@ function renderInventory() {
       tr.append(btn('Fast travel…', () => { closeInventory(); openMapScreen('travel'); }));
       box.append(tr);
     }
+    if (c.home) box.append(homePanel(c));
     if (c.upg) box.append(upgradePanel(c));
     if (c.craft) box.append(craftPanel(c));
     if (c.canPut) {
@@ -729,6 +741,23 @@ function costText(cost) {
   const names = { salvage: 'salvage', parts: 'parts', tech: 'tech', comms: '★' };
   return Object.entries(cost).map(([k, v]) => `${v} ${names[k]}`).join(' · ');
 }
+/** Stash house level: XP bar, current perks, what the next level unlocks, abandon. */
+function homePanel(c) {
+  const h = c.home;
+  const wrap = document.createElement('div');
+  wrap.className = 'upgrades';
+  const lo = HOME_LEVEL_XP[h.level - 1], hi = HOME_LEVEL_XP[h.level] ?? lo;
+  const pct = h.level >= MAX_HOME_LEVEL ? 100 : ((h.xp - lo) / (hi - lo)) * 100;
+  const next = homePerks(Math.min(MAX_HOME_LEVEL, h.level + 1));
+  wrap.innerHTML = `<h2>${h.name} — home level ${h.level}</h2>
+    <div class="bar homexp"><div class="fill xpfill" style="width:${pct}%"></div><span>${h.level >= MAX_HOME_LEVEL ? 'Max level' : `${h.xp - lo} / ${hi - lo} home XP`}</span></div>
+    <div class="st" style="margin:6px 0">Now: +${h.perks.storage} slots · door ×${h.perks.doorMul.toFixed(2)} · ${h.perks.radius} m claim · ${h.perks.buildCap} structures.
+    ${h.level < MAX_HOME_LEVEL ? `<br>Level ${h.level + 1}: ${HOME_LEVEL_TEXT[h.level]} · +${next.storage} slots · ${next.radius} m claim.` : ''}
+    <br><small style="color:#888">Home XP: install upgrades, build inside your claim radius, upload intel here, and just hold it over time.</small></div>`;
+  const ab = btn('Abandon this stash house', () => { if (confirm('Abandon your stash house? Anything left inside can be taken by anyone.')) send({ t: 'abandon' }); });
+  wrap.append(ab);
+  return wrap;
+}
 function upgradePanel(c) {
   const me = state.me;
   const wrap = document.createElement('div');
@@ -740,9 +769,10 @@ function upgradePanel(c) {
     const next = u.tiers[tier + 1];
     const row = document.createElement('div');
     row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${u.name} <small style="color:#888">${u.tiers[tier].label}</small></div><div class="st">${u.desc}</div>${next ? `<div class="at">Next: ${next.label} — ${costText(next.cost)}${me.level < next.level ? ` · needs level ${next.level}` : ''}</div>` : '<div class="at">Maxed</div>'}</div>`;
+    const hl = c.home?.level ?? 1;
+    row.innerHTML = `<div class="meta"><div class="nm">${u.name} <small style="color:#888">${u.tiers[tier].label}</small></div><div class="st">${u.desc}</div>${next ? `<div class="at">Next: ${next.label} — ${costText(next.cost)}${hl < next.home ? ` · needs home level ${next.home}` : ''}</div>` : '<div class="at">Maxed</div>'}</div>`;
     if (next) {
-      const ok = me.level >= next.level && Object.entries(next.cost).every(([k, v]) => have(k) >= v);
+      const ok = hl >= next.home && Object.entries(next.cost).every(([k, v]) => have(k) >= v);
       const b = btn('Install', () => send({ t: 'upgrade', track: key }));
       b.disabled = !ok;
       row.append(b);
@@ -793,6 +823,15 @@ function renderContact() {
   }
   // Quartermaster: field gear bought with commendations (earned only from contracts and events).
   const qm = $('ctShop'); qm.innerHTML = '';
+  {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">Claim marker</div><div class="st">Plant it to make a room, house, cave, vehicle or patch of ground your stash house.</div></div>`;
+    const b = btn(`${CLAIM.markerPrice.parts} parts`, () => send({ t: 'buyMarker', contactId: c.id }));
+    b.disabled = me.parts < CLAIM.markerPrice.parts;
+    row.append(b);
+    qm.append(row);
+  }
   const entries = [
     ...Object.entries(PARTS).filter(([, d]) => d.field).map(([id, d]) => ['part', id, d, `Attachment · ${SLOT_LABELS[d.slot]}`]),
     ...Object.entries(ARMORS).filter(([, d]) => d.field).map(([id, d]) => ['armor', id, d, `Armor blueprint · ${d.armor} armor`]),
@@ -851,24 +890,16 @@ function mapOptions() {
   const map = state.map, o = state.deployOpts || {};
   const town = (h) => homeLabel(h);
   if (state.mapMode === 'first') {
-    // One entry per town (town houses) plus one per natural home (caves, rock formations, tree huts,
-    // boathouses), so a controller can pick quickly.
-    const byTown = new Map(), natural = [];
-    for (const id of o.freeHouses || []) {
-      const t = map.houses[id].townId;
-      if (t === null) { natural.push(id); continue; }
-      if (!byTown.has(t)) byTown.set(t, []);
-      byTown.get(t).push(id);
-    }
-    const colors = { cave: '#b0a89a', rockfort: '#e0b070', treehut: '#7fc46a', boathouse: '#7fc4e8' };
+    // First deploy: any real town, or a landing zone out in the wilds. You claim a stash house
+    // afterwards by planting your claim marker.
     return [
-      ...[...byTown.entries()].map(([t, ids]) => ({ label: `🏠 ${map.towns[t].name} — ${ids.length} free`, x: map.houses[ids[0]].x, z: map.houses[ids[0]].z, msg: { t: 'deploy', kind: 'claim', id: ids[0] }, color: '#ffd29a' })),
-      ...natural.map((id) => ({ label: homeLabel(id, true), x: map.houses[id].x, z: map.houses[id].z, msg: { t: 'deploy', kind: 'claim', id }, color: colors[map.houses[id].kind] })),
+      ...(o.towns || []).map((id) => ({ label: `🏙 ${map.towns[map.contacts[id].townId].name}${map.towns[map.contacts[id].townId].county ? ` (${map.towns[map.contacts[id].townId].county} Co.)` : ''}`, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#ffd29a' })),
+      ...map.landingZones.map((lz) => ({ label: `🪂 ${lz.name}`, x: lz.x, z: lz.z, msg: { t: 'deploy', kind: 'lz', id: lz.id }, color: '#e0e0e0' })),
     ];
   }
   if (state.mapMode === 'redeploy') {
     const list = [];
-    if (o.houseId !== null && o.houseId !== undefined) list.push({ label: `Your stash house (${town(o.houseId)})`, x: map.houses[o.houseId].x, z: map.houses[o.houseId].z, msg: { t: 'deploy', kind: 'house' }, color: '#4fbf6a' });
+    if (o.claim) list.push({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' });
     for (const id of o.contacts || []) list.push({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' });
     for (const c of o.crates || []) list.push({ label: 'Your stash crate', x: c.x, z: c.z, msg: { t: 'deploy', kind: 'crate', id: c.id }, color: '#c9a36b' });
     for (const id of o.lzs || []) list.push({ label: map.landingZones[id].name, x: map.landingZones[id].x, z: map.landingZones[id].z, msg: { t: 'deploy', kind: 'lz', id }, color: '#e0e0e0' });
@@ -883,9 +914,9 @@ function mapOptions() {
 }
 function renderMapScreen() {
   if (!state.mapOpen || !state.map) return;
-  const titles = { first: 'Choose your stash house', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
+  const titles = { first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
-    first: 'This is your base: it stays in the world while you\'re offline, and anyone can raid it. Pick a town house, or a natural home — a mountain cave, desert rock formation, giant forest tree or lakeside boathouse. You can fortify it later by building walls and gates around it.',
+    first: 'Pick where to start. Then find a place to call home and plant your claim marker in it: a town house or apartment room, a limestone cave, rock outcrop, hollow cypress, river fish camp, an abandoned RV, bus, box truck or houseboat — or plant it as a claim flag on open ground.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
     view: 'Gold ◆ contracts · red ● supply drops · blue ✦ Contacts (dim = undiscovered) · green = home & squad.',
@@ -915,7 +946,8 @@ function drawMapCanvas() {
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
   for (const m of state.squad.members) if (m.id !== state.id) markers.push({ x: m.x, z: m.z, color: '#7dff9a', size: 5, label: m.name });
   for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
-  if (state.houseId !== null && state.houseId !== undefined) { const hh = map.houses[state.houseId]; markers.push({ x: hh.x, z: hh.z, color: '#4fbf6a', size: 7, label: 'Home' }); }
+  const hpos = homePos();
+  if (hpos) markers.push({ x: hpos.x, z: hpos.z, color: '#4fbf6a', size: 7, label: `Home (Lv${state.me.claim.level})` });
   for (const o of mapOptions()) { const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
   if (state.me && !state.me.dead) markers.push({ x: state.x, z: state.z, kind: 'player', yaw: state.yaw, color: '#5aa8ff', size: 7 });
   state.mapProj = drawMap(cv, map, state.mapBase, mapView, markers);
@@ -1130,9 +1162,9 @@ function xpPopup(amount, reason) {
   setTimeout(() => el.remove(), 2500);
 }
 
-function levelBanner(level, unlocks) {
+function levelBanner(level, unlocks, title = 'LEVEL') {
   const el = $('levelup');
-  el.innerHTML = `<h2>LEVEL ${level}</h2>${unlocks.length ? `<div>Unlocked: ${unlocks.map((u) => `<b>${u.name}</b>`).join(', ')}</div><small>Visit the gunsmith at your stash house</small>` : ''}`;
+  el.innerHTML = `<h2>${title} ${level}</h2>${unlocks.length ? `<div>Unlocked: ${unlocks.map((u) => `<b>${u.name}</b>`).join(', ')}</div><small>Visit the gunsmith at your stash house</small>` : ''}`;
   el.hidden = false;
   el.animate([{ opacity: 0, transform: 'translate(-50%, -10px)' }, { opacity: 1, transform: 'translate(-50%, 0)' }], { duration: 250 });
   clearTimeout(levelBanner.t);
@@ -1224,7 +1256,7 @@ addEventListener('keydown', (e) => {
   // Build mode: X toggles, 1-5 pick a piece.
   if (document.activeElement === $('name') || !state.me) return;
   if (e.code === 'KeyX' && !e.repeat) doAction('build');
-  if (build.on && /^Digit[1-5]$/.test(e.code)) { build.piece = Object.keys(PIECES)[Number(e.code.slice(5)) - 1]; renderBuildBar(); e.stopImmediatePropagation(); }
+  if (build.on && /^Digit[1-6]$/.test(e.code)) { build.piece = Object.keys(PIECES)[Number(e.code.slice(5)) - 1]; renderBuildBar(); e.stopImmediatePropagation(); }
 }, true);
 addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
@@ -1344,8 +1376,12 @@ function nearestInteractable() {
   for (const [id, hs] of state.houseState) {
     const h = state.map.houses[id];
     const own = id === state.houseId;
-    consider(Math.hypot(h.crate.x - state.x, h.crate.z - state.z) - 0.3, own ? 'Open your stash · gunsmith · upgrades' : `Loot ${hs.owner || 'unclaimed'}'s stash`);
+    const hasMarker = state.me?.inv.pack.some((i) => i.kind === 'marker');
+    const claimText = state.me?.claim ? `Unclaimed ${homeKindName(h).toLowerCase()} (you already have a stash house)` : hasMarker ? `Plant claim marker — make this ${homeKindName(h).toLowerCase()} your stash house (8s)` : `Unclaimed ${homeKindName(h).toLowerCase()} — needs a claim marker`;
+    const lockedVehicle = h.kind === 'vehicle' && hs.owner && !own && hs.hp > 0 && !hs.open;
+    consider(Math.hypot(h.crate.x - state.x, h.crate.z - state.z) - 0.3, !hs.owner ? claimText : own ? `Open your stash · gunsmith · upgrades (home Lv${hs.hl})` : lockedVehicle ? `${hs.owner}'s ${homeKindName(h).toLowerCase()} — locked` : `Loot ${hs.owner}'s stash`);
     const d = h.door;
+    if (!hs.owner) { consider(Math.hypot((d.minX + d.maxX) / 2 - state.x, (d.minZ + d.maxZ) / 2 - state.z), claimText); continue; }
     const squadHouse = !own && hs.owner && state.squad.members.some((m) => m.name === hs.owner);
     const lockText = (state.me?.level ?? 1) >= GADGETS.doorHack.level ? `Hack lock (${GADGETS.doorHack.cost} tech, 8s)` : `Locked — shoot it down (hack at lvl ${GADGETS.doorHack.level})`;
     const doorText = own || squadHouse ? (hs.hp <= 0 ? (own ? 'Rebuild door' : 'Doorway (breached)') : hs.open ? 'Close door' : 'Open door') : (hs.hp <= 0 ? 'Doorway (breached)' : hs.open ? 'Doorway (open)' : `${lockText} · ${Math.round(hs.hp / hs.max * 100)}%`);
@@ -1410,8 +1446,8 @@ function drawMarkers() {
     state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${Math.round(Math.hypot(p.x - state.x, p.z - state.z))}m`, new THREE.Vector3(p.x, ground(p.x, p.z) + 1.5, p.z)));
     for (const ct of state.contracts) marker(`c${ct.id}`, 'objective', `◆ ${CONTRACT_TYPES[ct.type].name} · ${Math.round(Math.hypot(ct.x - state.x, ct.z - state.z))}m`, new THREE.Vector3(ct.x, ground(ct.x, ct.z) + 2.5, ct.z));
     for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${Math.round(Math.hypot(d.x - state.x, d.z - state.z))}m`, new THREE.Vector3(d.x, ground(d.x, d.z) + 3, d.z));
-    if (state.houseId !== null && state.houseId !== undefined) {
-      const hh = state.map.houses[state.houseId];
+    const hh = homePos();
+    if (hh) {
       const dh = Math.hypot(hh.x - state.x, hh.z - state.z);
       if (dh > 40) marker('home', 'squad', `⌂ Home ${Math.round(dh)}m`, new THREE.Vector3(hh.x, ground(hh.x, hh.z) + 4, hh.z));
     }
@@ -1769,7 +1805,7 @@ function renderBuildBar() {
   if (!me) return;
   const items = Object.entries(PIECES).map(([k, p]) => {
     const st = p.stages[0];
-    const cost = p.explosive ? `${me.inv.pack.filter((i) => i.kind === 'charge').length} carried` : Object.entries(st.cost).map(([r, v]) => `${v} ${r}`).join(' ');
+    const cost = p.explosive ? `${me.inv.pack.filter((i) => i.kind === 'charge').length} carried` : Object.entries(st.cost).map(([r, v]) => `${v} ${r}`).join(' ') + (p.claim ? ' + marker' : '');
     return `<div class="bpiece ${k === build.piece ? 'sel' : ''}"><kbd>${p.key}</kbd>${p.name}<small>${cost}</small></div>`;
   }).join('');
   const pad = state.inputMode === 'pad';

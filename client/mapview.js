@@ -1,19 +1,18 @@
 // Full-map rendering for the map screen (M), the deploy/redeploy screen and fast travel.
 const COL = { grass: '#3f4d31', town: '#4b4f55', building: '#7b7f86', road: '#2c2f33', tree: '#24391f', house: '#a8774c', farm: '#8a6d4c' };
 
-const GC = { plains: [92, 115, 64], forest: [54, 82, 41], desert: [199, 171, 115], mountain: [115, 110, 102], snow: [230, 232, 240], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
+const GC = { plains: [104, 124, 68], forest: [58, 86, 44], desert: [214, 206, 170], mountain: [128, 104, 66], swamp: [52, 68, 40], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
 /** Map colour (0-255 RGB) for a point: biome blend, water, beaches, snow, shaded by slope. */
 export function mapGroundColor(map, x, z, H = map.terrain.height) {
   const t = map.terrain;
   const h = H(x, z);
   if (h < -6) return GC.deep;
   if (h < 0) return GC.water;
-  if (h < 1.4) return GC.sand;
   const b = t.biome(x, z);
+  if (h < 1.0 && b.sea < 0.5) return GC.sand;
   const c = [0, 0, 0];
   for (const k of ['plains', 'forest', 'desert', 'mountain']) for (let i = 0; i < 3; i++) c[i] += GC[k][i] * b[k];
-  for (let i = 0; i < 3; i++) c[i] += GC.sand[i] * b.sea;
-  if (h > 95) { const s = Math.min(1, (h - 95) / 20); for (let i = 0; i < 3; i++) c[i] = c[i] * (1 - s) + GC.snow[i] * s; }
+  for (let i = 0; i < 3; i++) c[i] += GC.swamp[i] * b.sea;
   // Hill shading from the slope toward the light (north-west).
   const shade = Math.max(0.6, Math.min(1.35, 1 + (h - H(x - 12, z - 12)) * 0.04));
   return c.map((v) => Math.min(255, v * shade));
@@ -45,16 +44,19 @@ export function buildMapBase(map, px = 1400) {
   for (const t of map.towns) { g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {
     if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
-    if (['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty'].includes(b.type)) continue;
+    if (['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub'].includes(b.type)) continue;
     g.fillStyle = b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : COL.building;
     g.fillRect(X(b.minX), Z(b.minZ), Math.max(1, (b.maxX - b.minX) * k), Math.max(1, (b.maxZ - b.minZ) * k));
   }
-  g.font = `bold ${Math.round(px / 90)}px Segoe UI, sans-serif`;
   g.textAlign = 'center';
-  for (const t of map.towns) {
+  // Labels: towns, rivers and lakes, parks and landmarks.
+  for (const l of map.labels || map.towns.map((t) => ({ text: t.name, x: t.x, z: t.rect.minZ, kind: 'town' }))) {
+    const water = l.kind === 'water', lm = l.kind === 'landmark';
+    g.font = `${water ? 'italic ' : 'bold '}${Math.round(px / (water ? 105 : lm ? 115 : 85))}px Segoe UI, sans-serif`;
     g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.7)';
-    g.strokeText(t.name, X(t.x), Z(t.rect.minZ) - 4);
-    g.fillStyle = '#e8e8e8'; g.fillText(t.name, X(t.x), Z(t.rect.minZ) - 4);
+    g.strokeText(l.text, X(l.x), Z(l.z) - 4);
+    g.fillStyle = water ? '#a9d7f2' : lm ? '#bfe6a8' : '#f0f0f0';
+    g.fillText(l.text, X(l.x), Z(l.z) - 4);
   }
   return c;
 }

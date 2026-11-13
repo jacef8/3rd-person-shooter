@@ -1,9 +1,10 @@
 // Deterministic terrain + biomes, shared by server and client.
 //
-// Heights come from seeded value noise (only + - * / Math.floor and Math.imul, so every JS engine
-// produces bit-identical results). Biomes blend organically: forest to the north, mountains to
-// the west, desert to the south-east, a sea along the east coast and lakes scattered through
-// the lowlands, with plains/cities in between. Towns get their ground flattened.
+// The layout follows the real area around Bristol, Florida (see geography.js): the Apalachicola,
+// Chipola and Ochlockonee rivers with their floodplain swamps, Lake Seminole, Lake Talquin, the
+// Dead Lakes, the Torreya bluffs and Red Hills, sandhill scrub and the Apalachicola National Forest
+// flatwoods. Seeded value noise (only + - * / Math.floor and Math.imul, so every JS engine is
+// bit-identical) adds the local detail. Towns get their ground flattened.
 //
 // Lookups go through a lazily-filled 8 m sample grid with bilinear interpolation, which keeps
 // height() cheap enough to call for every footstep, shot and vertex.
@@ -32,45 +33,107 @@ function fbm(x, z, seed, oct = 4) {
   for (let i = 0; i < oct; i++) { s += amp * vnoise(x * f, z * f, seed + i * 101); norm += amp; amp *= 0.5; f *= 2.03; }
   return s / norm;
 }
+import { geography, polyDist, lakeDepth, segDist, crossings } from './geography.js';
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const smooth = (v) => { const t = clamp01(v); return t * t * (3 - 2 * t); };
 
 export function createTerrain(seed, size) {
   const half = size / 2;
   const s0 = (seed * 7919) | 0;
+  const geo = geography(size);
   let flats = [];
+  // Bridges/causeways: where highways cross rivers the ground isn't carved away.
+  const bridges = [];
+  for (const r of geo.roads) for (const rv of geo.rivers) for (const c of crossings(r.pts, rv.pts)) bridges.push({ ...c, road: r.name, river: rv.name, len: rv.width / 2 + 36 });
+  const apalachicola = geo.rivers[0];
 
-  /** Biome weights at a point (sum to 1). */
-  function biome(x, z) {
-    // Domain warp so borders meander instead of following straight lines.
-    const wx = x + (fbm(x / 900, z / 900, s0 + 7, 2) - 0.5) * 1500;
-    const wz = z + (fbm(x / 900, z / 900, s0 + 13, 2) - 0.5) * 1500;
-    const u = (wx + half) / size, v = (wz + half) / size;
-    const sea = smooth((u - 0.86) / 0.07);
-    const mountain = smooth((0.3 - u) / 0.14) * (1 - sea);
-    const desert = smooth((v - 0.56) / 0.12) * smooth((u - 0.5) / 0.12) * (1 - sea) * (1 - mountain);
-    const forest = smooth((0.42 - v) / 0.14) * (1 - mountain) * (1 - sea) * (1 - desert);
+  const regionW = (list, x, z) => {
+    let w = 0;
+    for (const [cx, cz, r, k] of list) {
+      const dx = x - cx, dz = z - cz;
+      if (Math.abs(dx) > r || Math.abs(dz) > r) continue;
+      const d = Math.sqrt(dx * dx + dz * dz);
+      if (d < r) w = Math.max(w, k * smooth((r - d) / (r * 0.45)));
+    }
+    return w;
+  };
+  /** Which side of the Apalachicola a point is on (+1 east bank, -1 west bank) and how far. */
+  function eastOfApalachicola(x, z) {
+    let best = Infinity, side = 0;
+    const p = apalachicola.pts;
+    for (let i = 0; i < p.length - 1; i++) {
+      const { d } = segDist(x, z, p[i][0], p[i][1], p[i + 1][0], p[i + 1][1]);
+      if (d < best) { best = d; const cross = (p[i + 1][0] - p[i][0]) * (z - p[i][1]) - (p[i + 1][1] - p[i][1]) * (x - p[i][0]); side = cross < 0 ? 1 : -1; }
+    }
+    return { d: best, side };
+  }
+  function waterInfo(x, z) {
+    let swamp = 0, river = Infinity, riverW = 0, lake = -Infinity;
+    for (const rv of geo.rivers) {
+      const d = polyDist(x, z, rv.pts);
+      if (d < river) { river = d; riverW = rv.width; }
+      if (d < rv.swamp) swamp = Math.max(swamp, smooth((rv.swamp - d) / (rv.swamp * 0.6)));
+    }
+    for (const lk of geo.lakes) lake = Math.max(lake, lakeDepth(x, z, lk));
+    if (lake > -90) swamp = Math.max(swamp, smooth((lake + 90) / 70) * 0.7);
+    return { swamp, river, riverW, lake };
+  }
+
+  /** Biome weights at a point (sum to 1). Keys: plains (farmland), forest (pine flatwoods),
+   *  desert (sandhill scrub), mountain (Red Hills / Torreya bluffs), sea (river swamp). */
+  function biomeW(x, z, w = waterInfo(x, z)) {
+    // A little warp so region edges meander.
+    const wx = x + (fbm(x / 600, z / 600, s0 + 7, 2) - 0.5) * 300, wz = z + (fbm(x / 600, z / 600, s0 + 13, 2) - 0.5) * 300;
+    let hills = regionW(geo.regions.hills, wx, wz);
+    // The bluffs are on the east bank only; the west bank opposite is low floodplain.
+    let east = 1;
+    if (hills > 0.05 && w.swamp > 0) { const e = eastOfApalachicola(x, z); if (e.d < 700 && e.side < 0) { east = 0; hills *= smooth((e.d - 300) / 300); } }
+    // Where the hills meet the river (the Torreya bluffs) there's no floodplain swamp.
+    const sea = w.swamp * (1 - 0.9 * hills * east);
+    const mountain = hills * (1 - sea);
+    const desert = regionW(geo.regions.sandhills, wx, wz) * (1 - sea) * (1 - mountain);
+    const forest = regionW(geo.regions.forest, wx, wz) * (1 - sea) * (1 - mountain * 0.6) * (1 - desert);
     const plains = Math.max(0, 1 - sea - mountain - desert - forest);
     const t = sea + mountain + desert + forest + plains || 1;
     return { sea: sea / t, mountain: mountain / t, desert: desert / t, forest: forest / t, plains: plains / t };
   }
+  const biome = (x, z) => biomeW(x, z);
 
   /** Unflattened, unsampled height (used during world generation). */
   function raw(x, z) {
-    const b = biome(x, z);
-    const plainsH = 3 + 7 * fbm(x / 420, z / 420, s0 + 1);
-    const forestH = 4 + 18 * fbm(x / 360, z / 360, s0 + 2);
-    const dunes = Math.abs(fbm(x / 70, z / 240, s0 + 3, 2) - 0.5) * 2;
-    const desertH = 2 + 5 * fbm(x / 600, z / 600, s0 + 4) + 4 * dunes;
-    const r = 1 - Math.abs(2 * fbm(x / 650, z / 650, s0 + 5, 5) - 1);
-    const mountainH = 12 + 120 * r * r + 25 * fbm(x / 200, z / 200, s0 + 6, 3);
-    const seaH = -22 + 6 * fbm(x / 300, z / 300, s0 + 8, 2);
-    let h = b.plains * plainsH + b.forest * forestH + b.desert * desertH + b.mountain * mountainH + b.sea * seaH;
-    // Lakes in the lowlands.
-    const lake = fbm(x / 700, z / 700, s0 + 33, 3);
-    if (lake > 0.66) h -= ((lake - 0.66) / 0.34) * 45 * (b.plains + b.forest);
-    // Keep the map border as dry land/sea, never mid-air.
+    const w = waterInfo(x, z);
+    const b = biomeW(x, z, w);
+    const plainsH = 9 + 10 * fbm(x / 500, z / 500, s0 + 1);
+    const forestH = 6 + 6 * fbm(x / 400, z / 400, s0 + 2);
+    const dunes = Math.abs(fbm(x / 90, z / 260, s0 + 3, 2) - 0.5) * 2;
+    const desertH = 10 + 9 * fbm(x / 350, z / 350, s0 + 4) + 6 * dunes;
+    const hillsH = 16 + 42 * fbm(x / 420, z / 420, s0 + 5, 5);
+    const pond = fbm(x / 90, z / 90, s0 + 9, 2);
+    const swampH = 1.6 + 2 * fbm(x / 160, z / 160, s0 + 8, 2) - (pond > 0.66 ? 3.5 : 0);
+    let h = b.plains * plainsH + b.forest * forestH + b.desert * desertH + b.mountain * hillsH + b.sea * swampH;
+    // Torreya bluffs: the east bank of the Apalachicola rises steeply where the hills meet it.
+    if (b.mountain > 0.2) {
+      const e = eastOfApalachicola(x, z);
+      if (e.side > 0 && e.d < 420) h += 30 * b.mountain * smooth((e.d - 45) / 110);
+    }
+    // River channels (unless a highway crosses here), lakes.
+    let bridged = false;
+    for (const br of bridges) {
+      if (Math.abs(x - br.x) > br.len + 10 || Math.abs(z - br.z) > br.len + 10) continue;
+      if (Math.hypot(x - br.x, z - br.z) < br.len && roadNear(x, z, br.road) < 7) { bridged = true; break; }
+    }
+    if (!bridged) {
+      const hw = w.riverW / 2;
+      if (w.river < hw) h = -4 - fbm(x / 60, z / 60, s0 + 11, 1);
+      else if (w.river < hw + 28) h = -4 + (Math.min(h, 3) + 4) * smooth((w.river - hw) / 28);
+    } else h = Math.max(h, 2.5);
+    if (w.lake > 0) h = Math.min(h, -3 - Math.min(w.lake, 80) * 0.06);
+    else if (w.lake > -30) h = Math.min(h, -3 + (Math.min(h, 3) + 3) * smooth((w.lake + 30) / 30));
     return h;
+  }
+  function roadNear(x, z, name) {
+    const r = geo.roads.find((o) => o.name === name);
+    return r ? polyDist(x, z, r.pts) : Infinity;
   }
 
   function flattened(x, z) {
@@ -110,7 +173,7 @@ export function createTerrain(seed, size) {
   }
 
   return {
-    seed, size, half,
+    seed, size, half, geo, bridges,
     biome, raw, height, exact: flattened,
     /** Flatten ground under towns: [{minX,minZ,maxX,maxZ,elev,margin}]. Call before any height() use. */
     setFlats(list) { flats = list; tiles.clear(); },

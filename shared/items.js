@@ -154,37 +154,37 @@ export function isUnlocked(def, id, char) {
 // Paid with salvage (found out in the map) plus parts/tech, gated by level. Upgrades make your base
 // tougher, bigger and more useful — the main reason to go scavenging.
 export const UPGRADES = {
-  door: { name: 'Reinforced Door', desc: 'More door HP before it breaks.', tiers: [
-    { label: 'Wooden door', hp: 1 },
-    { label: 'Steel door', hp: 2, level: 3, cost: { salvage: 80, parts: 30 } },
-    { label: 'Blast door', hp: 3.5, level: 8, cost: { salvage: 200, parts: 80 } },
-    { label: 'Vault door', hp: 5.5, level: 15, cost: { salvage: 400, parts: 150, comms: 3 } },
+  door: { name: 'Reinforced Door', desc: 'More door/lock HP before it breaks.', tiers: [
+    { label: 'Basic door', hp: 1 },
+    { label: 'Steel door', hp: 2, home: 2, cost: { salvage: 80, parts: 30 } },
+    { label: 'Blast door', hp: 3.5, home: 4, cost: { salvage: 200, parts: 80 } },
+    { label: 'Vault door', hp: 5.5, home: 7, cost: { salvage: 400, parts: 150, comms: 3 } },
   ] },
   storage: { name: 'Storage', desc: 'More stash slots.', tiers: [
     { label: '30 slots', slots: 30 },
-    { label: '45 slots', slots: 45, level: 2, cost: { salvage: 60 } },
-    { label: '60 slots', slots: 60, level: 6, cost: { salvage: 150, parts: 50 } },
-    { label: '90 slots', slots: 90, level: 12, cost: { salvage: 300, parts: 100, comms: 2 } },
+    { label: '45 slots', slots: 45, home: 1, cost: { salvage: 60 } },
+    { label: '60 slots', slots: 60, home: 6, cost: { salvage: 150, parts: 50 } },
+    { label: '90 slots', slots: 90, home: 8, cost: { salvage: 300, parts: 100, comms: 2 } },
   ] },
-  alarm: { name: 'Perimeter Alarm', desc: 'Alerts you (anywhere on the map) when an enemy gets near your house, and shows them.', tiers: [
+  alarm: { name: 'Perimeter Alarm', desc: 'Alerts you (anywhere on the map) when an enemy gets near your home, and shows them.', tiers: [
     { label: 'None', radius: 0 },
-    { label: '25 m alarm', radius: 25, level: 3, cost: { salvage: 50, tech: 30 } },
-    { label: '50 m alarm', radius: 50, level: 9, cost: { salvage: 120, tech: 60 } },
+    { label: '25 m alarm', radius: 25, home: 2, cost: { salvage: 50, tech: 30 } },
+    { label: '50 m alarm', radius: 50, home: 5, cost: { salvage: 120, tech: 60 } },
   ] },
   generator: { name: 'Generator', desc: 'Produces parts and tech into your stash every hour, even offline. (Raiders can take it.)', tiers: [
     { label: 'None', rate: 0 },
-    { label: '12 / hour', rate: 12, level: 5, cost: { salvage: 100, parts: 60 } },
-    { label: '30 / hour', rate: 30, level: 11, cost: { salvage: 250, parts: 120, comms: 2 } },
-    { label: '60 / hour', rate: 60, level: 18, cost: { salvage: 500, parts: 200, comms: 4 } },
+    { label: '12 / hour', rate: 12, home: 3, cost: { salvage: 100, parts: 60 } },
+    { label: '30 / hour', rate: 30, home: 6, cost: { salvage: 250, parts: 120, comms: 2 } },
+    { label: '60 / hour', rate: 60, home: 9, cost: { salvage: 500, parts: 200, comms: 4 } },
   ] },
-  infirmary: { name: 'Infirmary', desc: 'Redeploying at your house gives full armor and 2 medkits.', tiers: [
+  infirmary: { name: 'Infirmary', desc: 'Redeploying at your home gives a light vest and 2 medkits.', tiers: [
     { label: 'None' },
-    { label: 'Installed', level: 4, cost: { salvage: 80, tech: 20 } },
+    { label: 'Installed', home: 2, cost: { salvage: 80, tech: 20 } },
   ] },
   workbench: { name: 'Workbench', desc: 'Cheaper builds at your gunsmith.', tiers: [
     { label: 'Basic', discount: 0 },
-    { label: '-25% build cost', discount: 0.25, level: 6, cost: { salvage: 120, parts: 60 } },
-    { label: '-50% build cost', discount: 0.5, level: 14, cost: { salvage: 300, parts: 120, comms: 2 } },
+    { label: '-25% build cost', discount: 0.25, home: 3, cost: { salvage: 120, parts: 60 } },
+    { label: '-50% build cost', discount: 0.5, home: 7, cost: { salvage: 300, parts: 120, comms: 2 } },
   ] },
 };
 
@@ -224,9 +224,10 @@ export function makeConsumable(kind) {
  */
 export function worldSupply(index, zone = 'town') {
   const tables = {
-    town:       [['parts', 15], ['ammo', 60], ['medkit'], ['parts', 10], ['tech', 8], ['salvage', 10], ['tool', 'hammer']],
+    town:       [['parts', 15], ['ammo', 60], ['medkit'], ['parts', 10], ['tech', 8], ['salvage', 10], ['tool', 'hammer'], ['marker']],
     industrial: [['salvage', 25], ['salvage', 20], ['parts', 20], ['tool', 'pickaxe'], ['salvage', 30], ['tech', 10], ['tool', 'hammer']],
-    farm:       [['wood', 20], ['ammo', 60], ['medkit'], ['salvage', 15], ['tool', 'hatchet'], ['parts', 15]],
+    farm:       [['wood', 20], ['ammo', 60], ['medkit'], ['salvage', 15], ['tool', 'hatchet'], ['parts', 15], ['marker']],
+    park:       [['tech', 12], ['medkit'], ['ammo', 60], ['wood', 15], ['salvage', 12]],
     forest:     [['wood', 15], ['tech', 12], ['medkit'], ['tool', 'hatchet'], ['ammo', 60]],
     road:       [['parts', 20], ['ammo', 60], ['salvage', 12], ['tech', 8]],
     desert:     [['salvage', 25], ['ammo', 60], ['stone', 15], ['parts', 15], ['tech', 10]],
@@ -235,7 +236,7 @@ export function worldSupply(index, zone = 'town') {
   };
   const t = tables[zone] || tables.town;
   const [kind, amount] = t[index % t.length];
-  const names = { parts: 'Parts Cache', ammo: 'Ammo Box', medkit: 'Medkit', tech: 'Electronics', salvage: 'Salvage', wood: 'Lumber', stone: 'Stone' };
+  const names = { parts: 'Parts Cache', ammo: 'Ammo Box', medkit: 'Medkit', tech: 'Electronics', salvage: 'Salvage', wood: 'Lumber', stone: 'Stone', marker: 'Claim marker' };
   if (kind === 'tool') return { kind: 'tool', tool: amount, name: amount[0].toUpperCase() + amount.slice(1) };
   return amount ? { kind, name: names[kind], amount } : { kind, name: names[kind] };
 }
@@ -288,7 +289,6 @@ export function unlocksAt(level) {
   for (const [k, p] of Object.entries(PAINTS)) if (p.level === level && p.level > 1 && !p.field) out.push({ type: 'paint', id: k, name: `${p.name} paint` });
   for (const [k, a] of Object.entries(ARMORS)) if (a.level === level && a.level > 1 && !a.field) out.push({ type: 'armor', id: k, name: a.name });
   for (const [k, g] of Object.entries(GADGETS)) if (g.level === level && g.level > 1) out.push({ type: 'gadget', id: k, name: g.name });
-  for (const [k, u] of Object.entries(UPGRADES)) u.tiers.forEach((t, i) => { if (i && t.level === level) out.push({ type: 'upgrade', id: `${k}${i}`, name: `${u.name}: ${t.label}` }); });
   return out;
 }
 

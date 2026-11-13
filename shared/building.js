@@ -12,6 +12,7 @@ export const CRAFTS = {
   hammer:  { name: 'Hammer',        level: 1, cost: { parts: 15 } },
   hatchet: { name: 'Hatchet',       level: 1, cost: { parts: 20 } },
   pickaxe: { name: 'Pickaxe',       level: 2, cost: { parts: 25 } },
+  marker:  { name: 'Claim marker',  level: 1, cost: { wood: 10, salvage: 10 }, desc: 'Plant it to claim a room, house, cave, vehicle or open ground as your stash house.' },
   charge:  { name: 'Breach Charge', level: 7, cost: { salvage: 30, tech: 20, parts: 20 }, desc: 'Explodes 8 s after placing: wrecks walls, gates, doors and anyone standing too close.' },
 };
 
@@ -45,6 +46,10 @@ export const PIECES = {
       { name: 'Reinforced crate', cost: { stone: 10, salvage: 15 }, hp: 2000, material: 'stone', slots: 40 },
     ],
   },
+  flag: {
+    name: 'Claim flag', size: [1.2, 1.2, 4], key: '6', container: true, claim: true,
+    stages: [{ name: 'Claim flag', cost: { wood: 15 }, hp: 2500, material: 'flag', slots: 24 }],
+  },
   charge: {
     name: 'Breach charge', size: [0.4, 0.4, 0.3], key: '5', explosive: true,
     stages: [{ name: 'Breach charge', cost: {}, hp: 1, material: 'charge' }],
@@ -59,8 +64,8 @@ export const BUILD = {
   maxSlope: 1.6,           // max height difference across a piece's footprint
   harvest: { wood: 6, stone: 5, uses: 4, regrowMs: 20 * 60_000, channelMs: 3000 },
   upgradeMs: 3000,
-  raid: { hatchet: { ms: 6000, dmg: 350, vs: 'frame,wood' }, pickaxe: { ms: 8000, dmg: 500, vs: 'frame,wood,stone' } },
-  bulletMul: { frame: 0.5, wood: 0.15, stone: 0.04 },
+  raid: { hatchet: { ms: 6000, dmg: 350, vs: 'frame,wood,flag' }, pickaxe: { ms: 8000, dmg: 500, vs: 'frame,wood,stone,flag' } },
+  bulletMul: { frame: 0.5, wood: 0.15, stone: 0.04, flag: 0.1 },
   charge: { fuseMs: 8000, damage: 2600, radius: 4.5, playerDamage: 140, playerRadius: 6 },
 };
 

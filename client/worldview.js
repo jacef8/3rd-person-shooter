@@ -10,10 +10,13 @@ const COLORS = {
   rock: [0.48, 0.48, 0.46], border: [0.17, 0.18, 0.2], car: [0.45, 0.2, 0.2], adobe: [0.78, 0.62, 0.45],
   boulder: [0.44, 0.42, 0.4], cactus: [0.3, 0.5, 0.25], cavewall: [0.38, 0.36, 0.34], caveroof: [0.4, 0.38, 0.35],
   rockwall: [0.62, 0.5, 0.38], logwall: [0.36, 0.25, 0.16], plankwall: [0.55, 0.42, 0.28], jetty: [0.5, 0.38, 0.25],
+  roomwall: [0.66, 0.63, 0.58], dam: [0.62, 0.62, 0.6], scrub: [0.35, 0.42, 0.24],
 };
+const VEHICLE_COLORS = { rv: [0.86, 0.84, 0.78], bus: [0.95, 0.72, 0.12], truck: [0.82, 0.82, 0.84], houseboat: [0.55, 0.65, 0.72] };
+// North Florida palette: farm fields, pine flatwoods, white sandhills, red-clay hills, river swamp.
 const GROUND = {
-  plains: [0.36, 0.45, 0.25], forest: [0.21, 0.32, 0.16], desert: [0.78, 0.67, 0.45], mountain: [0.45, 0.43, 0.4],
-  snow: [0.9, 0.91, 0.94], sand: [0.8, 0.74, 0.55], mud: [0.33, 0.3, 0.24], road: [0.24, 0.25, 0.26], town: [0.3, 0.31, 0.33],
+  plains: [0.4, 0.48, 0.26], forest: [0.24, 0.33, 0.17], desert: [0.85, 0.82, 0.68], mountain: [0.46, 0.4, 0.26],
+  swamp: [0.2, 0.26, 0.15], sand: [0.78, 0.72, 0.55], mud: [0.29, 0.26, 0.19], road: [0.24, 0.25, 0.26], town: [0.3, 0.31, 0.33],
 };
 const CAR_COLORS = [[0.48, 0.13, 0.13], [0.16, 0.25, 0.42], [0.27, 0.27, 0.27], [0.73, 0.71, 0.6], [0.18, 0.35, 0.23]];
 
@@ -119,12 +122,11 @@ export function createWorldView(scene, map, { viewRange = 300, mobile = false } 
       if (px * px + pz * pz < 36) return GROUND.road;
     }
     if (h < -0.3) return GROUND.mud;
-    if (h < 1.4) return GROUND.sand;
     const b = terrain.biome(x, z);
+    if (h < 1.0 && b.sea < 0.5) return GROUND.sand;
     const c = [0, 0, 0];
     for (const k of ['plains', 'forest', 'desert', 'mountain']) for (let i = 0; i < 3; i++) c[i] += GROUND[k][i] * b[k];
-    if (b.sea > 0) for (let i = 0; i < 3; i++) c[i] += GROUND.sand[i] * b.sea;
-    if (h > 95) { const s = Math.min(1, (h - 95) / 20); for (let i = 0; i < 3; i++) c[i] = c[i] * (1 - s) + GROUND.snow[i] * s; }
+    for (let i = 0; i < 3; i++) c[i] += GROUND.swamp[i] * b.sea;
     return c;
   }
   function buildTerrain(x0, z0) {
@@ -153,6 +155,24 @@ export function createWorldView(scene, map, { viewRange = 300, mobile = false } 
     return m;
   }
 
+  // Highway bridges over the rivers: a deck with railings along the road.
+  const deckMat = new THREE.MeshStandardMaterial({ color: 0x7a7c80, roughness: 0.9 });
+  const railMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.6, metalness: 0.4 });
+  for (const br of map.bridges || []) {
+    const len = br.len * 2 + 12;
+    const yaw = Math.atan2(br.dir[0], br.dir[1]);
+    const g = new THREE.Group();
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(9, 0.6, len), deckMat);
+    deck.position.y = -0.15;
+    g.add(deck);
+    for (const sx of [-4.4, 4.4]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1, len), railMat); rail.position.set(sx, 0.55, 0); g.add(rail); }
+    for (let k = -len / 2 + 6; k < len / 2 - 6; k += 12) { const pier = new THREE.Mesh(new THREE.BoxGeometry(7, 8, 1.2), deckMat); pier.position.set(0, -4, k); g.add(pier); }
+    g.position.set(br.x, Math.max(terrain.height(br.x, br.z), 1.5), br.z);
+    g.rotation.y = yaw;
+    g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    scene.add(g);
+  }
+
   function buildChunk(cx, cz) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => {
@@ -174,6 +194,7 @@ export function createWorldView(scene, map, { viewRange = 300, mobile = false } 
       } else {
         let c = COLORS[b.type] || COLORS.cover;
         if (b.type === 'car') c = CAR_COLORS[b.id % CAR_COLORS.length];
+        if (b.type === 'vehiclebody') c = VEHICLE_COLORS[b.vtype] || COLORS.cover;
         if (b.type === 'housewall' && b.houseId === ownHouseId) c = COLORS.ownwall;
         pushBox(plain, b, c, 0);
       }

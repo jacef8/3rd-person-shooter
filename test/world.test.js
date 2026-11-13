@@ -25,9 +25,9 @@ async function until(fn, ms = 6000) {
 const TOK_Q = 'a1'.repeat(16);
 const home = map.houses[5];
 const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} }]));
-houses[home.id] = { ...houses[home.id], owner: TOK_Q, ownerName: 'Quinn' };
+houses[home.id] = { ...houses[home.id], owner: TOK_Q, ownerName: 'Quinn', hxp: 300 };
 const w = makeWeapon('carbine');
-fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 5, size: 8000, houses, bags: [], characters: {
+fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 6, size: 8000, houses, bags: [], characters: {
   [TOK_Q]: { name: 'Quinn', x: home.crate.x, z: home.crate.z + 1.2, yaw: 0, hp: 100, armor: 0, inv: { primary: w, secondary: null, armor: null, pack: [] },
     ammo: 300, mags: { [w.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), parts: 100, tech: 50, intel: 0, salvage: 0, comms: 0,
     field: [], discovered: [], contracts: [] },
@@ -55,13 +55,21 @@ test('open world loop: deploy, contracts, supply drop, upgrades, fast travel, de
   const nina = await conn('Nina', null);
   await until(() => nina.welcome);
   assert.ok(nina.welcome.firstDeploy);
-  assert.ok(nina.welcome.deploy.freeHouses.length > 50);
-  assert.ok(!nina.welcome.deploy.freeHouses.includes(home.id), 'owned houses are not offered');
-  const pick = nina.welcome.deploy.freeHouses[3];
-  nina.send({ t: 'deploy', kind: 'claim', id: pick });
+  assert.equal(nina.welcome.deploy.claim, null);
+  assert.ok(nina.welcome.deploy.towns.length >= 15, 'first deploy offers the real towns');
+  // Deploy into a town, then claim a free house by planting the starter claim marker.
+  nina.send({ t: 'deploy', kind: 'contact', id: 0 });
   await nina.got((m) => m.t === 'deployed');
-  await until(() => nina.you?.houseId === pick && !nina.you.dead);
+  await until(() => nina.you && !nina.you.dead);
   assert.ok(nina.you.protectedUntil > Date.now(), 'spawn protection');
+  assert.ok(nina.you.inv.pack.some((i) => i.kind === 'marker'), 'starts with a claim marker');
+  const pick = map.houses.find((h) => h.id !== home.id && h.kind === 'room');
+  nina.send({ t: 'dev', x: pick.crate.x, z: pick.crate.z + 1.2 });
+  await sleep(300);
+  nina.send({ t: 'interact' });
+  await nina.got((m) => m.t === 'hack' && m.kind === 'claim');
+  await nina.got((m) => m.t === 'claimed', 12000);
+  await until(() => nina.you.houseId === pick.id && nina.you.claim?.level === 1 && !nina.you.inv.pack.some((i) => i.kind === 'marker'));
 
   // --- Quinn (level 6) runs contracts from Contacts.
   const q = await conn('Quinn', TOK_Q);
@@ -120,7 +128,7 @@ test('open world loop: deploy, contracts, supply drop, upgrades, fast travel, de
   await q.got((m) => m.t === 'toast' && /Installed: Storage/.test(m.text));
   await until(() => q.you.salvage === salvageBefore - 60);
   q.send({ t: 'upgrade', track: 'generator' });    // level 5, needs 100 salvage + 60 parts
-  await q.got((m) => m.t === 'toast' && /Installed: Generator|Not enough/.test(m.text));
+  await q.got((m) => m.t === 'toast' && /Installed: Generator|Not enough|Needs home level/.test(m.text));
 
   // --- Requisition field gear with commendations at a Contact.
   await q.tp(map.contacts[0].x + 1.5, map.contacts[0].z);

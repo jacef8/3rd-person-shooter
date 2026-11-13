@@ -9,7 +9,8 @@ test('open world: 8 km, deterministic, towns, stash houses, contacts, landing zo
   const a = generateMap(42), b = generateMap(42);
   assert.equal(mapChecksum(a), mapChecksum(b));
   assert.equal(a.size, 8000);
-  assert.ok(a.towns.length >= 25, `towns ${a.towns.length}`);
+  assert.equal(a.towns.length, 21, 'all 21 real towns are placed');
+  for (const n of ['Bristol', 'Blountstown', 'Hosford', 'Chattahoochee', 'Quincy', 'Marianna', 'Wewahitchka']) assert.ok(a.towns.some((t) => t.name === n), n);
   assert.ok(a.houses.length >= 60, `houses ${a.houses.length}`);
   assert.equal(a.contacts.length, a.towns.length, 'every town has a Contact');
   assert.ok(a.landingZones.length >= 9);
@@ -40,8 +41,8 @@ test('spatial grid ray query finds the same first hit as brute force', () => {
 test('stash upgrades and contracts are well formed', () => {
   for (const [k, u] of Object.entries(UPGRADES)) {
     u.tiers.slice(1).forEach((t, i) => {
-      assert.ok(t.level >= 1 && t.cost, `${k} tier ${i + 1}`);
-      if (i) assert.ok(t.level >= u.tiers[i].level, `${k} tiers increase in level`);
+      assert.ok(t.home >= 1 && t.cost, `${k} tier ${i + 1}`);
+      if (i) assert.ok(t.home >= u.tiers[i].home, `${k} tiers increase in home level`);
     });
   }
   for (const c of Object.values(CONTRACT_TYPES)) assert.ok(c.reward.comms > 0 && c.xp > 0);
@@ -67,10 +68,10 @@ test('stash house door blocks entry; walls are closed except the door gap', () =
   const outside = { x: h.x, z: h.door.maxZ + 1 };
   const near = map.grid.near(h.x, h.z, 12);
   // Walking straight in through the door gap, blocked when door is present.
-  const blocked = moveWithCollision(outside.x, outside.z, 0, -4, PLAYER_RADIUS, [...near, door]);
+  const blocked = moveWithCollision(outside.x, outside.z, 0, -4, PLAYER_RADIUS, [...near, door], map.terrain);
   assert.ok(blocked.z > door.maxZ, 'door should stop the player');
   // With the door breached the player walks in (gap is 1.8m, player is 0.9m wide).
-  const open = moveWithCollision(outside.x, outside.z, 0, -4, PLAYER_RADIUS, near);
+  const open = moveWithCollision(outside.x, outside.z, 0, -4, PLAYER_RADIUS, near, map.terrain);
   assert.ok(open.z < door.minZ, 'should pass through the empty doorway');
 });
 
@@ -135,12 +136,12 @@ test('biomes: city, forest, desert, mountains and water all exist, with natural 
     peak = Math.max(peak, h);
   }
   for (const b of ['plains', 'forest', 'desert', 'mountain', 'sea']) assert.ok(seen.has(b), b);
-  assert.ok(water > 200, 'there is water');
-  assert.ok(peak > 80, `mountains are tall (${peak.toFixed(0)} m)`);
+  assert.ok(water > 40, 'there is water (rivers and lakes)');
+  assert.ok(peak > 50, `the bluffs and hills rise well above the rivers (${peak.toFixed(0)} m)`);
   const kinds = new Set(m.houses.map((h) => h.kind));
-  for (const k of ['house', 'cave', 'rockfort', 'treehut', 'boathouse']) assert.ok(kinds.has(k), k);
+  for (const k of ['house', 'room', 'cave', 'rockfort', 'treehut', 'boathouse', 'vehicle']) assert.ok(kinds.has(k), k);
   for (const h of m.houses.filter((x) => x.kind === 'cave')) assert.equal(biomeName(m.terrain.biome(h.x, h.z)), 'mountain');
-  for (const h of m.houses.filter((x) => x.kind === 'treehut')) assert.equal(biomeName(m.terrain.biome(h.x, h.z)), 'forest');
+  for (const h of m.houses.filter((x) => x.kind === 'treehut')) { const b = m.terrain.biome(h.x, h.z); assert.ok(b.forest + b.sea > 0.35, 'hollow cypress in woods or swamp'); }
   // Town ground is flattened.
   for (const t of m.towns) {
     const r = t.rect;
@@ -152,25 +153,26 @@ test('biomes: city, forest, desert, mountains and water all exist, with natural 
 test('terrain blocks deep water and cliffs, and stops bullets', () => {
   const m = generateMap(1337);
   const t = m.terrain;
-  // Find a shoreline and walk into the water: you stop before it gets deep.
+  // Walk west from Lake Mystic toward the Apalachicola: you stop at the river's edge.
   let shore = null;
-  for (let x = 2400; x < 3990 && !shore; x += 4) for (let z = -3000; z < 3000 && !shore; z += 40) if (t.height(x, z) > 0.5 && t.height(x + 4, z) < 0.3) shore = { x, z };
-  assert.ok(shore, 'found a shore');
-  const p = moveWithCollision(shore.x, shore.z, 200, 0, PLAYER_RADIUS, [], t);
+  for (let x = -100; x > -900 && !shore; x -= 2) if (t.height(x, 700) < DEEP_WATER) shore = { x: x + 40, z: 700 };
+  assert.ok(shore, 'found the Apalachicola east bank');
+  const p = moveWithCollision(shore.x, shore.z, -200, 0, PLAYER_RADIUS, [], t);
   assert.ok(t.height(p.x, p.z) >= DEEP_WATER, 'did not walk into deep water');
-  assert.ok(p.x - shore.x < 150);
-  // Find a steep slope and try to walk up it.
+  assert.ok(shore.x - p.x < 100, 'stopped at the river');
+  // The SR 20 bridge between Bristol and Blountstown lets you cross.
+  const br = m.bridges.find((b) => b.road === 'SR 20' && b.river === 'Apalachicola River');
+  assert.ok(br, 'SR 20 bridge exists');
+  assert.ok(t.height(br.x, br.z) > 1, 'bridge deck is above water');
+  // Torreya bluffs: steep ground east of the river.
   let cliff = null;
-  for (let x = -3900; x < -1500 && !cliff; x += 6) for (let z = -3500; z < 3500 && !cliff; z += 30) if ((t.height(x + 3, z) - t.height(x, z)) / 3 > 1.6) cliff = { x, z };
-  if (cliff) {
-    const q = moveWithCollision(cliff.x, cliff.z, 6, 0, PLAYER_RADIUS, [], t);
-    assert.ok(q.x < cliff.x + 3, 'cliff blocked');
-  }
-  // A shot fired horizontally into a mountainside hits the ground.
+  for (let x = 250; x < 900 && !cliff; x += 3) for (let z = -1800; z < -900 && !cliff; z += 20) if ((t.height(x + 3, z) - t.height(x, z)) / 3 > 1.3) cliff = { x, z };
+  if (cliff) assert.ok(moveWithCollision(cliff.x, cliff.z, 6, 0, PLAYER_RADIUS, [], t).x < cliff.x + 3, 'cliff blocked');
+  // A shot fired horizontally from the river bank into the bluffs hits the ground.
   let hill = null;
-  for (let x = -3800; x < -1000 && !hill; x += 20) { const h = t.height(x, 0); if (t.height(x + 60, 0) > h + 15) hill = { x, h }; }
-  assert.ok(hill);
-  assert.ok(t.ray(hill.x, hill.h + 1.5, 0, 1, 0, 0, 200) < 200);
+  for (let x = 250; x < 1200 && !hill; x += 10) { const h = t.height(x, -1400); if (h > 1 && t.height(x + 80, -1400) > h + 12) hill = { x, h }; }
+  assert.ok(hill, 'found the bluff face');
+  assert.ok(t.ray(hill.x, hill.h + 1.5, -1400, 1, 0, 0, 200) < 200);
 });
 
 test('building rules: frames on open ground, not in towns, water or on top of things', () => {

@@ -7,44 +7,75 @@ now*, and you can lose it, so every trip out of your stash house is a risk.
 There are no random stat rolls anywhere. A gun's strength comes from its platform plus the
 attachments you chose in the gunsmith, and both are unlocked by level.
 
-## The world
+## The world: Bristol, Florida and 30 miles around it
 
-- **One persistent 8 × 8 km map** (the size of PUBG's Erangel/Miramar): about 30 towns (some
-  cities, some industrial, some desert adobe towns) joined by roads, over terrain with mountains,
-  forests, desert, lakes and a coastline. It's generated from a seed, so every client builds the identical world locally and the
-  server only sends what's within ~320 m of you.
-- Each town has **stash houses**, and natural homes (caves, rock formations, tree huts and
-  boathouses) are spread through the wilds; about 135 homes in total. Each town also has a **Contact** NPC in the square, hackable
-  **terminals**, and loot spots. Rogue patrols spawn around wherever players are.
+The map is a scaled model of the real area within 30 miles of **Bristol, Florida** (Liberty
+County), with Bristol at the centre. 30 real miles = 4 km, so 1 mile is about 133 m in game. Positions come from
+real latitude/longitude, from Wikipedia/GNIS coordinates, and are converted in `shared/geography.js`.
 
-## Terrain and biomes
+- **21 real towns** in their real relative positions: Bristol, Blountstown, Hosford, Telogia,
+  Estiffanulga, Lake Mystic, Sumatra (Liberty); Altha, Clarksville, Kinard, Scotts Ferry (Calhoun);
+  Chattahoochee, Greensboro, Gretna, Quincy, Mount Pleasant (Gadsden); Sneads, Grand Ridge,
+  Marianna, Cottondale (Jackson); Wewahitchka (Gulf). Size follows population. Waterfront towns
+  are nudged just onto dry ground.
+- **Rivers:** the **Apalachicola** from the Jim Woodruff Dam south between Blountstown and Bristol,
+  past Estiffanulga and east of Wewahitchka. The **Chipola** from Marianna past Altha, Clarksville
+  and Scotts Ferry through the Dead Lakes. The **Ochlockonee** out of Lake Talquin along the
+  Liberty County line. Floodplain swamp lines them, and they're too deep to wade.
+- **Lakes:** Lake Seminole (behind the dam), Lake Talquin, the Dead Lakes, Lake Mystic, Merritt's
+  Mill Pond.
+- **Highways:** SR 20, SR 12, SR 65, SR 71, SR 69, SR 267, US 90 and I-10, with **bridges where
+  they cross the rivers**, the only dry crossings, so they're natural chokepoints. Examples: the SR 20
+  bridge between Blountstown and Bristol, the US 90 and I-10 bridges at Chattahoochee, SR 20 over the
+  Ochlockonee.
+- **Terrain:** the steep **Torreya bluffs** on the east bank of the Apalachicola and the rolling
+  **Red Hills** of Gadsden County, karst hills around **Marianna / Florida Caverns**, farmland in
+  Jackson, Calhoun and Gadsden, **Apalachicola National Forest** pine flatwoods across the south and
+  east, and white **sandhill scrub**.
+- **Landmarks:** Torreya, Three Rivers and Florida Caverns State Parks (ranger stations and loot),
+  the Jim Woodruff Dam.
 
-The ground is real terrain, generated from the same seed on server and client:
+There are no real mountains or deserts here. The game's "hills" are the Torreya bluffs and Red
+Hills (exaggerated), and the sandy terrain is sandhill scrub. Rivers are drawn a little wider than
+life so they read at this scale.
 
-| Region | Where | Feel |
-| --- | --- | --- |
-| **Mountains** | West | Ridges up to ~130 m with snowy peaks, boulders, pines, caves. Steep slopes can't be climbed |
-| **Forest** | North | Rolling hills, dense woods, giant hollow trees, lots of wood to chop |
-| **Plains and cities** | Centre | Farmland and most towns; the city fades into forest and desert around it |
-| **Desert** | South-east | Dunes, cacti, adobe towns and ruins, rock formations, stone to mine |
-| **Water** | East coast and lakes | The sea and lakes block you past wading depth; boathouses sit on the shores |
+## Stash houses: claiming and home levels
 
-Biome borders are noise-warped, so they meander and blend instead of following straight lines.
-Towns sit on flattened ground. Bullets, line of sight and tagging all respect hills: you can take
-cover behind a ridge.
+**Claiming.** No home is assigned to you. You make a place yours by **planting a claim marker**
+in it. That's an 8-second action, and moving or taking fire interrupts it. You can claim:
 
-## Homes: five kinds of stash house
+| Claimable | Where |
+| --- | --- |
+| Town house / apartment room | Every town (rooms are ground-floor units inside larger buildings) |
+| Limestone cave | Torreya bluffs, Red Hills, Marianna karst |
+| Rock outcrop | Hills and sandhills |
+| Hollow cypress | Forest and river swamps |
+| Fish camp | River and lake banks, with a jetty |
+| **Abandoned vehicle**: RV, school bus, box truck, houseboat | Along the highways; houseboats moored on the rivers |
+| **Open ground**: claim flag | Anywhere you can build. Place the marker as a flag (build mode, piece 6), and the flag holds your stash |
 
-| Home | Biome | Character |
-| --- | --- | --- |
-| Town house | Towns | Close to Contacts, terminals and loot, and to everyone else |
-| Mountain cave | Mountains | Thick rock walls, a roof and one way in; hard to approach unseen |
-| Rock formation | Desert | A ring of boulders with open sightlines across the sand |
-| Giant tree hut | Forest | A hollowed giant tree, hidden under the canopy |
-| Boathouse | Lake/sea shore | Water at your back with a jetty |
+- New characters start with one marker. More are crafted (10 wood, 10 salvage), found in town
+  and farm loot, or bought from any Contact (40 parts).
+- One stash house at a time. You can **abandon** it from its stash menu, and anything left inside is
+  then free for anyone. Claiming a place someone abandoned gets you whatever they left.
+- **Vehicles are locked.** Others can't reach the stash until the lock is shot off, hacked or blown.
+  Vehicle locks are a bit weaker than house doors.
+- **Claim flags** can be destroyed (chopped, shot, blown up). Destroying one ends that claim and
+  spills its stash.
 
-All of them are claimable and raidable the same way (door, stash, gunsmith, upgrades), and all of
-them can be fortified further with things you build.
+**Home levels (1–10).** Your stash house earns home XP from:
+
+| Source | Home XP |
+| --- | --- |
+| Installing upgrades | 1 per material spent |
+| Building or upgrading structures inside your claim radius | 10 each |
+| Uploading intel at home | 20 per drive |
+| Just holding it | 60 per hour |
+
+Each level adds stash slots (+4/level), door/lock/flag strength (+12%/level), claim radius
+(20 m → 65 m) and build allowance (40 → 130 structures). Higher **upgrade tiers need home
+levels**: steel door and alarm at 2, generator and workbench at 3, blast door at 4, 50 m alarm at 5,
+60-slot storage and 30/h generator at 6, vault door at 7, 60/h generator at 9.
 
 ## Building (DayZ-style)
 

@@ -1,8 +1,10 @@
 # Deadzone (working title)
 
-A prototype **third-person shooter** set in one **persistent, always-PvP 8 × 8 km open world** (PUBG-sized),
-with mountains, forest, desert, cities, lakes and a coastline, natural homes (caves, rock formations,
-giant tree huts, boathouses) and **DayZ-style base building**.
+A prototype **third-person shooter** set in one **persistent, always-PvP 8 × 8 km open world**
+modelled on the real area within 30 miles of **Bristol, Florida**: real towns, the Apalachicola,
+Chipola and Ochlockonee rivers, Lake Seminole and Lake Talquin, the real highways and their bridges,
+the Torreya bluffs and the Apalachicola National Forest. Stash houses are **claimed with a claim
+marker** (a room, house, cave, vehicle or open ground) and **level up**, and there's **DayZ-style base building**.
 
 - **Level-based progression, not random drops.** You earn XP by playing: time alive in the zone,
   kills (players are worth more, especially high-level ones), breaching stash houses, building gear.

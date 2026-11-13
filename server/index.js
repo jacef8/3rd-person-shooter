@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
-  generateMap, mapChecksum, moveWithCollision, HOME_KINDS, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
+  generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
 } from '../shared/world.js';
 import {
@@ -23,6 +23,7 @@ import {
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, investedCost, placementProblem } from '../shared/building.js';
+import { CLAIM, HOME_XP, homeLevel, homePerks } from '../shared/claims.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -38,7 +39,7 @@ const PACK_SIZE = 12;
 const DOOR_HP = Number(process.env.DOOR_HP || 1500);
 const LOOT_RESPAWN_MS = 5 * 60_000;
 const BAG_LIFETIME_MS = 30 * 60_000;
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const SQUAD_MAX = 4;
 const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone'];   // carried; all drop on death, all stealable
 const CAMO_REVEAL_DIST = 9;
@@ -106,8 +107,9 @@ const uid = (p) => `${p}${nextId++}`;
 let nextDropAt = Date.now() + Math.min(SUPPLY_EVERY_MS, 2 * 60_000);
 
 // ---------------------------------------------------------------- world queries
-function doorMax(houseId) { return DOOR_HP * UPGRADES.door.tiers[db.houses[houseId].upg.door].hp; }
-function stashCap(houseId) { return UPGRADES.storage.tiers[db.houses[houseId].upg.storage].slots; }
+const perksOf = (store) => homePerks(homeLevel(store.hxp || 0));
+function doorMax(houseId) { const h = db.houses[houseId]; return DOOR_HP * UPGRADES.door.tiers[h.upg.door].hp * (h.owner ? perksOf(h).doorMul : 1) * (map.houses[houseId].kind === 'vehicle' ? 0.8 : 1); }
+function stashCap(houseId) { const h = db.houses[houseId]; return UPGRADES.storage.tiers[h.upg.storage].slots + perksOf(h).storage; }
 function doorBox(houseId) {
   const h = db.houses[houseId];
   if (h.doorHp <= 0 || h.doorOpen) return null;
@@ -176,7 +178,7 @@ function starterLoadout() {
 const makeTool = (tool) => ({ id: uid('t'), kind: 'tool', tool, name: TOOLS[tool].name });
 function newCharacter(name) {
   const kit = starterLoadout();
-  kit.inv.pack.push(makeTool('hammer'), makeTool('hatchet'));
+  kit.inv.pack.push(makeTool('hammer'), makeTool('hatchet'), makeMarker());
   return {
     name, x: 0, z: 0, yaw: 0, hp: 100, armor: 0, ...kit, parts: 60, tech: 20, wood: 20, dead: false, kills: 0, xp: 0,
     comms: 0, field: [], discovered: [], contracts: [], needsDeploy: true,
@@ -185,6 +187,78 @@ function newCharacter(name) {
 function ownedHouse(token) {
   const e = Object.entries(db.houses).find(([, h]) => h.owner === token);
   return e ? Number(e[0]) : null;
+}
+const makeMarker = () => ({ id: uid('m'), kind: 'marker', name: 'Claim marker' });
+const hasMarker = (p) => p.inv.pack.some((i) => i.kind === 'marker');
+const takeMarker = (p) => { const i = p.inv.pack.findIndex((x) => x.kind === 'marker'); if (i >= 0) p.inv.pack.splice(i, 1); return i >= 0; };
+/**
+ * Your stash house claim: a home/room/vehicle (kind 'home') or a claim flag on open ground
+ * (kind 'flag'). Both hold the stash, gunsmith, upgrades and home level.
+ */
+function claimOfToken(token) {
+  const hid = ownedHouse(token);
+  if (hid !== null) { const h = map.houses[hid]; return { kind: 'home', id: hid, store: db.houses[hid], x: h.crate.x, z: h.crate.z, def: h }; }
+  for (const st of structs.values()) if (st.type === 'flag' && st.owner === token) return { kind: 'flag', id: st.id, store: st, x: st.x, z: st.z };
+  return null;
+}
+const claimOf = (p) => claimOfToken(p.token);
+function claimName(c) {
+  if (!c) return null;
+  if (c.kind === 'flag') return 'Claim flag';
+  const h = c.def;
+  const base = h.kind === 'vehicle' ? VEHICLE_TYPES[h.vtype].name : HOME_KINDS[h.kind].name;
+  return `${base} — ${homeLabel(c.id).replace(/^.*? (in|near) /, '')}`;
+}
+function claimCap(c) { return c.kind === 'home' ? stashCap(c.id) : UPGRADES.storage.tiers[c.store.upg.storage].slots - 6 + perksOf(c.store).storage; }
+function flagMax(st) { return CLAIM.flagHp * UPGRADES.door.tiers[st.upg?.door || 0].hp * perksOf(st).doorMul; }
+function refreshClaim(c) { if (c) refreshContainerViewers(c.kind === 'home' ? 'stash' : 'crate', c.id); }
+/** Home XP; announces home level-ups to the owner. */
+function addHomeXp(c, n, reason) {
+  if (!c || !n) return;
+  const before = homeLevel(c.store.hxp || 0);
+  c.store.hxp = (c.store.hxp || 0) + n;
+  const after = homeLevel(c.store.hxp);
+  const owner = onlineByToken(c.store.owner);
+  if (owner) {
+    send(owner.ws, { t: 'homexp', amount: n, reason });
+    if (after > before) { send(owner.ws, { t: 'homeLevel', level: after }); feed(`${owner.name}'s stash house reached level ${after}`); }
+    dirty(owner);
+  }
+  if (after > before && c.kind === 'home') db.houses[c.id].doorHp = Math.min(doorMax(c.id), db.houses[c.id].doorHp * (homePerks(after).doorMul / homePerks(before).doorMul));
+}
+function claimSummary(p) {
+  const c = claimOf(p);
+  if (!c) return null;
+  const xp = c.store.hxp || 0, lvl = homeLevel(xp);
+  return { kind: c.kind, id: c.id, name: claimName(c), x: c.x, z: c.z, level: lvl, xp: Math.floor(xp), perks: homePerks(lvl) };
+}
+function startClaim(p, houseId) {
+  if (claimOf(p)) return toast(p, 'You already have a stash house. Abandon it (from its stash menu) before claiming another.');
+  if (!hasMarker(p)) return toast(p, 'Unclaimed — plant a claim marker here to make it your stash house (craft one, find one, or buy one from a Contact)');
+  startHack(p, 'claim', houseId);
+}
+function finishClaim(p, houseId) {
+  const h = db.houses[houseId];
+  if (h.owner) return send(p.ws, { t: 'hack', done: true, text: 'Someone else claimed it first' });
+  if (claimOf(p) || !takeMarker(p)) return send(p.ws, { t: 'hack', done: true, text: 'Claim failed' });
+  // Whatever the last owner left behind stays in the stash.
+  Object.assign(h, { owner: p.token, ownerName: p.name, hxp: 0, upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 }, doorOpen: false });
+  h.doorHp = doorMax(houseId);
+  p.houseId = houseId;
+  feed(`${p.name} claimed a ${homeLabel(houseId)}`);
+  send(p.ws, { t: 'hack', done: true, text: `Claimed! This ${claimName(claimOf(p))} is now your stash house (level 1).` });
+  send(p.ws, { t: 'claimed' });
+  dirty(p);
+}
+function abandonClaim(p) {
+  const c = claimOf(p);
+  if (!c || !atOwnStash(p)) return toast(p, 'Abandon your stash house from inside it');
+  if (c.kind === 'home') { Object.assign(c.store, { owner: null, ownerName: null, hxp: 0 }); p.houseId = null; }
+  else removeStruct(c.store, false);
+  toast(p, 'Stash house abandoned — anything left inside is up for grabs');
+  p.openContainer = null;
+  send(p.ws, { t: 'container', closed: true });
+  dirty(p);
 }
 function maxHp() { return 100; }
 function maxArmor(p) { return armorStats(p.inv.armor).armor; }
@@ -228,7 +302,7 @@ function privateState(p) {
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
     xp: p.xp, level: level(p), ...Object.fromEntries(RESOURCES.map((r) => [r, p[r] || 0])), comms: p.comms,
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
-    reloading: p.reloadUntil > Date.now(), houseId: p.houseId,
+    reloading: p.reloadUntil > Date.now(), houseId: ownedHouse(p.token), claim: claimSummary(p),
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
   };
@@ -391,8 +465,8 @@ function tickSensors(now) {
 function startHack(p, kind, id, extra = {}) {
   const now = Date.now();
   let src;
-  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack') {
-    const ms = kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
+  if (kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim') {
+    const ms = kind === 'claim' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : kind === 'gatehack' ? HACK_MS.door : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
     if (kind === 'raid' || kind === 'gatehack') {
@@ -436,6 +510,7 @@ function tickHacks(now) {
     if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
     if (now < h.until) continue;
     p.hack = null;
+    if (h.kind === 'claim') { finishClaim(p, h.id); continue; }
     if (h.kind === 'harvest') {
       const hv = harvested.get(h.id) || { uses: 0, regrowAt: 0 };
       if (hv.uses >= BUILD.harvest.uses && hv.regrowAt <= now) hv.uses = 0;
@@ -455,6 +530,7 @@ function tickHacks(now) {
       st.hp = Math.max(next.hp * frac, next.hp * 0.5);
       if (st.stage === 1 && stageDef(st).material !== 'frame') st.hp = next.hp;
       award(p, 15, `Built ${next.name}`);
+      homeBuildXp(p, st, `Built ${next.name}`);
       send(p.ws, { t: 'hack', done: true, text: `${next.name} complete` });
       if (PIECES[st.type].container) refreshContainerViewers('crate', st.id);
     } else if (h.kind === 'raid') {
@@ -904,8 +980,14 @@ function handleBuild(p, msg) {
     return;
   }
   if (!hasTool(p, 'hammer')) return toast(p, 'You need a hammer to build');
+  const myClaim = claimOf(p);
+  if (def.claim) {
+    if (myClaim) return toast(p, 'You already have a stash house. Abandon it before planting a claim flag.');
+    if (!hasMarker(p)) return toast(p, 'A claim flag needs a claim marker');
+  }
+  const cap = homePerks(myClaim ? homeLevel(myClaim.store.hxp) : 1).buildCap;
   const mine = [...structs.values()].filter((o) => o.owner === p.token).length;
-  if (mine >= BUILD.maxPerPlayer) return toast(p, `Build limit reached (${BUILD.maxPerPlayer})`);
+  if (mine >= cap) return toast(p, `Build limit reached (${cap}) — level up your home for more`);
   const problem = placementProblem(buildWorld, msg.piece, x, z, rot, p);
   if (problem) return toast(p, problem);
   const stage0 = def.stages[0];
@@ -914,20 +996,35 @@ function handleBuild(p, msg) {
   const y0 = Math.min(...[[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].map(([a, c]) => terrain.height(a, c))) - 0.15;
   const st = { id: 's' + crypto.randomBytes(5).toString('hex'), type: msg.piece, x, z, rot, y0, stage: 0, hp: stage0.hp, owner: p.token, ownerName: p.name, open: false };
   if (def.container) Object.assign(st, { items: [], ...Object.fromEntries(RESOURCES.map((r) => [r, 0])) });
+  if (def.claim) {
+    takeMarker(p);
+    Object.assign(st, { hxp: 0, upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 } });
+    st.hp = flagMax(st);
+    feed(`${p.name} planted a claim flag`);
+    send(p.ws, { t: 'claimed' });
+  }
   db.structures.push(st);
   indexStruct(st, true);
   award(p, 10, `Built ${stage0.name}`);
+  homeBuildXp(p, st, `Built ${stage0.name}`);
   dirty(p);
 }
 
+/** Building inside your claim radius levels your home. */
+function homeBuildXp(p, st, reason) {
+  const c = claimOf(p);
+  if (!c || st.type === 'flag') return;
+  if (Math.hypot(st.x - c.x, st.z - c.z) <= homePerks(homeLevel(c.store.hxp)).radius) addHomeXp(c, HOME_XP.build, reason);
+}
 function damageStruct(st, dmg, by) {
   if (!structs.has(st.id)) return;
   st.hp -= dmg;
   const owner = onlineByToken(st.owner);
   if (owner && by !== owner && (!st.alertedAt || Date.now() - st.alertedAt > 20_000)) { st.alertedAt = Date.now(); toast(owner, `⚠ Your ${stageDef(st).name.toLowerCase()} is under attack${by ? ` by ${by.name}` : ''}!`); }
   if (st.hp > 0) return;
+  if (st.type === 'flag') { feed(`${st.ownerName}'s claim flag was destroyed`); if (owner) toast(owner, '⚠ Your claim flag was destroyed — you no longer have a stash house'); }
   removeStruct(st, true);
-  if (by && !by.isBot && st.owner !== by.token) award(by, 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
+  if (by && !by.isBot && st.owner !== by.token) award(by, st.type === 'flag' ? 250 : 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
 }
 function removeStruct(st, destroyed) {
   indexStruct(st, false);
@@ -982,13 +1079,13 @@ function craft(p, msg) {
   if (level(p) < def.level) return toast(p, `${def.name} needs level ${def.level}`);
   if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
   if (!spend(p, def.cost, store)) return toast(p, `Needs ${costText(def.cost)}`);
-  p.inv.pack.push(msg.item === 'charge' ? { id: uid('c'), kind: 'charge', name: 'Breach Charge' } : makeTool(msg.item));
+  p.inv.pack.push(msg.item === 'charge' ? { id: uid('c'), kind: 'charge', name: 'Breach Charge' } : msg.item === 'marker' ? makeMarker() : makeTool(msg.item));
   toast(p, `Crafted ${def.name}`);
   dirty(p);
   if (p.openContainer) refreshContainerViewers(p.openContainer.kind, p.openContainer.id);
 }
 function craftStore(p) {
-  if (atOwnStash(p)) return db.houses[p.houseId];
+  if (atOwnStash(p)) return claimOf(p).store;
   const oc = p.openContainer;
   if (oc?.kind === 'crate') { const st = structs.get(oc.id); if (st && st.owner === p.token && nearContainer(p, 'crate', st.id)) return st; }
   return null;
@@ -1026,13 +1123,16 @@ function containerView(p, kind, id) {
     const mine = h.owner === p.token;
     const squad = !mine && !!h.owner && tokenInSquadWith(p, h.owner);
     const title = mine ? 'Your stash' : `${h.ownerName || 'Unclaimed'}'s stash${squad ? ' (squad)' : ''}`;
-    return { t: 'container', kind, id, title, items: h.items, ...Object.fromEntries(RESOURCES.map((r) => [r, h[r] || 0])), ammo: 0, canPut: mine || squad, cap: stashCap(id), gunsmith: mine, bank: mine, craft: mine, upg: mine ? h.upg : null };
+    return { t: 'container', kind, id, title, items: h.items, ...Object.fromEntries(RESOURCES.map((r) => [r, h[r] || 0])), ammo: 0, canPut: mine || squad, cap: stashCap(id), gunsmith: mine, bank: mine, craft: mine, upg: mine ? h.upg : null, home: mine ? claimSummary(p) : null };
   }
   if (kind === 'crate') {
     const st = structs.get(id);
     if (!st) return { t: 'container', closed: true };
     const mine = canManage(p, st);
-    return { t: 'container', kind, id, title: `${st.ownerName}'s ${stageDef(st).name.toLowerCase()}${mine ? '' : ' (not yours)'}`, items: st.items, ...Object.fromEntries(RESOURCES.map((r) => [r, st[r] || 0])), canPut: mine, cap: stageDef(st).slots, craft: st.owner === p.token, upgradable: mine && !!PIECES.crate.stages[st.stage + 1] };
+    const own = st.owner === p.token, flag = st.type === 'flag';
+    const cap = flag ? claimCap({ kind: 'flag', store: st }) : stageDef(st).slots;
+    return { t: 'container', kind, id, title: flag ? (own ? 'Your claim flag (stash)' : `${st.ownerName}'s claim flag`) : `${st.ownerName}'s ${stageDef(st).name.toLowerCase()}${mine ? '' : ' (not yours)'}`, items: st.items, ...Object.fromEntries(RESOURCES.map((r) => [r, st[r] || 0])), canPut: mine, cap, craft: own, upgradable: mine && !!PIECES[st.type].stages[st.stage + 1],
+      gunsmith: flag && own, bank: flag && own, upg: flag && own ? st.upg : null, home: flag && own ? claimSummary(p) : null };
   }
   const bag = db.bags.find((b) => b.id === id);
   return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ...Object.fromEntries(RESOURCES.map((r) => [r, bag[r] || 0])), canPut: false, cap: 0 } : { t: 'container', closed: true };
@@ -1040,6 +1140,7 @@ function containerView(p, kind, id) {
 function nearContainer(p, kind, id) {
   if (kind === 'stash') { const h = map.houses[id]; return h && Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6; }
   if (kind === 'crate') { const st = structs.get(id); return st && boxDist(structBox(st), p.x, p.z) < INTERACT_RANGE + 0.6; }
+  if (kind === 'stash' && !map.houses[id]) return false;
   const bag = db.bags.find((b) => b.id === id);
   return bag && Math.hypot(bag.x - p.x, bag.z - p.z) < INTERACT_RANGE + 0.6;
 }
@@ -1079,11 +1180,20 @@ function interact(p) {
     spawnReadyAt.set(it.ref.spawnIndex, Date.now() + LOOT_RESPAWN_MS);
     award(p, XP.pickup, it.ref.item.name);
     dirty(p);
+  } else if (it.kind === 'stash' && !db.houses[it.ref.id].owner) {
+    return startClaim(p, it.ref.id);
+  } else if (it.kind === 'stash' && map.houses[it.ref.id].kind === 'vehicle' && !tokenInSquadWith(p, db.houses[it.ref.id].owner)) {
+    // Vehicles are locked: the stash inside is only reachable once the lock is broken or hacked.
+    const h = db.houses[it.ref.id];
+    if (h.doorHp > 0 && !h.doorOpen) return toast(p, `${h.ownerName}'s ${VEHICLE_TYPES[map.houses[it.ref.id].vtype].name.toLowerCase()} is locked — break the door, hack it, or blow it`);
+    p.openContainer = { kind: 'stash', id: it.ref.id };
+    send(p.ws, containerView(p, 'stash', it.ref.id));
   } else if (it.kind === 'bag' || it.kind === 'stash') {
     p.openContainer = { kind: it.kind, id: it.ref.id };
     send(p.ws, containerView(p, it.kind, it.ref.id));
   } else if (it.kind === 'door') {
     const h = db.houses[it.ref.id];
+    if (!h.owner) return startClaim(p, it.ref.id);
     const allowed = h.owner === p.token || (h.owner && tokenInSquadWith(p, h.owner));
     if (!allowed) {
       if (h.doorHp > 0 && !h.doorOpen) return startHack(p, 'door', it.ref.id);
@@ -1155,16 +1265,18 @@ function containerAction(p, msg) {
     if (kind === 'crate' && !canManage(p, store)) return;
     if (RESOURCES.includes(msg.res)) { store[msg.res] = (store[msg.res] || 0) + p[msg.res]; p[msg.res] = 0; dirty(p); return refreshContainerViewers(kind, id); }
     const cap = kind === 'stash' ? stashCap(id) : stageDef(store).slots;
-    if (store.items.length >= cap) return toast(p, kind === 'stash' ? 'Stash full — upgrade storage' : 'Crate full — reinforce it for more room');
+    if (store.items.length >= (kind === 'crate' && store.type === 'flag' ? claimCap({ kind: 'flag', store }) : cap)) return toast(p, kind === 'stash' ? 'Stash full — upgrade storage or level up your home' : 'Crate full — reinforce it for more room');
     const idx = p.inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0 || p.inv.pack[idx].kind === 'package') return;
     store.items.push(p.inv.pack.splice(idx, 1)[0]);
   } else if (msg.action === 'bank') {
-    if (kind !== 'stash' || db.houses[id].owner !== p.token) return;
+    // Intel is the extraction loop: worthless until you get it home, lost if you die on the way.
+    if (!atOwnStash(p) || store !== claimOf(p)?.store) return;
     const n = p.intel + (store.intel || 0);
     if (!n) return toast(p, 'No intel to bank');
     p.intel = 0; store.intel = 0;
     award(p, n * XP.intelBanked, `Banked ${n} intel`, true);
+    addHomeXp(claimOf(p), n * HOME_XP.intel, `Uploaded ${n} intel`);
     feed(`${p.name} uploaded ${n} intel`);
   }
   if (kind === 'bag' && !store.items.length && !RESOURCES.some((r) => store[r])) db.bags = db.bags.filter((b) => b !== store);
@@ -1174,20 +1286,20 @@ function containerAction(p, msg) {
 
 // ---------------------------------------------------------------- stash house: gunsmith + upgrades
 function atOwnStash(p) {
-  if (p.houseId === null || p.houseId === undefined || p.dead) return false;
-  const h = map.houses[p.houseId];
-  return Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6;
+  const c = claimOf(p);
+  if (!c || p.dead) return false;
+  if (c.kind === 'flag') return boxDist(structBox(c.store), p.x, p.z) < INTERACT_RANGE + 0.6;
+  return Math.hypot(c.x - p.x, c.z - p.z) < INTERACT_RANGE + 0.6;
 }
 function findOwnedWeapon(p, itemId) {
   const inv = p.inv;
   for (const slot of ['primary', 'secondary']) if (inv[slot]?.id === itemId) return inv[slot];
   const inPack = inv.pack.find((i) => i.id === itemId);
   if (inPack) return inPack;
-  if (p.houseId !== null) return db.houses[p.houseId].items.find((i) => i.id === itemId) || null;
-  return null;
+  return claimOf(p)?.store.items.find((i) => i.id === itemId) || null;
 }
 /** Pay a cost from carried resources first, then the stash/crate you're at. Commendations are personal. */
-function spend(p, cost, store = db.houses[p.houseId]) {
+function spend(p, cost, store = claimOf(p)?.store || {}) {
   const stash = store;
   for (const [k, v] of Object.entries(cost)) {
     const have = k === 'comms' ? p.comms : p[k] + (stash[k] || 0);
@@ -1226,9 +1338,10 @@ function gunsmithAction(p, msg) {
     if (!def) return;
     const label = isArmor ? def.name : def.label;
     if (!isUnlocked(def, msg.type, p)) return toast(p, def.field && level(p) >= def.level ? `${label} is field gear — requisition it from a Contact` : `${label} unlocks at level ${def.level}`);
-    const stash = db.houses[p.houseId];
+    const c = claimOf(p);
+    const stash = c.store;
     const roomInPack = p.inv.pack.length < PACK_SIZE;
-    if (!roomInPack && stash.items.length >= stashCap(p.houseId)) return toast(p, 'Backpack and stash are full');
+    if (!roomInPack && stash.items.length >= claimCap(c)) return toast(p, 'Backpack and stash are full');
     const cost = Math.round(def.cost * (1 - UPGRADES.workbench.tiers[stash.upg.workbench].discount));
     if (!spend(p, { parts: cost })) return toast(p, `Needs ${cost} parts`);
     const item = isArmor ? makeArmor(msg.type) : makeWeapon(msg.type);
@@ -1237,31 +1350,43 @@ function gunsmithAction(p, msg) {
     toast(p, `Built ${item.name}${roomInPack ? '' : ' (sent to stash)'}`);
   } else return;
   dirty(p);
-  refreshContainerViewers('stash', p.houseId);
+  refreshClaim(claimOf(p));
 }
 function upgradeAction(p, msg) {
   if (!atOwnStash(p)) return toast(p, 'Upgrades are installed at your stash house');
   const track = UPGRADES[msg.track];
   if (!track) return;
-  const h = db.houses[p.houseId];
+  const c = claimOf(p);
+  const h = c.store;
   const next = track.tiers[h.upg[msg.track] + 1];
   if (!next) return toast(p, 'Already fully upgraded');
-  if (level(p) < next.level) return toast(p, `Requires level ${next.level}`);
-  if (!spend(p, next.cost)) return toast(p, `Not enough materials: ${Object.entries(next.cost).map(([k, v]) => `${v} ${k}`).join(', ')}`);
-  const before = doorMax(p.houseId);
+  if (homeLevel(h.hxp) < next.home) return toast(p, `Needs home level ${next.home} — level your stash house up first`);
+  if (!spend(p, next.cost, h)) return toast(p, `Not enough materials: ${Object.entries(next.cost).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+  const before = c.kind === 'home' ? doorMax(c.id) : flagMax(h);
   h.upg[msg.track]++;
-  if (msg.track === 'door' && h.doorHp > 0) h.doorHp += doorMax(p.houseId) - before;
+  if (msg.track === 'door') {
+    if (c.kind === 'home' && h.doorHp > 0) h.doorHp += doorMax(c.id) - before;
+    if (c.kind === 'flag') h.hp += flagMax(h) - before;
+  }
   award(p, 100, `Stash upgrade: ${track.name}`);
+  addHomeXp(c, Object.values(next.cost).reduce((a, b) => a + b, 0) * HOME_XP.perMaterial, `Installed ${track.name}`);
   toast(p, `Installed: ${track.name} — ${next.label}`);
   dirty(p);
-  refreshContainerViewers('stash', p.houseId);
+  refreshClaim(c);
 }
 function tickHouses(now) {
-  for (const [idStr, h] of Object.entries(db.houses)) {
-    const id = Number(idStr);
-    if (!h.owner) continue;
-    const max = doorMax(id);
-    if (h.doorHp > 0 && h.doorHp < max && now - (h.lastDamaged || 0) > 60_000) h.doorHp = Math.min(max, h.doorHp + max * 0.02);
+  const claims = [];
+  for (const [idStr, h] of Object.entries(db.houses)) if (h.owner) claims.push({ kind: 'home', id: Number(idStr), store: h, x: map.houses[idStr].x, z: map.houses[idStr].z });
+  for (const st of structs.values()) if (st.type === 'flag') claims.push({ kind: 'flag', id: st.id, store: st, x: st.x, z: st.z });
+  for (const c of claims) {
+    const h = c.store;
+    if (c.kind === 'home') {
+      const max = doorMax(c.id);
+      if (h.doorHp > 0 && h.doorHp < max && now - (h.lastDamaged || 0) > 60_000) h.doorHp = Math.min(max, h.doorHp + max * 0.02);
+    }
+    // Home XP just for holding it.
+    h.hxpAcc = (h.hxpAcc || 0) + HOME_XP.perHour / 3600;
+    if (h.hxpAcc >= 1) { const n = Math.floor(h.hxpAcc); h.hxpAcc -= n; addHomeXp(c, n, 'Holding your home'); }
     // Generator: produces into the stash (where raiders can take it), even while you're offline.
     const rate = UPGRADES.generator.tiers[h.upg.generator].rate;
     if (rate) {
@@ -1279,15 +1404,14 @@ function tickHouses(now) {
     if (!radius) continue;
     const owner = onlineByToken(h.owner);
     if (!owner) continue;
-    const house = map.houses[id];
     for (const o of players.values()) {
       if (o.dead || tokenInSquadWith(o, h.owner) || camoActive(o)) continue;
-      if (Math.hypot(o.x - house.x, o.z - house.z) > radius) continue;
+      if (Math.hypot(o.x - c.x, o.z - c.z) > radius) continue;
       expose(o, squadKey(owner), 5000);
       if (now - (h.lastAlarm || 0) > 20_000) {
         h.lastAlarm = now;
         toast(owner, `🚨 Perimeter alarm: ${o.name} is at your stash house`);
-        send(owner.ws, { t: 'alert', x: house.x, z: house.z, text: 'Perimeter alarm' });
+        send(owner.ws, { t: 'alert', x: c.x, z: c.z, text: 'Perimeter alarm' });
       }
     }
   }
@@ -1334,15 +1458,18 @@ function invAction(p, msg) {
 /** Where a player may enter the map from. */
 function homeLabel(id) {
   const h = map.houses[id];
-  if (h.townId !== null) return `stash house in ${map.towns[h.townId].name}`;
+  const kindName = h.kind === 'vehicle' ? VEHICLE_TYPES[h.vtype].name : HOME_KINDS[h.kind].name;
+  if (h.townId !== null) return `${kindName.toLowerCase()} in ${map.towns[h.townId].name}`;
   const near = map.towns.reduce((a, t) => (!a || Math.hypot(t.x - h.x, t.z - h.z) < Math.hypot(a.x - h.x, a.z - h.z) ? t : a), null);
-  return `${HOME_KINDS[h.kind].name.toLowerCase()} near ${near.name}`;
+  return `${kindName.toLowerCase()} near ${near.name}`;
 }
 function deployOptions(p) {
   const own = ownedHouse(p.token);
+  const c = claimOf(p);
   return {
     houseId: own,
-    freeHouses: own === null ? map.houses.filter((h) => !db.houses[h.id].owner).map((h) => h.id) : [],
+    claim: c ? { kind: c.kind, id: c.id, x: c.x, z: c.z, name: claimName(c) } : null,
+    towns: p.deploying ? map.contacts.map((ct) => ct.id) : [],
     contacts: p.discovered,
     lzs: map.landingZones.map((l) => l.id),
     crates: [...structs.values()].filter((st) => st.owner === p.token && PIECES[st.type].container).map((st) => ({ id: st.id, x: st.x, z: st.z })),
@@ -1355,22 +1482,17 @@ function placeAt(p, x, z) {
 }
 function handleDeploy(p, msg) {
   if (!p.dead && !p.deploying) return;
-  const own = ownedHouse(p.token);
+  const claim = claimOf(p);
   let at = null;
   if (msg.kind === 'claim') {
-    if (own !== null) return toast(p, 'You already own a stash house');
-    const h = db.houses[msg.id];
-    if (!h || h.owner) return toast(p, 'That stash house is taken');
-    Object.assign(h, freshHouse(), { owner: p.token, ownerName: p.name, upg: h.upg });
-    h.doorHp = doorMax(msg.id);
-    p.houseId = msg.id;
-    at = map.houses[msg.id].crate;
-    feed(`${p.name} claimed a ${homeLabel(msg.id)}`);
-  } else if (msg.kind === 'house') {
-    if (own === null) return;
-    at = map.houses[own].crate;
+    return toast(p, 'Deploy first, then plant your claim marker where you want your stash house');
+  } else if (msg.kind === 'house' || msg.kind === 'home') {
+    if (!claim) return;
+    at = claim.kind === 'flag' ? { x: claim.x, z: claim.z + 1.6 } : { x: claim.x, z: claim.z + 1.2 };
   } else if (msg.kind === 'contact') {
-    if (!p.discovered.includes(msg.id)) return;
+    // First deploy: any town. After that: Contacts you've discovered.
+    if (!p.discovered.includes(msg.id) && !p.deploying) return;
+    if (!map.contacts[msg.id]) return;
     at = { x: map.contacts[msg.id].x + 3, z: map.contacts[msg.id].z + 3 };
   } else if (msg.kind === 'crate') {
     const st = structs.get(msg.id);
@@ -1385,14 +1507,14 @@ function handleDeploy(p, msg) {
     Object.assign(p, { hp: 100, armor: 0, ...starterLoadout() });
     p.intel = keepIntel;
   }
-  if (msg.kind === 'house' && db.houses[own].upg.infirmary) {
+  if ((msg.kind === 'house' || msg.kind === 'home') && claim.store.upg.infirmary) {
     p.inv.armor = makeArmor('light');
     p.armor = maxArmor(p);
     p.inv.pack.push(makeConsumable('medkit'), makeConsumable('medkit'));
   }
   p.deploying = false; p.needsDeploy = false; p.dead = false;
   p.protectedUntil = Date.now() + SPAWN_PROTECT_MS;
-  placeAt(p, at.x, at.z + (msg.kind === 'claim' || msg.kind === 'house' ? 1.2 : 0));
+  placeAt(p, at.x, at.z);
   for (const c of p.contracts) instantiateContract(p, c);
   pushContracts(p);
   send(p.ws, { t: 'deployed', kind: msg.kind });
@@ -1448,6 +1570,7 @@ function handleJoin(ws, msg) {
   p.comms ??= 0; p.field ??= []; p.discovered ??= []; p.contracts ??= [];
   p.houseId = ownedHouse(token);
   if (p.houseId !== null) db.houses[p.houseId].ownerName = name;
+  for (const st of structs.values()) if (st.owner === token) st.ownerName = name;
   p.deploying = !!p.needsDeploy;
   if (p.deploying) p.dead = true;
   else if (!p.dead) { const fixed = resolveCircle(p.x, p.z, PLAYER_RADIUS, solidsNear(p.x, p.z, 3), terrain.height(p.x, p.z)); p.x = fixed.x; p.z = fixed.z; }
@@ -1576,7 +1699,18 @@ wss.on('connection', (ws) => {
       case 'closeContainer': p.openContainer = null; return;
       case 'inv': return !p.dead && invAction(p, msg);
       case 'deploy': return handleDeploy(p, msg);
-      case 'respawn': return handleDeploy(p, { kind: ownedHouse(p.token) !== null ? 'house' : 'lz', id: 0 });
+      case 'respawn': return handleDeploy(p, { kind: claimOf(p) ? 'home' : 'lz', id: 0 });
+      case 'abandon': return abandonClaim(p);
+      case 'buyMarker': {
+        const ct = map.contacts[msg.contactId];
+        if (!ct || p.dead || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return;
+        if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+        if (!payCarried(p, CLAIM.markerPrice)) return toast(p, `A claim marker costs ${CLAIM.markerPrice.parts} parts`);
+        p.inv.pack.push(makeMarker());
+        toast(p, 'Bought a claim marker');
+        dirty(p);
+        return;
+      }
       case 'travel': return handleTravel(p, msg);
       case 'gunsmith': return gunsmithAction(p, msg);
       case 'upgrade': return upgradeAction(p, msg);
@@ -1629,10 +1763,10 @@ function snapshotFor(r, views, now) {
     bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp })),
     loot: [...loot.values()].filter((l) => near(l, 140)).map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, name: l.item.name, amount: l.item.amount || 0 })),
     bags: db.bags.filter((b) => near(b, 200)).map((b) => ({ id: b.id, x: b.x, z: b.z, label: b.label })),
-    houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: doorMax(h.id), open: s.doorOpen, owner: s.ownerName, upg: s.upg }; }),
+    houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0 }; }),
     terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
     objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
-    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: stageDef(st).hp, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0 })),
+    structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(st.type === 'flag' ? flagMax(st) : stageDef(st).hp), hl: st.type === 'flag' ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0 })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   };
 }
