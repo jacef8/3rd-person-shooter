@@ -1,4 +1,4 @@
-// Authoritative game server: one persistent, always-live 8 x 8 km open world.
+// Authoritative game server: one persistent, always-live 30 x 30 km open world (real 1:1 Bristol, FL).
 // - Serves the browser client over HTTP(S) and runs the simulation over WebSocket.
 // - Every position, shot, hit, pickup, hack, contract and stash transfer is validated here.
 // - World state (characters, stash houses and their upgrades, dropped bags) persists to disk, so the
@@ -39,7 +39,7 @@ const PACK_SIZE = 12;
 const DOOR_HP = Number(process.env.DOOR_HP || 1500);
 const LOOT_RESPAWN_MS = 5 * 60_000;
 const BAG_LIFETIME_MS = 30 * 60_000;
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 const SQUAD_MAX = 4;
 const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone'];   // carried; all drop on death, all stealable
 const CAMO_REVEAL_DIST = 9;
@@ -53,7 +53,13 @@ const CONTRACT_MS = 60 * 60_000;
 const SUPPLY_EVERY_MS = Number(process.env.SUPPLY_EVERY_MS || 10 * 60_000);
 const SUPPLY_FALL_MS = Number(process.env.SUPPLY_FALL_MS || 60_000);
 
-const map = generateMap(SEED, WORLD_SIZE);
+// Optional real-world data (tools/import-real-data.mjs): every real building / road becomes a map object.
+const REAL_DIR = process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real');
+const readReal = (name) => { try { return JSON.parse(fs.readFileSync(path.join(REAL_DIR, name), 'utf8')); } catch { return null; } };
+const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json') };
+const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.rows, roads: realFiles.roads?.rows });
+// Clients fetch the same files so they generate the identical world.
+const REAL_INFO = (realFiles.structures || realFiles.roads) ? { structures: !!realFiles.structures, roads: !!realFiles.roads } : null;
 const grid = map.grid;
 const terrain = map.terrain;
 const gy = (c) => terrain.height(c.x, c.z);   // ground height under a character
@@ -1577,7 +1583,7 @@ function handleJoin(ws, msg) {
   players.set(p.id, p);
   ws.player = p;
   send(ws, {
-    t: 'welcome', id: p.id, token, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, houseId: p.houseId,
+    t: 'welcome', id: p.id, token, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
     x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, doorBase: DOOR_HP,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
@@ -1663,6 +1669,7 @@ const TLS = process.env.TLS_CERT && process.env.TLS_KEY ? { cert: fs.readFileSyn
 const STATIC = [
   ['/vendor/', path.join(ROOT, 'node_modules', 'three', 'build')],
   ['/shared/', path.join(ROOT, 'shared')],
+  ['/data/real/', REAL_DIR],
   ['/', path.join(ROOT, 'client')],
 ];
 const handler = (req, res) => {
@@ -1822,4 +1829,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 refillLoot(Date.now());
-server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${WORLD_SIZE / 1000} km world, ${map.towns.length} towns, ${map.houses.length} stash houses, ${map.contacts.length} contacts)`));
+server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${WORLD_SIZE / 1000} km world at 1:1, ${map.towns.length} towns, ${map.real.structures ? `${map.real.structures} real buildings, ` : ''}${map.real.roads ? `${map.real.roads} real roads, ` : ''}${map.houses.length} stash houses, ${map.contacts.length} contacts)`));

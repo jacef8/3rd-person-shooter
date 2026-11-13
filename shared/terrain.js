@@ -1,4 +1,4 @@
-// Deterministic terrain + biomes, shared by server and client.
+// Deterministic terrain + biomes, shared by server and client, at real 1:1 scale.
 //
 // The layout follows the real area around Bristol, Florida (see geography.js): the Apalachicola,
 // Chipola and Ochlockonee rivers with their floodplain swamps, Lake Seminole, Lake Talquin, the
@@ -44,7 +44,7 @@ export function createTerrain(seed, size) {
   let flats = [];
   // Bridges/causeways: where highways cross rivers the ground isn't carved away.
   const bridges = [];
-  for (const r of geo.roads) for (const rv of geo.rivers) for (const c of crossings(r.pts, rv.pts)) bridges.push({ ...c, road: r.name, river: rv.name, len: rv.width / 2 + 36 });
+  for (const r of geo.roads) for (const rv of geo.rivers) for (const c of crossings(r.pts, rv.pts)) if (Math.abs(c.x) < half && Math.abs(c.z) < half) bridges.push({ ...c, road: r.name, river: rv.name, len: rv.width / 2 + 60 });
   const apalachicola = geo.rivers[0];
 
   const regionW = (list, x, z) => {
@@ -75,7 +75,7 @@ export function createTerrain(seed, size) {
       if (d < rv.swamp) swamp = Math.max(swamp, smooth((rv.swamp - d) / (rv.swamp * 0.6)));
     }
     for (const lk of geo.lakes) lake = Math.max(lake, lakeDepth(x, z, lk));
-    if (lake > -90) swamp = Math.max(swamp, smooth((lake + 90) / 70) * 0.7);
+    if (lake > -400) swamp = Math.max(swamp, smooth((lake + 400) / 300) * 0.7);
     return { swamp, river, riverW, lake };
   }
 
@@ -83,11 +83,11 @@ export function createTerrain(seed, size) {
    *  desert (sandhill scrub), mountain (Red Hills / Torreya bluffs), sea (river swamp). */
   function biomeW(x, z, w = waterInfo(x, z)) {
     // A little warp so region edges meander.
-    const wx = x + (fbm(x / 600, z / 600, s0 + 7, 2) - 0.5) * 300, wz = z + (fbm(x / 600, z / 600, s0 + 13, 2) - 0.5) * 300;
+    const wx = x + (fbm(x / 3000, z / 3000, s0 + 7, 2) - 0.5) * 2400, wz = z + (fbm(x / 3000, z / 3000, s0 + 13, 2) - 0.5) * 2400;
     let hills = regionW(geo.regions.hills, wx, wz);
     // The bluffs are on the east bank only; the west bank opposite is low floodplain.
     let east = 1;
-    if (hills > 0.05 && w.swamp > 0) { const e = eastOfApalachicola(x, z); if (e.d < 700 && e.side < 0) { east = 0; hills *= smooth((e.d - 300) / 300); } }
+    if (hills > 0.05 && w.swamp > 0) { const e = eastOfApalachicola(x, z); if (e.d < 4000 && e.side < 0) { east = 0; hills *= smooth((e.d - 1800) / 1800); } }
     // Where the hills meet the river (the Torreya bluffs) there's no floodplain swamp.
     const sea = w.swamp * (1 - 0.9 * hills * east);
     const mountain = hills * (1 - sea);
@@ -114,7 +114,8 @@ export function createTerrain(seed, size) {
     // Torreya bluffs: the east bank of the Apalachicola rises steeply where the hills meet it.
     if (b.mountain > 0.2) {
       const e = eastOfApalachicola(x, z);
-      if (e.side > 0 && e.d < 420) h += 30 * b.mountain * smooth((e.d - 45) / 110);
+      // Real Torreya bluffs stand ~45 m over the river within a few hundred metres of the bank.
+      if (e.side > 0 && e.d < 1500) h += 32 * b.mountain * smooth((e.d - 90) / 320);
     }
     // River channels (unless a highway crosses here), lakes.
     let bridged = false;
@@ -125,10 +126,10 @@ export function createTerrain(seed, size) {
     if (!bridged) {
       const hw = w.riverW / 2;
       if (w.river < hw) h = -4 - fbm(x / 60, z / 60, s0 + 11, 1);
-      else if (w.river < hw + 28) h = -4 + (Math.min(h, 3) + 4) * smooth((w.river - hw) / 28);
+      else if (w.river < hw + 40) h = -4 + (Math.min(h, 3) + 4) * smooth((w.river - hw) / 40);
     } else h = Math.max(h, 2.5);
-    if (w.lake > 0) h = Math.min(h, -3 - Math.min(w.lake, 80) * 0.06);
-    else if (w.lake > -30) h = Math.min(h, -3 + (Math.min(h, 3) + 3) * smooth((w.lake + 30) / 30));
+    if (w.lake > 0) h = Math.min(h, -3 - Math.min(w.lake, 200) * 0.03);
+    else if (w.lake > -40) h = Math.min(h, -3 + (Math.min(h, 3) + 3) * smooth((w.lake + 40) / 40));
     return h;
   }
   function roadNear(x, z, name) {

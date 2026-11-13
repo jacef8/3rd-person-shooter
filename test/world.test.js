@@ -1,6 +1,6 @@
 // End-to-end tests for the open-world loop: deploying, contracts, supply drops, stash upgrades,
 // fast travel and death/redeploy. Uses the server's test-only teleport (ALLOW_DEV=1) because an
-// 8 km map is too big to walk in a test.
+// 30 km map is too big to walk in a test.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -27,7 +27,7 @@ const home = map.houses[5];
 const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} }]));
 houses[home.id] = { ...houses[home.id], owner: TOK_Q, ownerName: 'Quinn', hxp: 300 };
 const w = makeWeapon('carbine');
-fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 6, size: 8000, houses, bags: [], characters: {
+fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 7, size: 30000, houses, bags: [], characters: {
   [TOK_Q]: { name: 'Quinn', x: home.crate.x, z: home.crate.z + 1.2, yaw: 0, hp: 100, armor: 0, inv: { primary: w, secondary: null, armor: null, pack: [] },
     ammo: 300, mags: { [w.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), parts: 100, tech: 50, intel: 0, salvage: 0, comms: 0,
     field: [], discovered: [], contracts: [] },
@@ -45,7 +45,7 @@ function conn(name, token) {
 
 test('open world loop: deploy, contracts, supply drop, upgrades, fast travel, death', async (t) => {
   const proc = spawn(process.execPath, ['server/index.js'], {
-    env: { ...process.env, PORT, DATA_FILE: FILE, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '1500', SUPPLY_FALL_MS: '200' },
+    env: { ...process.env, REAL_DATA: '0', PORT, DATA_FILE: FILE, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '1500', SUPPLY_FALL_MS: '200' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   t.after(() => proc.kill('SIGKILL'));
@@ -56,7 +56,7 @@ test('open world loop: deploy, contracts, supply drop, upgrades, fast travel, de
   await until(() => nina.welcome);
   assert.ok(nina.welcome.firstDeploy);
   assert.equal(nina.welcome.deploy.claim, null);
-  assert.ok(nina.welcome.deploy.towns.length >= 15, 'first deploy offers the real towns');
+  assert.ok(nina.welcome.deploy.towns.length >= 6, 'first deploy offers the real towns');
   // Deploy into a town, then claim a free house by planting the starter claim marker.
   nina.send({ t: 'deploy', kind: 'contact', id: 0 });
   await nina.got((m) => m.t === 'deployed');

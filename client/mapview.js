@@ -26,7 +26,7 @@ export function buildMapBase(map, px = 1400) {
   const k = px / map.size;
   const X = (x) => (x + map.half) * k, Z = (z) => (z + map.half) * k;
   // Terrain: sample a coarse grid and scale it up smoothly.
-  const res = Math.round(px / 5);
+  const res = Math.round(px / 6);
   const tc = Object.assign(document.createElement('canvas'), { width: res, height: res });
   const tg = tc.getContext('2d');
   const img = tg.createImageData(res, res);
@@ -39,8 +39,9 @@ export function buildMapBase(map, px = 1400) {
   tg.putImageData(img, 0, 0);
   g.imageSmoothingEnabled = true;
   g.drawImage(tc, 0, 0, px, px);
-  g.strokeStyle = COL.road; g.lineWidth = Math.max(2, 8 * k);
-  for (const r of map.roads) { g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke(); }
+  g.strokeStyle = COL.road; g.lineCap = 'round';
+  // Minor roads first, highways on top.
+  for (const r of [...map.roads].sort((a, b) => (a.width || 12) - (b.width || 12))) { g.lineWidth = Math.max((r.width || 12) >= 10 ? 2 : 0.8, (r.width || 12) * k); g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke(); }
   for (const t of map.towns) { g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {
     if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
@@ -79,6 +80,17 @@ export function drawMap(canvas, map, base, view, markers) {
   const bk = base.width / map.size;
   const srcX = (view.cx - W / 2 / k + map.half) * bk, srcZ = (view.cz - H / 2 / k + map.half) * bk;
   g.drawImage(base, srcX, srcZ, W / k * bk, H / k * bk, 0, 0, W, H);
+  // Zoomed in past the base image's detail (the map is 30 km across): draw roads and buildings live.
+  if (k > base.width / map.size * 1.5) {
+    const minX = view.cx - W / 2 / k, maxX = view.cx + W / 2 / k, minZ = view.cz - H / 2 / k, maxZ = view.cz + H / 2 / k;
+    g.strokeStyle = COL.road; g.lineCap = 'round';
+    for (const r of map.roadGrid ? map.roadGrid.rect(minX, minZ, maxX, maxZ) : []) { g.lineWidth = Math.max(1, (r.width || 12) * k); g.beginPath(); g.moveTo(sx(r.x1), sz(r.z1)); g.lineTo(sx(r.x2), sz(r.z2)); g.stroke(); }
+    for (const b of map.grid.rect(minX, minZ, maxX, maxZ, [], true)) {
+      if (b.nature || ['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine'].includes(b.type)) continue;
+      g.fillStyle = b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : COL.building;
+      g.fillRect(sx(b.minX), sz(b.minZ), Math.max(1, (b.maxX - b.minX) * k), Math.max(1, (b.maxZ - b.minZ) * k));
+    }
+  }
   g.textAlign = 'center';
   for (const m of markers) {
     const x = sx(m.x), y = sz(m.z);

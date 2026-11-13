@@ -1,19 +1,40 @@
-// Real-world layout: the area within ~30 miles of Bristol, Florida (Liberty County), scaled down
-// to fit the game map. Bristol is the centre; +X is east, +Z is south (the map is drawn north-up).
+// Real-world layout of the area around Bristol, Florida (Liberty County) at real 1:1 scale:
+// one game metre is one real metre. +X is east, +Z is south (the map is drawn north-up).
 //
-// Positions are converted from real latitude/longitude (Wikipedia/GNIS coordinates) at
-// 30 miles = half the map. On the default 8 km map, 1 real mile ≈ 133 game metres.
-// Rivers, lakes, highways and regions are traced from the real geography at the same scale.
+// The full map is 30 x 30 km, centred 5 km east and 1.5 km north of Bristol so it takes in
+// Blountstown, Lake Mystic, Hosford, Telogia, Estiffanulga and Torreya State Park. Smaller test maps
+// crop the same layout around Bristol. Town and landmark positions come from real latitude /
+// longitude (Wikipedia/GNIS). Rivers, lakes, highways and terrain regions were traced at 1 mile =
+// 133.33 m and are scaled up here by REF_TO_REAL.
+//
+// Real buildings and roads are optional: run tools/import-real-data.mjs where the data hosts are
+// reachable and the generator places every structure from data/real/ (see README).
 
 export const ORIGIN = { lat: 30.42556, lon: -84.97722, name: 'Bristol, FL' };
-export const MILES_PER_HALF_MAP = 30;
+export const REAL_SIZE = 30000;                           // metres across the full map
+const CENTRE = { x: 5000, z: -1500 };                     // map centre, metres from Bristol
+const M_PER_MILE = 1609.344;
+export const REF_TO_REAL = M_PER_MILE / (4000 / 30);      // traced reference metres -> real metres
 const MI_PER_DEG_LAT = 69.05;
 const MI_PER_DEG_LON = 69.17 * Math.cos((ORIGIN.lat * Math.PI) / 180);   // computed once at load
 
-/** Real lat/lon -> map metres on the reference 8 km map. */
-export function project(lat, lon, half = 4000) {
-  const k = half / MILES_PER_HALF_MAP;
-  return { x: Math.round((lon - ORIGIN.lon) * MI_PER_DEG_LON * k), z: Math.round(-(lat - ORIGIN.lat) * MI_PER_DEG_LAT * k) };
+/** Map centre (metres from Bristol) for a map of this size: smaller maps stay around Bristol. */
+export function mapCentre(size = REAL_SIZE) {
+  const f = Math.min(1, size / REAL_SIZE);
+  return { x: CENTRE.x * f, z: CENTRE.z * f };
+}
+/** Real lat/lon -> map metres (1:1) for a map of the given size. */
+export function project(lat, lon, size = REAL_SIZE) {
+  const c = mapCentre(size);
+  return {
+    x: Math.round((lon - ORIGIN.lon) * MI_PER_DEG_LON * M_PER_MILE - c.x),
+    z: Math.round(-(lat - ORIGIN.lat) * MI_PER_DEG_LAT * M_PER_MILE - c.z),
+  };
+}
+/** Map metres -> real lat/lon (inverse of project; used by the data importer for the bbox). */
+export function unproject(x, z, size = REAL_SIZE) {
+  const c = mapCentre(size);
+  return { lat: ORIGIN.lat - (z + c.z) / (MI_PER_DEG_LAT * M_PER_MILE), lon: ORIGIN.lon + (x + c.x) / (MI_PER_DEG_LON * M_PER_MILE) };
 }
 
 // Real towns. blocks ~ size by population; county for flavour.
@@ -56,6 +77,8 @@ const LANDMARK_DATA = [
 // east of Wewahitchka. Chipola: from Marianna / Florida Caverns south past Altha, Clarksville and
 // Scotts Ferry, through the Dead Lakes and into the Apalachicola. Ochlockonee: out of Lake Talquin
 // (Jackson Bluff) south along the Liberty County line through the national forest.
+// Real channel widths and floodplain (swamp) widths, metres.
+const RIVER_REAL = { 'Apalachicola River': [140, 1900], 'Chipola River': [45, 800], 'Ochlockonee River': [55, 1000] };
 const RIVER_DATA = [
   { name: 'Apalachicola River', width: 30, swamp: 330, pts: [[901, -2606], [760, -2350], [520, -1900], [260, -1400], [90, -950], [-110, -560], [-280, -160], [-380, 300], [-470, 720], [-540, 1100], [-660, 1600], [-860, 2200], [-1050, 2800], [-1160, 3400], [-1260, 4060]] },
   { name: 'Chipola River', width: 18, swamp: 200, pts: [[-2035, -3620], [-2010, -3000], [-1820, -2300], [-1590, -1400], [-1700, -600], [-1820, -100], [-1600, 500], [-1240, 1190], [-1480, 2000], [-1660, 2500], [-1450, 3000], [-1110, 3320]] },
@@ -89,23 +112,29 @@ const ROAD_DATA = [
 // and Gulf County. Forest = the Apalachicola National Forest flatwoods.
 const REGION_DATA = {
   hills: [[700, -1600, 620, 1], [380, -800, 450, 0.9], [980, -2150, 450, 0.8], [1700, -1500, 900, 0.7], [2700, -1700, 900, 0.75], [3300, -800, 700, 0.6], [-2100, -3450, 650, 0.7]],
-  sandhills: [[700, 2700, 850, 1], [2700, 2300, 700, 0.9], [-2700, 3100, 750, 0.8], [3400, 3500, 650, 0.8]],
-  forest: [[1600, 2200, 2600, 1], [500, 1300, 1300, 0.9], [-2300, 1200, 1100, 0.6], [-3100, -800, 900, 0.5], [3400, 1200, 1000, 0.9]],
+  // The first sandhill patch is the Apalachicola Bluffs & Ravines Preserve just north of Bristol.
+  sandhills: [[250, -330, 230, 1], [1100, 700, 260, 0.8], [700, 2700, 850, 1], [2700, 2300, 700, 0.9], [-2700, 3100, 750, 0.8], [3400, 3500, 650, 0.8]],
+  // Pine plantations and flatwoods between Bristol, Hosford and Telogia.
+  forest: [[1500, 250, 950, 0.85], [700, 600, 500, 0.7], [1600, 2200, 2600, 1], [500, 1300, 1300, 0.9], [-2300, 1200, 1100, 0.6], [-3100, -800, 900, 0.5], [3400, 1200, 1000, 0.9]],
 };
 
-function scalePts(pts, s) { return pts.map(([x, z]) => [x * s, z * s]); }
+const K = REF_TO_REAL;
+function realPts(pts, c) { return pts.map(([x, z]) => [Math.round(x * K - c.x), Math.round(z * K - c.z)]); }
+// Town grid size at 1:1, from the reference size (by population).
+const REAL_BLOCKS = { 3: 5, 4: 7, 5: 9, 6: 11, 8: 13 };
 
-/** Geography for a map of the given size (scaled from the 8 km reference). */
-export function geography(size = 8000) {
-  const half = size / 2, s = half / 4000;
+/** Geography for a map of the given size, in real metres around the map centre. */
+export function geography(size = REAL_SIZE) {
+  const half = size / 2, c = mapCentre(size);
+  const inside = (p, m = 0) => Math.abs(p.x) < half - m && Math.abs(p.z) < half - m;
   return {
-    origin: ORIGIN,
-    towns: TOWN_DATA.map(([name, lat, lon, blocks, county]) => ({ name, ...project(lat, lon, half), blocks, county, real: { lat, lon } })),
-    landmarks: LANDMARK_DATA.map(([name, lat, lon, kind]) => ({ name, kind, ...project(lat, lon, half), real: { lat, lon } })),
-    rivers: RIVER_DATA.map((r) => ({ ...r, width: r.width * Math.max(s, 0.5), swamp: r.swamp * s, pts: scalePts(r.pts, s) })),
-    lakes: LAKE_DATA.map((l) => ({ name: l.name, caps: l.caps.map(([a, b, r]) => [[a[0] * s, a[1] * s], [b[0] * s, b[1] * s], r * s]) })),
-    roads: ROAD_DATA.map((r) => ({ name: r.name, pts: scalePts(r.pts, s) })),
-    regions: Object.fromEntries(Object.entries(REGION_DATA).map(([k, list]) => [k, list.map(([x, z, r, w]) => [x * s, z * s, r * s, w])])),
+    origin: ORIGIN, centre: c,
+    towns: TOWN_DATA.map(([name, lat, lon, blocks, county]) => ({ name, ...project(lat, lon, size), blocks: REAL_BLOCKS[blocks] || blocks, county, real: { lat, lon } })).filter((t) => inside(t, 100)),
+    landmarks: LANDMARK_DATA.map(([name, lat, lon, kind]) => ({ name, kind, ...project(lat, lon, size), real: { lat, lon } })).filter((l) => inside(l, 60)),
+    rivers: RIVER_DATA.map((r) => ({ name: r.name, width: RIVER_REAL[r.name][0], swamp: RIVER_REAL[r.name][1], pts: realPts(r.pts, c) })),
+    lakes: LAKE_DATA.map((l) => ({ name: l.name, caps: l.caps.map(([a, b, r]) => [realPts([a], c)[0], realPts([b], c)[0], Math.round(r * K * (l.name === 'Lake Mystic' ? 0.55 : 1))]) })),
+    roads: ROAD_DATA.map((r) => ({ name: r.name, pts: realPts(r.pts, c) })),
+    regions: Object.fromEntries(Object.entries(REGION_DATA).map(([k, list]) => [k, list.map(([x, z, r, w]) => [x * K - c.x, z * K - c.z, r * K, w])])),
   };
 }
 

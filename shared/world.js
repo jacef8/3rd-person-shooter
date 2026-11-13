@@ -6,10 +6,11 @@
 // + - * / and the seeded RNG (no Math.sin etc., which can differ between JS engines).
 
 import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE } from './terrain.js';
-import { polyDist, lakeDepth } from './geography.js';
+import { polyDist, lakeDepth, segDist, project, REAL_SIZE } from './geography.js';
 export { WATER_LEVEL } from './terrain.js';
 
-export const DEFAULT_WORLD_SIZE = 8000;   // 8 x 8 km, the size of PUBG's Erangel / Miramar
+export const DEFAULT_WORLD_SIZE = REAL_SIZE;   // 30 x 30 km of the real Bristol, FL area at 1:1
+const NATURE_ID = 1e7;                          // ids of lazily generated trees/rocks start here
 export const PLAYER_RADIUS = 0.45;
 export const STAND_HEIGHT = 1.8;
 export const CROUCH_HEIGHT = 1.2;
@@ -34,20 +35,33 @@ export function mulberry32(seed) {
 /**
  * Uniform grid over the XZ plane. Every query that used to scan all boxes (movement collision,
  * line of sight, shots, camera collision, minimap) goes through this, which is what makes an
- * 8 km world with ~10k solid objects cheap.
+ * 30 km world with thousands of buildings and lazily generated forests cheap.
  */
+let STAMP = 0;   // shared by every grid, so an object can sit in more than one grid
 export class SpatialGrid {
   constructor(half, cell = 32) {
     this.half = half;
     this.cell = cell;
     this.n = Math.ceil((half * 2) / cell) + 2;
     this.cells = new Map();
-    this.stamps = new Uint32Array(0);
-    this.stamp = 0;
+    this.loader = null;      // optional lazy content: { tile, fn(tx, tz), done: Set }
   }
   ci(v) { return Math.max(0, Math.min(this.n - 1, Math.floor((v + this.half) / this.cell))); }
+  /** Fill in lazily generated content (countryside trees and rocks) for a tile the first time it's touched. */
+  setLoader(tile, fn) { this.loader = { tile, fn, done: new Set() }; }
+  load(minX, minZ, maxX, maxZ) {
+    const L = this.loader;
+    if (!L) return;
+    const t0 = Math.floor((minX + this.half) / L.tile), t1 = Math.floor((maxX + this.half) / L.tile);
+    const u0 = Math.floor((minZ + this.half) / L.tile), u1 = Math.floor((maxZ + this.half) / L.tile);
+    for (let tx = t0; tx <= t1; tx++) for (let tz = u0; tz <= u1; tz++) {
+      const k = tx * 100000 + tz;
+      if (L.done.has(k)) continue;
+      L.done.add(k);
+      L.fn(tx, tz);
+    }
+  }
   insert(b) {
-    if (b.id >= this.stamps.length) { const s = new Uint32Array(Math.max(b.id + 1, this.stamps.length * 2)); s.set(this.stamps); this.stamps = s; }
     for (let ix = this.ci(b.minX); ix <= this.ci(b.maxX); ix++) {
       for (let iz = this.ci(b.minZ); iz <= this.ci(b.maxZ); iz++) {
         const k = ix * 65536 + iz;
@@ -57,33 +71,35 @@ export class SpatialGrid {
       }
     }
   }
-  /** Boxes overlapping the rectangle. */
-  rect(minX, minZ, maxX, maxZ, out = []) {
-    const s = ++this.stamp;
+  /** Boxes overlapping the rectangle. `noLoad` skips lazy content that isn't generated yet. */
+  rect(minX, minZ, maxX, maxZ, out = [], noLoad = false) {
+    if (!noLoad) this.load(minX, minZ, maxX, maxZ);
+    const s = ++STAMP;
     for (let ix = this.ci(minX); ix <= this.ci(maxX); ix++) {
       for (let iz = this.ci(minZ); iz <= this.ci(maxZ); iz++) {
         const list = this.cells.get(ix * 65536 + iz);
         if (!list) continue;
         for (const b of list) {
-          if (this.stamps[b.id] === s) continue;
-          this.stamps[b.id] = s;
+          if (b._s === s) continue;
+          b._s = s;
           if (b.maxX >= minX && b.minX <= maxX && b.maxZ >= minZ && b.minZ <= maxZ) out.push(b);
         }
       }
     }
     return out;
   }
-  near(x, z, r, out = []) { return this.rect(x - r, z - r, x + r, z + r, out); }
+  near(x, z, r, out = [], noLoad = false) { return this.rect(x - r, z - r, x + r, z + r, out, noLoad); }
   /** Boxes in the grid cells a ray passes through (2D DDA), up to maxDist. */
   ray(ox, oz, dx, dz, maxDist, out = []) {
-    const s = ++this.stamp;
     const c = this.cell;
-    let ix = this.ci(ox), iz = this.ci(oz);
     const len = Math.hypot(dx, dz);
+    if (this.loader) { const f = maxDist * len; this.load(Math.min(ox, ox + dx / (len || 1) * f), Math.min(oz, oz + dz / (len || 1) * f), Math.max(ox, ox + dx / (len || 1) * f), Math.max(oz, oz + dz / (len || 1) * f)); }
+    const s = ++STAMP;
+    let ix = this.ci(ox), iz = this.ci(oz);
     const visit = () => {
       const list = this.cells.get(ix * 65536 + iz);
       if (!list) return;
-      for (const b of list) if (this.stamps[b.id] !== s) { this.stamps[b.id] = s; out.push(b); }
+      for (const b of list) if (b._s !== s) { b._s = s; out.push(b); }
     };
     if (len < 1e-9) { visit(); return out; }
     const ux = dx / len, uz = dz / len;
@@ -126,25 +142,38 @@ export const VEHICLE_TYPES = {
 };
 
 /**
- * Open world laid out like the real area around Bristol, Florida: the real towns at their real
- * relative positions, the Apalachicola / Chipola / Ochlockonee rivers, Lake Seminole, Lake Talquin,
- * the Dead Lakes, the real highways (SR 20, SR 12, SR 65, SR 71, SR 69, SR 267, US 90, I-10) with
- * bridges where they cross the rivers, the Torreya bluffs, the Red Hills, sandhill scrub and the
- * Apalachicola National Forest. Seeded noise fills in the detail. Homes you can claim: town houses,
- * apartment rooms, limestone caves, rock outcrops, hollow cypress trees, river fish camps and
- * abandoned vehicles (RVs, buses, box trucks, houseboats).
+ * Open world laid out on the real area around Bristol, Florida at 1:1 scale (see geography.js):
+ * the real towns at their real positions, the Apalachicola / Ochlockonee rivers and their swamps,
+ * Lake Mystic, the real highways with bridges where they cross the rivers, the Torreya bluffs,
+ * sandhill scrub and the national forest flatwoods. Homes you can claim: town houses, apartment
+ * rooms, limestone caves, rock outcrops, hollow cypress trees, river fish camps and abandoned
+ * vehicles (RVs, buses, box trucks, houseboats).
+ *
+ * `real` is optional imported data (tools/import-real-data.mjs):
+ *   structures: [[lat, lon, width, depth, height, occupancy], ...]   FEMA/ORNL USA Structures
+ *   roads:      [[name, class, [[lat, lon], ...]], ...]               OpenStreetMap
+ * With structures, every real building becomes a map object and the procedural stand-in buildings
+ * (town blocks, farms, roadside homesteads) are left out.
+ *
+ * The countryside's trees, rocks and scrub (hundreds of thousands at real scale) aren't stored:
+ * they're generated per 128 m tile, deterministically, the first time anything looks at that tile.
  */
-export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
+export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const rand = mulberry32(seed);
   const half = size / 2;
   const terrain = createTerrain(seed, size);
   const geo = terrain.geo;
   const boxes = [], houses = [], lootSpawns = [], terminals = [], contacts = [], towns = [], roads = [], campSites = [], landingZones = [];
-  const rects = [];
+  const realStructs = Array.isArray(real.structures) && real.structures.length > 0;
+  const grid = new SpatialGrid(half + 4, 32);
+  const reserved = new SpatialGrid(half + 4, 64);   // areas kept clear: towns, homes, farms, vehicles
+  const roadGrid = new SpatialGrid(half + 4, 64);   // road segments (highways + imported roads)
+  const reserve = (r) => { reserved.insert(r); return r; };
 
   const box = (minX, minZ, maxX, maxZ, h, type = 'building', extra = {}) => {
     const b = { id: boxes.length, minX, minZ, maxX, maxZ, h, y0: 0, type, ...extra };
     boxes.push(b);
+    grid.insert(b);
     return b;
   };
   const ground = (minX, minZ, maxX, maxZ, h, type, extra = {}) => {
@@ -152,23 +181,35 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     const lo = Math.min(...hs), hi = Math.max(...hs);
     return box(minX, minZ, maxX, maxZ, h + (hi - lo) + 0.4, type, { y0: lo - 0.4, ...extra });
   };
-  const inRect = (x, z, pad = 0) => rects.some((r) => x > r.minX - pad && x < r.maxX + pad && z > r.minZ - pad && z < r.maxZ + pad);
-  const freeRect = (minX, minZ, maxX, maxZ, pad = 0) =>
-    minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30 &&
-    !rects.some((r) => maxX + pad > r.minX && minX - pad < r.maxX && maxZ + pad > r.minZ && minZ - pad < r.maxZ);
+  const inBounds = (minX, minZ, maxX, maxZ) => minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30;
+  const inRect = (x, z, pad = 0) => reserved.near(x, z, pad + 1).some((r) => x > r.minX - pad && x < r.maxX + pad && z > r.minZ - pad && z < r.maxZ + pad);
+  const freeRect = (minX, minZ, maxX, maxZ, pad = 0) => inBounds(minX, minZ, maxX, maxZ) &&
+    !reserved.rect(minX - pad - 1, minZ - pad - 1, maxX + pad + 1, maxZ + pad + 1).some((r) => maxX + pad > r.minX && minX - pad < r.maxX && maxZ + pad > r.minZ && minZ - pad < r.maxZ);
+  const solidAt = (minX, minZ, maxX, maxZ) => grid.rect(minX, minZ, maxX, maxZ, [], true).some((b) => b.type !== 'canopy' && b.type !== 'caveroof');
   const span4 = (x, z, r, f = terrain.raw) => { const hs = [f(x - r, z - r), f(x + r, z - r), f(x - r, z + r), f(x + r, z + r), f(x, z)]; return { lo: Math.min(...hs), hi: Math.max(...hs) }; };
   const waterDist = (x, z) => Math.min(...geo.rivers.map((r) => polyDist(x, z, r.pts) - r.width / 2), ...geo.lakes.map((l) => -lakeDepth(x, z, l)));
+  const addRoadSeg = (x1, z1, x2, z2, name, width) => {
+    const r = { x1, z1, x2, z2, name, width, minX: Math.min(x1, x2) - width, maxX: Math.max(x1, x2) + width, minZ: Math.min(z1, z2) - width, maxZ: Math.max(z1, z2) + width };
+    roads.push(r);
+    roadGrid.insert(r);
+  };
+  /** Distance to the nearest road edge within `r` metres (Infinity if none). */
+  const roadDist = (x, z, r = 20) => {
+    let best = Infinity;
+    for (const s of roadGrid.near(x, z, r)) best = Math.min(best, segDist(x, z, s.x1, s.z1, s.x2, s.z2).d - s.width / 2);
+    return best;
+  };
 
   // ---- real towns, nudged onto dry ground where the real one sits right on the water
   for (const gt of geo.towns) {
     const span = gt.blocks * PITCH - STREET;
     const r = span / 2 + STREET;
     let pos = null;
-    for (let ring = 0; ring <= 14 && !pos; ring++) {
+    for (let ring = 0; ring <= 16 && !pos; ring++) {
       const steps = ring === 0 ? 1 : ring * 8;
       for (let k = 0; k < steps && !pos; k++) {
         const a = (k / steps) * Math.PI * 2;
-        const x = gt.x + (ring ? Math.cos(a) * ring * 30 : 0), z = gt.z + (ring ? Math.sin(a) * ring * 30 : 0);
+        const x = gt.x + (ring ? Math.cos(a) * ring * 60 : 0), z = gt.z + (ring ? Math.sin(a) * ring * 60 : 0);
         if (Math.abs(x) > half - r - 40 || Math.abs(z) > half - r - 40) continue;
         if (waterDist(x, z) < r * 1.42 + 25) continue;
         if (!freeRect(x - r, z - r, x + r, z + r, 40)) continue;
@@ -179,11 +220,10 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     const g = span4(pos.x, pos.z, r);
     const t = {
       id: towns.length, name: gt.name, county: gt.county, x: pos.x, z: pos.z, blocks: gt.blocks, span,
-      city: gt.blocks >= 8, industrial: gt.blocks >= 5 && rand() < 0.5, biome: biomeName(terrain.biome(pos.x, pos.z)),
+      city: gt.blocks >= 13, industrial: gt.blocks >= 9 && rand() < 0.5, biome: biomeName(terrain.biome(pos.x, pos.z)),
       elev: Math.max(2.5, (g.lo + g.hi) / 2), real: gt.real,
     };
-    t.rect = { minX: pos.x - r, minZ: pos.z - r, maxX: pos.x + r, maxZ: pos.z + r };
-    rects.push(t.rect);
+    t.rect = reserve({ minX: pos.x - r, minZ: pos.z - r, maxX: pos.x + r, maxZ: pos.z + r });
     towns.push(t);
   }
   terrain.setFlats(towns.map((t) => ({ ...t.rect, elev: t.elev, margin: 60 })));
@@ -232,7 +272,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     }
     const door = { minX: cx - gap / 2, minZ: cz + hs - thick, maxX: cx + gap / 2, maxZ: cz + hs, h: 2.6, y0: terrain.exact(cx, cz + hs) - 0.3 };
     houses.push({ id, kind, townId, x: cx, z: cz, crate: { x: cx, z: cz - 3.1 }, door, biome: biomeName(terrain.biome(cx, cz)), ...extra });
-    rects.push({ minX: cx - hs - 5, minZ: cz - hs - 5, maxX: cx + hs + 5, maxZ: cz + hs + 16 });
+    reserve({ minX: cx - hs - 5, minZ: cz - hs - 5, maxX: cx + hs + 5, maxZ: cz + hs + 16, home: 1 });
     lootSpawns.push({ x: cx + 9, z: cz + 9, zone: kind === 'house' || kind === 'room' ? 'town' : kind === 'boathouse' ? 'lake' : biomeName(terrain.biome(cx, cz)) });
     return id;
   }
@@ -252,7 +292,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
       : { minX: cx - 0.8, minZ: cz + hl, maxX: cx + 0.8, maxZ: cz + hl + 0.35, h: 2.3, y0 };
     const crate = alongX ? { x: cx + hl + 1.4, z: cz } : { x: cx, z: cz + hl + 1.4 };
     houses.push({ id, kind: 'vehicle', vtype, townId: null, x: cx, z: cz, crate, door, biome: biomeName(terrain.biome(cx, cz)), alongX });
-    rects.push({ minX: body[0] - 3, minZ: body[1] - 3, maxX: body[2] + 3, maxZ: body[3] + 3 });
+    reserve({ minX: body[0] - 3, minZ: body[1] - 3, maxX: body[2] + 3, maxZ: body[3] + 3, home: 1 });
     return id;
   }
 
@@ -269,7 +309,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     const parkCount = Math.max(1, Math.floor(n * n * 0.1));
     const kinds = new Map();
     cells.forEach(([i, j], idx) => kinds.set(`${i},${j}`,
-      idx < houseCount ? 'house' : idx < houseCount + roomCount ? 'room' : idx < houseCount + roomCount + parkCount ? 'park' : t.industrial && rand() < 0.4 ? 'industrial' : 'buildings'));
+      idx < houseCount ? 'house' : idx < houseCount + roomCount ? 'room' : idx < houseCount + roomCount + parkCount ? 'park' : !realStructs && t.industrial && rand() < 0.4 ? 'industrial' : 'buildings'));
     kinds.set(`${centre},${centre}`, 'plaza');
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
@@ -278,10 +318,10 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
         const kind = kinds.get(`${i},${j}`);
         if (kind === 'house' || kind === 'room') {
           addHome(kind, cx, cz, t.id);
-          rects.pop();   // the town rect already reserves this space
           tb(x0 + 2, z1 - 4, x0 + 5, z1 - 3.4, 1.1, 'cover');
         } else if (kind === 'plaza') {
           contacts.push({ id: contacts.length, townId: t.id, name: `${t.name} Contact`, x: cx, z: cz });
+          reserve({ minX: x0, minZ: z0, maxX: x1, maxZ: z1, home: 1 });
           t.contactId = contacts.length - 1;
           tb(x0 + 2, z0 + 2, x0 + 9, z0 + 2.6, 1.1, 'cover');
           tb(x1 - 9, z1 - 2.6, x1 - 2, z1 - 2, 1.1, 'cover');
@@ -306,6 +346,19 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
             terminals.push({ id: terminals.length, x: tx, z: z1 - 0.65, townId: t.id });
           }
           const split = rand();
+          if (realStructs) { lootSpawns.push({ x: cx, z: cz, zone: 'town' }); continue; }   // the real buildings go here
+          if (!t.city && split < 0.6) {
+            // Small-town residential block: a few single-storey houses in yards.
+            const lots = [[x0 + 1.5, z0 + 1.5], [cx + 1.5, z0 + 1.5], [x0 + 1.5, cz + 1.5], [cx + 1.5, cz + 1.5]];
+            for (const [lx, lz] of lots) {
+              if (rand() < 0.3) continue;
+              const w = 8 + rand() * 4, d = 7 + rand() * 4;
+              tb(lx + 1, lz + 1, lx + 1 + Math.min(w, BLOCK / 2 - 4), lz + 1 + Math.min(d, BLOCK / 2 - 4), 3.6 + rand() * 1.6, 'building');
+            }
+            if (rand() < 0.6) tb(cx - 0.3, cz - 0.3, cx + 0.3, cz + 0.3, 9 + rand() * 5, 'tree');
+            lootSpawns.push({ x: cx, z: cz, zone: 'town' });
+            continue;
+          }
           const tall = () => (t.city ? 9 : 5) + rand() * (t.city ? 16 : 7);
           if (split < 0.33) tb(x0 + 1, z0 + 1, x1 - 1, z1 - 1, tall());
           else if (split < 0.66) { tb(x0 + 1, z0 + 1, cx - 2, z1 - 1, tall()); tb(cx + 2, z0 + 1, x1 - 1, z1 - 1, tall()); lootSpawns.push({ x: cx, z: cz, zone: 'town' }); }
@@ -316,7 +369,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     for (let s = 0; s < n - 1; s++) {
       const mid = x0t + s * PITCH + BLOCK + STREET / 2;
       const midZ = z0t + s * PITCH + BLOCK + STREET / 2;
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < 2 && !realStructs; k++) {
         const along = rand() * (t.span - 6);
         const car = rand() < 0.6;
         const len = car ? 4.4 : 2.8, wid = car ? 1.9 : 0.6, h = car ? 1.4 : 1.1;
@@ -335,9 +388,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     landmarks.push({ ...lm });
     if (lm.kind === 'park') {
       let { x, z } = lm;
-      for (let k = 0; k < 20 && (waterDist(x, z) < 30 || inRect(x, z, 20)); k++) { x += 25; z += 10; }
+      for (let k = 0; k < 40 && (waterDist(x, z) < 30 || inRect(x, z, 20) || terrain.exact(x, z) < 1); k++) { x += 25; z += 10; }
       if (!freeRect(x - 15, z - 15, x + 15, z + 15, 5)) continue;
-      rects.push({ minX: x - 15, minZ: z - 15, maxX: x + 15, maxZ: z + 15 });
+      reserve({ minX: x - 15, minZ: z - 15, maxX: x + 15, maxZ: z + 15 });
       ground(x - 6, z - 5, x + 6, z + 5, 4, 'farmhouse');
       lootSpawns.push({ x: x + 9, z, zone: 'park' }, { x: x - 9, z: z + 7, zone: 'park' }, { x, z: z + 9, zone: 'park' });
     } else if (lm.kind === 'dam') {
@@ -345,28 +398,60 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     }
   }
 
-  // ---- highways (real routes), wrecks and abandoned vehicles along them
-  const inTown = (x, z, pad = 4) => towns.some((t) => x > t.rect.minX - pad && x < t.rect.maxX + pad && z > t.rect.minZ - pad && z < t.rect.maxZ + pad);
+  // ---- roads: the traced highways, plus every imported OpenStreetMap road
   const highways = geo.roads;
+  for (const hw of highways) for (let i = 0; i < hw.pts.length - 1; i++) addRoadSeg(hw.pts[i][0], hw.pts[i][1], hw.pts[i + 1][0], hw.pts[i + 1][1], hw.name, 12);
+  const ROAD_W = { motorway: 14, trunk: 12, primary: 11, secondary: 9, tertiary: 8, unclassified: 6, residential: 6, service: 4, track: 4 };
+  for (const [name, cls, pts] of real.roads || []) {
+    const w = ROAD_W[cls] || 5;
+    const p = pts.map(([lat, lon]) => project(lat, lon, size));
+    for (let i = 0; i < p.length - 1; i++) {
+      if (Math.max(Math.abs(p[i].x), Math.abs(p[i].z), Math.abs(p[i + 1].x), Math.abs(p[i + 1].z)) > half + 200) continue;
+      addRoadSeg(p[i].x, p[i].z, p[i + 1].x, p[i + 1].z, name || cls, w);
+    }
+  }
+
+  const inTown = (x, z, pad = 4) => towns.some((t) => x > t.rect.minX - pad && x < t.rect.maxX + pad && z > t.rect.minZ - pad && z < t.rect.maxZ + pad);
+  // ---- real structures (FEMA/ORNL USA Structures), one map object per building
+  const realBuildings = [];
+  if (realStructs) {
+    let n = 0;
+    for (const [lat, lon, w0, d0, h0, occ] of real.structures) {
+      const { x, z } = project(lat, lon, size);
+      const w = Math.max(3, Math.min(120, w0 || 10)), d = Math.max(3, Math.min(120, d0 || 10));
+      const minX = x - w / 2, minZ = z - d / 2, maxX = x + w / 2, maxZ = z + d / 2;
+      if (!inBounds(minX, minZ, maxX, maxZ) || terrain.exact(x, z) < 0.3) continue;
+      if (solidAt(minX - 0.5, minZ - 0.5, maxX + 0.5, maxZ + 0.5) || reserved.rect(minX, minZ, maxX, maxZ).some((r) => r.home && maxX > r.minX && minX < r.maxX && maxZ > r.minZ && minZ < r.maxZ)) continue;
+      const o = String(occ || '').toLowerCase();
+      const type = o.startsWith('agri') ? (w * d > 400 ? 'barn' : 'farmhouse') : o.startsWith('indus') ? 'warehouse' : 'building';
+      const h = h0 > 2 ? Math.min(h0, 40) : type === 'warehouse' ? 8 : type === 'barn' ? 7 : o.startsWith('resid') ? (w * d > 600 ? 7 : 4.5) : w * d > 1500 ? 9 : 6;
+      const b = ground(minX, minZ, maxX, maxZ, h, type, { real: 1 });
+      realBuildings.push(b);
+      if (n++ % 3 === 0) lootSpawns.push({ x: maxX + 1.5, z: (minZ + maxZ) / 2, zone: inTown(x, z, 0) ? 'town' : type === 'barn' || type === 'farmhouse' ? 'farm' : 'road' });
+    }
+  }
+
+  // ---- wrecks and abandoned vehicles along the highways
   const VT = ['rv', 'bus', 'truck'];
   let vehicleN = 0;
   for (const hw of highways) {
     for (let i = 0; i < hw.pts.length - 1; i++) {
       const [x1, z1] = hw.pts[i], [x2, z2] = hw.pts[i + 1];
-      roads.push({ x1, z1, x2, z2, name: hw.name });
       const len = Math.hypot(x2 - x1, z2 - z1);
-      for (let d = 60; d < len - 60; d += 70 + rand() * 90) {
+      for (let d = 60; d < len - 60; d += 140 + rand() * 260) {
         const f = d / len;
         const x = x1 + (x2 - x1) * f, z = z1 + (z2 - z1) * f;
+        const roll = rand(), side = rand() < 0.5 ? 1 : -1;
+        if (Math.abs(x) > half - 60 || Math.abs(z) > half - 60) continue;
         if (inTown(x, z, 10) || terrain.exact(x, z) < 0.8 || waterDist(x, z) < 20) continue;
-        const roll = rand();
         // Pull off to the side of the road.
-        const nx = -(z2 - z1) / len, nz = (x2 - x1) / len, side = rand() < 0.5 ? 1 : -1;
-        if (roll < 0.09 && vehicleN < 60) {
-          const vx = x + nx * side * 9, vz = z + nz * side * 9;
-          if (freeRect(vx - 7, vz - 7, vx + 7, vz + 7, 4) && span4(vx, vz, 6, terrain.exact).hi - span4(vx, vz, 6, terrain.exact).lo < 2.5) { addVehicle(VT[vehicleN % 3], vx, vz, Math.abs(x2 - x1) > Math.abs(z2 - z1)); vehicleN++; }
+        const nx = -(z2 - z1) / len, nz = (x2 - x1) / len;
+        if (roll < 0.12 && vehicleN < 80) {
+          const vx = x + nx * side * 11, vz = z + nz * side * 11;
+          if (freeRect(vx - 7, vz - 7, vx + 7, vz + 7, 4) && !solidAt(vx - 7, vz - 7, vx + 7, vz + 7) && span4(vx, vz, 6, terrain.exact).hi - span4(vx, vz, 6, terrain.exact).lo < 2.5) { addVehicle(VT[vehicleN % 3], vx, vz, Math.abs(x2 - x1) > Math.abs(z2 - z1)); vehicleN++; }
         } else if (roll < 0.5) {
           const ox = x + nx * side * 4, oz = z + nz * side * 4;
+          if (solidAt(ox - 3, oz - 3, ox + 3, oz + 3)) continue;
           if (rand() < 0.5) ground(ox - 0.95, oz - 2.2, ox + 0.95, oz + 2.2, 1.4, 'car');
           else ground(ox - 2.2, oz - 0.95, ox + 2.2, oz + 0.95, 1.4, 'car');
           lootSpawns.push({ x: ox + nx * side * 3, z: oz + nz * side * 3, zone: 'road' });
@@ -379,93 +464,76 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
     for (let i = 0; i < rv.pts.length - 1; i++) {
       const [x1, z1] = rv.pts[i], [x2, z2] = rv.pts[i + 1];
       const len = Math.hypot(x2 - x1, z2 - z1);
-      if (rand() > 0.55) continue;
-      const f = 0.3 + rand() * 0.4;
-      const nx = -(z2 - z1) / len, nz = (x2 - x1) / len, side = rand() < 0.5 ? 1 : -1;
-      const cx = x1 + (x2 - x1) * f + nx * side * (rv.width / 2 - 3), cz = z1 + (z2 - z1) * f + nz * side * (rv.width / 2 - 3);
-      if (inTown(cx, cz, 30) || !freeRect(cx - 8, cz - 8, cx + 8, cz + 8, 4)) continue;
-      // The stash door faces the bank.
-      const alongX = Math.abs(x2 - x1) > Math.abs(z2 - z1);
-      if (terrain.exact(cx, cz) > -0.5) continue;
-      addVehicle('houseboat', cx, cz, alongX);
-      const h = houses[houses.length - 1];
-      // Put the access point on the bank side.
-      const bx = cx - nx * side * (VEHICLE_TYPES.houseboat.wid / 2 + 2.5), bz = cz - nz * side * (VEHICLE_TYPES.houseboat.wid / 2 + 2.5);
-      h.crate = { x: bx, z: bz };
-      h.door = { minX: bx - 0.8, minZ: bz - 0.8, maxX: bx + 0.8, maxZ: bz + 0.8, h: 0.2, y0: -0.2, gangway: true };
+      for (let q = 0; q < 2; q++) {
+        if (rand() > 0.6) continue;
+        const f = 0.15 + rand() * 0.7;
+        const nx = -(z2 - z1) / len, nz = (x2 - x1) / len, side = rand() < 0.5 ? 1 : -1;
+        const cx = x1 + (x2 - x1) * f + nx * side * (rv.width / 2 - 3), cz = z1 + (z2 - z1) * f + nz * side * (rv.width / 2 - 3);
+        if (inTown(cx, cz, 30) || !freeRect(cx - 8, cz - 8, cx + 8, cz + 8, 4)) continue;
+        const alongX = Math.abs(x2 - x1) > Math.abs(z2 - z1);
+        if (terrain.exact(cx, cz) > -0.5) continue;
+        addVehicle('houseboat', cx, cz, alongX);
+        const h = houses[houses.length - 1];
+        // The stash access point is on the bank side.
+        const bx = cx - nx * side * (VEHICLE_TYPES.houseboat.wid / 2 + 2.5), bz = cz - nz * side * (VEHICLE_TYPES.houseboat.wid / 2 + 2.5);
+        h.crate = { x: bx, z: bz };
+        h.door = { minX: bx - 0.8, minZ: bz - 0.8, maxX: bx + 0.8, maxZ: bz + 0.8, h: 0.2, y0: -0.2, gangway: true };
+      }
     }
   }
 
-  // ---- countryside, by biome
-  const CELL = 1000 * (size / 8000);
+  // ---- countryside, by biome: farms, natural homes, camps (trees and rocks are lazy, see below)
+  const CELL = 1500;
   const cellsPerSide = Math.max(1, Math.round(size / CELL));
+  const cellSize = size / cellsPerSide;
   const dry = (x, z, min = 0.8) => terrain.exact(x, z) > min;
   for (let i = 0; i < cellsPerSide; i++) {
     for (let j = 0; j < cellsPerSide; j++) {
-      const cx0 = -half + i * CELL, cz0 = -half + j * CELL;
-      const pick = (margin) => [cx0 + margin + rand() * (CELL - 2 * margin), cz0 + margin + rand() * (CELL - 2 * margin)];
-      const cb = terrain.biome(cx0 + CELL / 2, cz0 + CELL / 2);
-      const farms = Math.round((cb.plains + cb.mountain * 0.3) * 3);
+      const cx0 = -half + i * cellSize, cz0 = -half + j * cellSize;
+      const pick = (margin) => [cx0 + margin + rand() * (cellSize - 2 * margin), cz0 + margin + rand() * (cellSize - 2 * margin)];
+      const cb = terrain.biome(cx0 + cellSize / 2, cz0 + cellSize / 2);
+      const farms = realStructs ? 0 : Math.round((cb.plains + cb.mountain * 0.3) * 4);
       for (let k = 0; k < farms; k++) {
         const [fx, fz] = pick(60);
         const g = span4(fx, fz, 20, terrain.exact);
         if (g.lo < 1.5 || g.hi - g.lo > 4 || !freeRect(fx - 20, fz - 16, fx + 20, fz + 16, 20)) continue;
-        rects.push({ minX: fx - 20, minZ: fz - 16, maxX: fx + 20, maxZ: fz + 16 });
+        reserve({ minX: fx - 20, minZ: fz - 16, maxX: fx + 20, maxZ: fz + 16 });
         ground(fx - 18, fz - 12, fx - 8, fz - 4, 6, 'farmhouse');
         ground(fx + 2, fz - 14, fx + 16, fz - 2, 8, 'barn');
         ground(fx - 18, fz + 10, fx + 2, fz + 10.5, 1.1, 'cover');
         ground(fx + 8, fz + 4, fx + 8.5, fz + 14, 1.1, 'cover');
         lootSpawns.push({ x: fx - 4, z: fz - 8, zone: 'farm' }, { x: fx + 9, z: fz + 1, zone: 'farm' });
       }
-      // Woods: longleaf pine flatwoods in the forest, hardwoods in the hills, cypress in the swamps.
-      const woods = Math.round(cb.forest * 8 + cb.plains * 2 + cb.mountain * 4 + cb.sea * 4 + cb.desert * 1);
-      for (let k = 0; k < woods; k++) {
-        const [fx, fz] = pick(60);
-        const rad = 40 + rand() * 90;
-        if (inTown(fx, fz, rad)) continue;
-        const b0 = terrain.biome(fx, fz);
-        const trees = Math.round((20 + rand() * 45) * (0.4 + b0.forest + b0.sea * 0.6));
-        const type = b0.forest > 0.4 || b0.desert > 0.4 ? 'pine' : 'tree';
-        for (let q = 0; q < trees; q++) {
-          const tx = fx + (rand() * 2 - 1) * rad, tz = fz + (rand() * 2 - 1) * rad;
-          if ((tx - fx) ** 2 + (tz - fz) ** 2 > rad * rad || inRect(tx, tz, 2) || !dry(tx, tz, 0.4)) continue;
-          ground(tx - 0.3, tz - 0.3, tx + 0.3, tz + 0.3, (type === 'pine' ? 13 : 9) + rand() * 6, type);
-        }
-        lootSpawns.push({ x: fx, z: fz, zone: b0.sea > 0.4 ? 'lake' : 'forest' });
-      }
-      for (let k = 0; k < 60; k++) {
-        const [x, z] = pick(10);
-        if (inTown(x, z, 6) || inRect(x, z, 2) || !dry(x, z, 0.6)) continue;
-        const b = terrain.biome(x, z);
-        const r = rand();
-        if (r < b.forest * 0.6 + b.plains * 0.2 + b.sea * 0.5) ground(x - 0.3, z - 0.3, x + 0.3, z + 0.3, 8 + rand() * 6, b.forest > 0.5 ? 'pine' : 'tree');
-        else if (r < 0.55 + b.desert * 0.2) { if (b.desert > 0.3) ground(x - 0.9, z - 0.9, x + 0.9, z + 0.9, 1.1 + rand() * 0.6, 'scrub'); }
-        else if (r < 0.8) { const w = 1.2 + rand() * (b.mountain * 3 + 1.2), d = 1 + rand() * (b.mountain * 2 + 1.2); ground(x, z, x + w, z + d, 0.8 + rand() * (0.8 + b.mountain * 2), b.mountain > 0.4 ? 'boulder' : 'rock'); }
+      // Loot caches out in the woods and swamps.
+      for (let k = 0; k < 2; k++) {
+        const [x, z] = pick(40);
+        const b0 = terrain.biome(x, z);
+        if (dry(x, z, 0.6) && !inTown(x, z, 20)) lootSpawns.push({ x, z, zone: b0.sea > 0.4 ? 'lake' : b0.forest > 0.4 ? 'forest' : biomeName(b0) });
       }
       const tryHome = (kind, ok, attempts = 30) => {
         for (let k = 0; k < attempts; k++) {
           const [x, z] = pick(100);
-          if (!ok(x, z) || !freeRect(x - 12, z - 12, x + 12, z + 22, 30) || inTown(x, z, 80)) continue;
+          if (!ok(x, z) || !freeRect(x - 12, z - 12, x + 12, z + 22, 30) || inTown(x, z, 80) || solidAt(x - 12, z - 12, x + 12, z + 22) || roadDist(x, z, 30) < 25) continue;
           addHome(kind, x, z);
           return true;
         }
         return false;
       };
       const flatDry = (x, z, maxDiff = 3) => { const g = span4(x, z, 7, terrain.exact); return g.lo > 1 && g.hi - g.lo < maxDiff; };
-      if (cb.mountain > 0.3) tryHome('cave', (x, z) => terrain.biome(x, z).mountain > 0.45 && flatDry(x, z, 9));
-      if (cb.mountain > 0.2 || cb.desert > 0.3) tryHome('rockfort', (x, z) => { const b = terrain.biome(x, z); return (b.mountain > 0.35 || b.desert > 0.45) && flatDry(x, z); });
-      if (cb.forest > 0.35 || cb.sea > 0.2) tryHome('treehut', (x, z) => { const b = terrain.biome(x, z); return (b.forest > 0.45 || b.sea > 0.35) && flatDry(x, z); });
-      tryHome('boathouse', (x, z) => {
+      if (cb.mountain > 0.3 && rand() < 0.7) tryHome('cave', (x, z) => terrain.biome(x, z).mountain > 0.52 && flatDry(x, z, 9));
+      if ((cb.mountain > 0.2 || cb.desert > 0.3) && rand() < 0.6) tryHome('rockfort', (x, z) => { const b = terrain.biome(x, z); return (b.mountain > 0.35 || b.desert > 0.45) && flatDry(x, z); });
+      if ((cb.forest > 0.35 || cb.sea > 0.2) && rand() < 0.5) tryHome('treehut', (x, z) => { const b = terrain.biome(x, z); return (b.forest > 0.45 || b.sea > 0.35) && flatDry(x, z); });
+      if (waterDist(cx0 + cellSize / 2, cz0 + cellSize / 2) < cellSize) tryHome('boathouse', (x, z) => {
         const h = terrain.exact(x, z);
         if (h < 0.8 || h > 8 || !flatDry(x, z, 4)) return false;
         return [[0, 24], [0, -24], [24, 0], [-24, 0]].some(([ox, oz]) => terrain.exact(x + ox, z + oz) < -1);
-      }, 200);
+      }, 120);
       const [sx, sz] = pick(150);
       if (!inTown(sx, sz, 80) && dry(sx, sz, 1.5)) campSites.push({ x: sx, z: sz });
     }
   }
   // Landing zones, named after the nearest town.
-  const lzGrid = Math.max(2, Math.round(size / 2000));
+  const lzGrid = Math.max(2, Math.round(size / 6000));
   for (let i = 0; i < lzGrid; i++) {
     for (let j = 0; j < lzGrid; j++) {
       for (let tries = 0; tries < 60; tries++) {
@@ -474,6 +542,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
         if (inTown(x, z, 40) || g.lo < 1.5 || g.hi - g.lo > 4) continue;
         const near = towns.reduce((a, t) => (!a || Math.hypot(t.x - x, t.z - z) < Math.hypot(a.x - x, a.z - z) ? t : a), null);
         landingZones.push({ id: landingZones.length, name: `LZ ${String.fromCharCode(65 + landingZones.length)} (${near ? near.name : 'wilds'})`, x, z });
+        reserve({ minX: x - 12, minZ: z - 12, maxX: x + 12, maxZ: z + 12 });
         break;
       }
     }
@@ -483,20 +552,82 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE) {
   box(-half - 2, -half, -half, half, 300, 'border', { y0: -50 });
   box(half, -half, half + 2, half, 300, 'border', { y0: -50 });
 
-  const grid = new SpatialGrid(half + 4, 32);
-  for (const b of boxes) grid.insert(b);
-  const free = (p, r = 1.0) => terrain.exact(p.x, p.z) > 0.3 && !grid.near(p.x, p.z, r + 1).some((b) => circleOverlapsBox(p.x, p.z, r, b) && b.type !== 'caveroof' && b.type !== 'canopy');
+  const free = (p, r = 1.0) => terrain.exact(p.x, p.z) > 0.3 && !grid.near(p.x, p.z, r + 1, [], true).some((b) => circleOverlapsBox(p.x, p.z, r, b) && b.type !== 'caveroof' && b.type !== 'canopy');
   for (const p of [...landingZones, ...campSites]) for (let k = 0; k < 10 && !free(p, 3); k++) { p.x += 7; p.z += 3; }
-  // Labels for the map screen.
+  const spawns = lootSpawns.filter((p) => free(p));
+  // Loot spots and camps are kept clear of the lazy trees too.
+  for (const p of [...spawns, ...campSites]) reserve({ minX: p.x - 1.5, minZ: p.z - 1.5, maxX: p.x + 1.5, maxZ: p.z + 1.5 });
+
+  // ---- lazy countryside: trees (longleaf pine flatwoods, hardwood hills, cypress swamps), rocks,
+  // scrub, and (without real data) roadside homesteads standing in for the real rural houses.
+  const NATURE_TILE = 128;
+  const H = terrain.height;
+  grid.setLoader(NATURE_TILE, (tx, tz) => {
+    const x0 = -half + tx * NATURE_TILE, z0 = -half + tz * NATURE_TILE;
+    if (tx < 0 || tz < 0 || x0 >= half || z0 >= half) return;
+    const r = mulberry32((Math.imul(tx + 7, 73856093) ^ Math.imul(tz + 13, 19349663) ^ Math.imul(seed, 83492791)) >>> 0);
+    const b = terrain.biome(x0 + NATURE_TILE / 2, z0 + NATURE_TILE / 2);
+    let id = NATURE_ID + (tx * 512 + tz) * 512;
+    const blocked = (minX, minZ, maxX, maxZ) =>
+      reserved.rect(minX, minZ, maxX, maxZ).some((q) => maxX > q.minX && minX < q.maxX && maxZ > q.minZ && minZ < q.maxZ) ||
+      grid.rect(minX, minZ, maxX, maxZ, [], true).some((q) => !q.nature);
+    const add = (minX, minZ, maxX, maxZ, h, type) => {
+      const y0 = Math.min(H(minX, minZ), H(maxX, maxZ), H(minX, maxZ), H(maxX, minZ)) - 0.3;
+      grid.insert({ id: id++, minX, minZ, maxX, maxZ, h: h + 0.3, y0, type, nature: 1 });
+    };
+    const spot = (m) => [x0 + m + r() * (NATURE_TILE - 2 * m), z0 + m + r() * (NATURE_TILE - 2 * m)];
+    // Trees grow in clumps; open ground between them.
+    const nTrees = Math.round((b.forest * 60 + b.sea * 40 + b.mountain * 34 + b.plains * 5 + b.desert * 9) * (0.5 + r()));
+    const clumps = [spot(10), spot(10), spot(10)];
+    const pineTile = b.forest + b.desert > b.mountain + b.sea;
+    for (let k = 0; k < nTrees; k++) {
+      let x, z;
+      if (r() < 0.7) { const c = clumps[k % 3]; x = c[0] + (r() * 2 - 1) * 34; z = c[1] + (r() * 2 - 1) * 34; } else [x, z] = spot(1);
+      if (x < x0 + 0.5 || x > x0 + NATURE_TILE - 0.5 || z < z0 + 0.5 || z > z0 + NATURE_TILE - 0.5) continue;
+      if (H(x, z) < 0.4 || roadDist(x, z, 14) < 3 || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
+      const pine = pineTile ? r() < 0.85 : r() < 0.2;
+      add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, (pine ? 14 : 9) + r() * 7, pine ? 'pine' : 'tree');
+    }
+    const nRocks = Math.round(1 + b.mountain * 9 + b.desert * 2 + r() * 2);
+    for (let k = 0; k < nRocks; k++) {
+      const [x, z] = spot(4);
+      const w = 1.2 + r() * (b.mountain * 3 + 1.2), d = 1 + r() * (b.mountain * 2 + 1.2);
+      if (H(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 0.5, z - 0.5, x + w + 0.5, z + d + 0.5)) continue;
+      add(x, z, x + w, z + d, 0.8 + r() * (0.8 + b.mountain * 2), b.mountain > 0.4 ? 'boulder' : 'rock');
+    }
+    const nScrub = Math.round(b.desert * 16 * r());
+    for (let k = 0; k < nScrub; k++) {
+      const [x, z] = spot(2);
+      if (H(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 1, z - 1, x + 1, z + 1)) continue;
+      add(x - 0.9, z - 0.9, x + 0.9, z + 0.9, 1.1 + r() * 0.6, 'scrub');
+    }
+    if (!realStructs && r() < 0.18 + b.plains * 0.2) {
+      // A homestead set back from a nearby road.
+      const [x, z] = spot(16);
+      const rd = roadDist(x, z, 70);
+      const w = 9 + r() * 5, d = 8 + r() * 5;
+      if (rd > 12 && rd < 70 && H(x, z) > 1.2 && !blocked(x - w / 2 - 3, z - d / 2 - 3, x + w / 2 + 3, z + d / 2 + 3)) add(x - w / 2, z - d / 2, x + w / 2, z + d / 2, 4.5 + r() * 2, 'farmhouse');
+    }
+  });
+
+  // Labels for the map screen (only what's on this map).
+  const onMap = (l) => Math.abs(l.x) < half - 200 && Math.abs(l.z) < half - 200;
+  const riverLabel = (rv) => {
+    const inside = rv.pts.filter(([x, z]) => Math.abs(x) < half - 500 && Math.abs(z) < half - 500);
+    const p = inside[Math.floor(inside.length / 2)];
+    return p ? { text: rv.name, x: p[0] + 400, z: p[1], kind: 'water' } : null;
+  };
   const labels = [
     ...towns.map((t) => ({ text: t.name, x: t.x, z: t.rect.minZ - 6, kind: 'town' })),
-    ...geo.rivers.map((r) => { const p = r.pts[Math.floor(r.pts.length / 2)]; return { text: r.name, x: p[0], z: p[1], kind: 'water' }; }),
-    ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })),
+    ...geo.rivers.map(riverLabel).filter(Boolean),
+    ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })).filter(onMap),
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
   ];
   return {
-    seed, size, half, boxes, grid, terrain, houses, towns, roads, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
-    lootSpawns: lootSpawns.filter((p) => free(p)), landingZones, campSites, origin: geo.origin,
+    seed, size, half, boxes, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
+    lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
+    real: { structures: realBuildings.length, roads: (real.roads || []).length },
+    roadsNear: (x, z, r) => roadGrid.near(x, z, r),
   };
 }
 

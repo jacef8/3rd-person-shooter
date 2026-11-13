@@ -1,4 +1,4 @@
-// Streams the 8 km world around the player in chunks. Each chunk merges all of its static boxes
+// Streams the 30 km world around the player in chunks. Each chunk merges all of its static boxes
 // into a couple of draw calls (and instances its trees), and chunks beyond view range are freed,
 // so the GPU only ever holds a few hundred metres of city — fine even on a phone.
 import * as THREE from 'three';
@@ -109,17 +109,16 @@ export function createWorldView(scene, map, { viewRange = 300, mobile = false } 
   const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
   const canopyGeo = new THREE.IcosahedronGeometry(1, 1);
   const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2d4f25, roughness: 1, flatShading: true });
-  const roadSegs = map.roads;
   const terrain = map.terrain;
 
   /** Ground colour from biome, height and roads/towns. */
   function groundColor(x, z, h) {
     for (const t of map.towns) { const r = t.rect; if (x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ) return GROUND.town; }
-    for (const r of roadSegs) {
-      const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz;
+    for (const r of map.roadsNear(x, z, 8)) {
+      const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
       const t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2));
-      const px = r.x1 + dx * t - x, pz = r.z1 + dz * t - z;
-      if (px * px + pz * pz < 36) return GROUND.road;
+      const px = r.x1 + dx * t - x, pz = r.z1 + dz * t - z, hw = (r.width || 12) / 2;
+      if (px * px + pz * pz < hw * hw) return GROUND.road;
     }
     if (h < -0.3) return GROUND.mud;
     const b = terrain.biome(x, z);
@@ -187,7 +186,7 @@ export function createWorldView(scene, map, { viewRange = 300, mobile = false } 
       if (b.type === 'tree') { trees.push(b); continue; }
       if (b.type === 'pine') { pines.push(b); continue; }
       if (b.type === 'canopy') { canopies.push(b); continue; }
-      const v = ((b.id * 2654435761) >>> 0) / 4294967296;
+      const v = ((Math.imul(b.id, 2654435761 | 0)) >>> 0) / 4294967296;
       if (b.type === 'building') {
         const c = COLORS.building;
         pushBox(tex, b, [c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 4);

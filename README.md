@@ -1,9 +1,10 @@
 # Deadzone (working title)
 
-A prototype **third-person shooter** set in one **persistent, always-PvP 8 × 8 km open world**
-modelled on the real area within 30 miles of **Bristol, Florida**: real towns, the Apalachicola,
-Chipola and Ochlockonee rivers, Lake Seminole and Lake Talquin, the real highways and their bridges,
-the Torreya bluffs and the Apalachicola National Forest. Stash houses are **claimed with a claim
+A prototype **third-person shooter** set in one **persistent, always-PvP 30 × 30 km open world**
+laid out on the real area around **Bristol, Florida** at **real 1:1 scale**: Bristol, Blountstown,
+Hosford, Telogia, Estiffanulga and Lake Mystic, the Apalachicola River, the real highways and the SR 20
+bridge, the Torreya bluffs and the Apalachicola National Forest. Real buildings and roads can be
+imported so **every real structure becomes a map object** (see below). Stash houses are **claimed with a claim
 marker** (a room, house, cave, vehicle or open ground) and **level up**, and there's **DayZ-style base building**.
 
 - **Level-based progression, not random drops.** You earn XP by playing: time alive in the zone,
@@ -54,9 +55,31 @@ npm start            # http://localhost:8080
 ```
 
 Open the URL in several browser tabs (or on several machines on your network) to play against
-each other. Options are environment variables: `PORT`, `SEED` (map), `WORLD_SIZE` (metres, default 8000),
+each other. Options are environment variables: `PORT`, `SEED` (map), `WORLD_SIZE` (metres, default 30000; smaller maps crop the same 1:1 layout around Bristol),
 `BOTS` (roaming rogues kept around each player, default 5), `SUPPLY_EVERY_MS` (supply drop
 interval), `DATA_FILE` (where the world is saved; default `data/world.json`).
+
+## Real buildings and roads
+
+`tools/import-real-data.mjs` downloads the real building footprints and roads for the map area
+into `data/real/`. The server loads them at start-up and sends them to every client, so each real
+building becomes a solid map object you can take cover behind, and each road is drawn in the world and on the
+map. Without the files the map uses procedural stand-in buildings.
+
+```bash
+node tools/import-real-data.mjs              # needs access to services2.arcgis.com and overpass-api.de
+npm start                                    # picks up data/real/ automatically
+```
+
+- **Buildings:** FEMA / Oak Ridge National Laboratory **USA Structures**, roughly 15,000 in Liberty and
+  Calhoun counties. Each footprint becomes a box of its real size, at its real position. Height comes
+  from the data, or from the occupancy class when the data has none. Agricultural buildings become barns and industrial ones warehouses.
+  Collision is axis-aligned, so a footprint turned well off north-south becomes a square of the same area.
+- **Roads:** OpenStreetMap, every drivable road and forest track (footpaths are skipped).
+- Credits: *USA Structures, FEMA Response Geospatial Office / Oak Ridge National Laboratory
+  (CC BY 4.0)*; *road data © OpenStreetMap contributors (ODbL 1.0)*.
+- Set `REAL_DATA=0` to ignore the files, `REAL_DATA_DIR` to read them from elsewhere. Saves are tied to the
+  map, so changing the data means starting a fresh `DATA_FILE`.
 
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·

@@ -25,8 +25,11 @@ async function until(fn, ms = 7000) {
 
 // A tree with open buildable ground next to it, and a rock somewhere.
 const world = { terrain: map.terrain, towns: map.towns, contacts: map.contacts, landingZones: map.landingZones, solidsNear: (x, z, r) => map.grid.near(x, z, r) };
+// Countryside trees and rocks are generated lazily, so look around the camp sites.
+const wild = [];
+for (const c of map.campSites.slice(0, 60)) for (const b of map.grid.near(c.x, c.z, 150)) if (b.nature && !wild.includes(b)) wild.push(b);
 let site = null;
-for (const b of map.boxes) {
+for (const b of wild) {
   if (b.type !== 'tree') continue;
   const x = (b.minX + b.maxX) / 2 + 1.2, z = (b.minZ + b.maxZ) / 2;
   const bx = x + 2, bz = z + 6;
@@ -38,7 +41,7 @@ for (const b of map.boxes) {
   site = { x, z, bx, bz };
   break;
 }
-const rock = map.boxes.find((b) => b.type === 'rock' && map.terrain.height(b.minX - 1, (b.minZ + b.maxZ) / 2) > 1 && !map.grid.near(b.minX - 1, (b.minZ + b.maxZ) / 2, 1.6).some((o) => o !== b));
+const rock = wild.find((b) => b.type === 'rock' && map.terrain.height(b.minX - 1, (b.minZ + b.maxZ) / 2) > 1 && !map.grid.near(b.minX - 1, (b.minZ + b.maxZ) / 2, 1.6).some((o) => o !== b));
 
 const TOK_B = 'b0'.repeat(16), TOK_R = 'c0'.repeat(16);
 const tool = (t) => ({ id: `t${t}${Math.random()}`, kind: 'tool', tool: t, name: t });
@@ -46,7 +49,7 @@ const ch = (name, x, z, extra) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv:
 const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, wood: 0, stone: 0, upg: {} }]));
 const builderHome = map.houses[2];
 houses[builderHome.id] = { ...houses[builderHome.id], owner: TOK_B, ownerName: 'Builder' };
-fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 6, size: 8000, houses, bags: [], structures: [], characters: {
+fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 7, size: 30000, houses, bags: [], structures: [], characters: {
   [TOK_B]: ch('Builder', site.x, site.z, { wood: 10, inv: { primary: null, secondary: makeWeapon('sidearm'), armor: null, pack: [tool('hammer'), tool('hatchet'), tool('pickaxe')] } }),
   [TOK_R]: ch('Raider', site.x - 3, site.z, { inv: { primary: null, secondary: makeWeapon('sidearm'), armor: null, pack: [tool('hatchet'), tool('pickaxe')] } }),
 } }));
@@ -64,7 +67,7 @@ function conn(name, token) {
 
 test('building: gather, build, upgrade, gate, crate, raid, breach charge, dismantle', async (t) => {
   assert.ok(site && rock, 'found a build site and a rock');
-  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT, DATA_FILE: FILE, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT, DATA_FILE: FILE, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));
   await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));
 

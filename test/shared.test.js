@@ -5,21 +5,57 @@ import { biomeName, DEEP_WATER } from '../shared/terrain.js';
 import { PIECES, placementProblem, pieceBox, investedCost } from '../shared/building.js';
 import { makeWeapon, weaponStats, levelFromXp, xpForLevel, unlocksAt, PARTS, ARCHETYPES, MAX_LEVEL, partFits, UPGRADES, CONTRACT_TYPES, isUnlocked } from '../shared/items.js';
 
-test('open world: 8 km, deterministic, towns, stash houses, contacts, landing zones', () => {
+test('open world: real Bristol area at 1:1, deterministic, towns, stash houses, contacts, landing zones', () => {
   const a = generateMap(42), b = generateMap(42);
   assert.equal(mapChecksum(a), mapChecksum(b));
-  assert.equal(a.size, 8000);
-  assert.equal(a.towns.length, 21, 'all 21 real towns are placed');
-  for (const n of ['Bristol', 'Blountstown', 'Hosford', 'Chattahoochee', 'Quincy', 'Marianna', 'Wewahitchka']) assert.ok(a.towns.some((t) => t.name === n), n);
-  assert.ok(a.houses.length >= 60, `houses ${a.houses.length}`);
+  assert.equal(a.size, 30000);
+  for (const n of ['Bristol', 'Blountstown', 'Hosford', 'Telogia', 'Estiffanulga', 'Lake Mystic']) assert.ok(a.towns.some((t) => t.name === n), n);
+  assert.ok(a.houses.length >= 150, `houses ${a.houses.length}`);
   assert.equal(a.contacts.length, a.towns.length, 'every town has a Contact');
-  assert.ok(a.landingZones.length >= 9);
-  assert.ok(a.campSites.length >= 30);
+  assert.ok(a.landingZones.length >= 16);
+  assert.ok(a.campSites.length >= 200);
+  assert.ok(a.landmarks.some((l) => l.name === 'Torreya State Park'));
   for (const p of a.landingZones) assert.ok(!a.grid.near(p.x, p.z, 2).some((bx) => circleOverlapsBox(p.x, p.z, PLAYER_RADIUS, bx)));
-  // Towns spread across the map, not bunched in the middle.
-  const xs = a.towns.map((t) => t.x), zs = a.towns.map((t) => t.z);
-  assert.ok(Math.max(...xs) - Math.min(...xs) > 3500 && Math.max(...zs) - Math.min(...zs) > 5000);
+  // Real distances: Bristol to Blountstown is ~6.6 km, Bristol to Hosford ~17 km.
+  const T = (n) => a.towns.find((t) => t.name === n);
+  const d = (p, q) => Math.hypot(p.x - q.x, p.z - q.z);
+  assert.ok(Math.abs(d(T('Bristol'), T('Blountstown')) - 6600) < 700, `Bristol-Blountstown ${d(T('Bristol'), T('Blountstown'))}`);
+  assert.ok(Math.abs(d(T('Bristol'), T('Hosford')) - 17600) < 900, `Bristol-Hosford ${d(T('Bristol'), T('Hosford'))}`);
+  assert.ok(a.bridges.some((br) => br.road === 'SR 20' && br.river === 'Apalachicola River'), 'SR 20 bridge over the Apalachicola');
   assert.notEqual(mapChecksum(generateMap(43)), mapChecksum(a), 'different seeds give different worlds');
+});
+
+test('countryside trees and rocks are generated lazily and identically in any order', () => {
+  const ids = (m, x, z) => m.grid.near(x, z, 60).filter((b) => b.nature).map((b) => `${b.id}:${b.minX.toFixed(3)}:${b.y0.toFixed(3)}`).sort().join();
+  const m1 = generateMap(5), m2 = generateMap(5);
+  const t = m1.towns[0];
+  const x = t.x + 900, z = t.z + 400;
+  m2.grid.near(x + 150, z - 90, 220);   // load the neighbourhood first, in a different order
+  const a = ids(m1, x, z), b = ids(m2, x, z);
+  assert.equal(a, b);
+  // Forest is dense at real scale.
+  let trees = 0;
+  for (let i = 0; i < 30 && trees === 0; i++) trees = m1.grid.near(-12000 + i * 900, 9000, 64).filter((q) => q.type === 'pine' || q.type === 'tree').length;
+  assert.ok(trees > 0, 'trees in the countryside');
+});
+
+test('imported real structures and roads become map objects', () => {
+  const at = (dx, dz) => ({ lat: 30.42556 - dz / 111000, lon: -84.97722 + dx / 96000 });
+  const p1 = at(2500, -1200), p2 = at(2600, -1150), p3 = at(-2200, 3000);
+  const real = {
+    structures: [[p1.lat, p1.lon, 14, 11, 0, 'Residential'], [p2.lat, p2.lon, 40, 25, 9, 'Industrial'], [p3.lat, p3.lon, 30, 18, 0, 'Agriculture']],
+    roads: [['Test Rd', 'residential', [[p1.lat + 0.001, p1.lon - 0.01], [p1.lat + 0.001, p1.lon + 0.01]]]],
+  };
+  const m = generateMap(42, 30000, real), m2 = generateMap(42, 30000, real);
+  assert.equal(mapChecksum(m), mapChecksum(m2));
+  assert.notEqual(mapChecksum(m), mapChecksum(generateMap(42)));
+  const rb = m.boxes.filter((bx) => bx.real);
+  assert.equal(m.real.structures, rb.length);
+  assert.ok(rb.length >= 2, `placed ${rb.length}`);
+  assert.ok(rb.some((bx) => bx.type === 'warehouse' && Math.abs(bx.maxX - bx.minX - 40) < 0.01));
+  assert.ok(m.roads.some((r) => r.name === 'Test Rd'));
+  // Real structures replace the procedural stand-in town blocks and farms.
+  assert.ok(!m.boxes.some((bx) => bx.type === 'barn' && !bx.real));
 });
 
 test('spatial grid ray query finds the same first hit as brute force', () => {
@@ -33,7 +69,7 @@ test('spatial grid ray query finds the same first hit as brute force', () => {
     const dx = Math.cos(a), dz = Math.sin(a), dy = (r() - 0.5) * 0.1;
     const l = Math.hypot(dx, dy, dz);
     const fast = rayAgainstBoxes(ox, oy, oz, dx / l, dy / l, dz / l, m.grid.ray(ox, oz, dx / l, dz / l, 200), 200);
-    const slow = rayAgainstBoxes(ox, oy, oz, dx / l, dy / l, dz / l, m.boxes, 200);
+    const slow = rayAgainstBoxes(ox, oy, oz, dx / l, dy / l, dz / l, [...m.boxes, ...m.grid.near(ox, oz, 210).filter((q) => q.nature)], 200);
     assert.equal(fast.t, slow.t);
   }
 });
@@ -129,14 +165,14 @@ test('biomes: city, forest, desert, mountains and water all exist, with natural 
   const seen = new Set();
   let water = 0, peak = 0;
   for (let i = 0; i < 3600; i++) {
-    const x = (i % 60) * 133 - 3990, z = Math.floor(i / 60) * 133 - 3990;
+    const x = -m.half + ((i % 60) + 0.5) * m.size / 60, z = -m.half + (Math.floor(i / 60) + 0.5) * m.size / 60;
     seen.add(biomeName(m.terrain.biome(x, z)));
-    const h = m.terrain.height(x, z);
+    const h = m.terrain.exact(x, z);
     if (h < 0) water++;
     peak = Math.max(peak, h);
   }
   for (const b of ['plains', 'forest', 'desert', 'mountain', 'sea']) assert.ok(seen.has(b), b);
-  assert.ok(water > 40, 'there is water (rivers and lakes)');
+  assert.ok(water > 15, `there is water (rivers and lakes): ${water}`);
   assert.ok(peak > 50, `the bluffs and hills rise well above the rivers (${peak.toFixed(0)} m)`);
   const kinds = new Set(m.houses.map((h) => h.kind));
   for (const k of ['house', 'room', 'cave', 'rockfort', 'treehut', 'boathouse', 'vehicle']) assert.ok(kinds.has(k), k);
@@ -153,9 +189,10 @@ test('biomes: city, forest, desert, mountains and water all exist, with natural 
 test('terrain blocks deep water and cliffs, and stops bullets', () => {
   const m = generateMap(1337);
   const t = m.terrain;
-  // Walk west from Lake Mystic toward the Apalachicola: you stop at the river's edge.
+  // Walk west from Bristol toward the Apalachicola: you stop at the river's edge.
+  const bristol = m.towns.find((q) => q.name === 'Bristol');
   let shore = null;
-  for (let x = -100; x > -900 && !shore; x -= 2) if (t.height(x, 700) < DEEP_WATER) shore = { x: x + 40, z: 700 };
+  for (let x = bristol.rect.minX - 20; x > bristol.x - 6000 && !shore; x -= 2) if (t.height(x, bristol.z) < DEEP_WATER) shore = { x: x + 40, z: bristol.z };
   assert.ok(shore, 'found the Apalachicola east bank');
   const p = moveWithCollision(shore.x, shore.z, -200, 0, PLAYER_RADIUS, [], t);
   assert.ok(t.height(p.x, p.z) >= DEEP_WATER, 'did not walk into deep water');
@@ -164,15 +201,15 @@ test('terrain blocks deep water and cliffs, and stops bullets', () => {
   const br = m.bridges.find((b) => b.road === 'SR 20' && b.river === 'Apalachicola River');
   assert.ok(br, 'SR 20 bridge exists');
   assert.ok(t.height(br.x, br.z) > 1, 'bridge deck is above water');
-  // Torreya bluffs: steep ground east of the river.
+  // Torreya bluffs: steep ground east of the river, north of Bristol.
   let cliff = null;
-  for (let x = 250; x < 900 && !cliff; x += 3) for (let z = -1800; z < -900 && !cliff; z += 20) if ((t.height(x + 3, z) - t.height(x, z)) / 3 > 1.3) cliff = { x, z };
+  for (let x = -4500; x < 0 && !cliff; x += 3) for (let z = -14500; z < -8000 && !cliff; z += 50) if ((t.height(x + 3, z) - t.height(x, z)) / 3 > 1.3) cliff = { x, z };
   if (cliff) assert.ok(moveWithCollision(cliff.x, cliff.z, 6, 0, PLAYER_RADIUS, [], t).x < cliff.x + 3, 'cliff blocked');
   // A shot fired horizontally from the river bank into the bluffs hits the ground.
   let hill = null;
-  for (let x = 250; x < 1200 && !hill; x += 10) { const h = t.height(x, -1400); if (h > 1 && t.height(x + 80, -1400) > h + 12) hill = { x, h }; }
+  for (let z = -14500; z < -8000 && !hill; z += 250) for (let x = -4500; x < 0 && !hill; x += 10) { const h = t.height(x, z); if (h > 1 && h < 6 && t.height(x + 80, z) > h + 12) hill = { x, z, h }; }
   assert.ok(hill, 'found the bluff face');
-  assert.ok(t.ray(hill.x, hill.h + 1.5, -1400, 1, 0, 0, 200) < 200);
+  assert.ok(t.ray(hill.x, hill.h + 1.5, hill.z, 1, 0, 0, 200) < 200);
 });
 
 test('building rules: frames on open ground, not in towns, water or on top of things', () => {

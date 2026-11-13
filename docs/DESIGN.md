@@ -7,37 +7,34 @@ now*, and you can lose it, so every trip out of your stash house is a risk.
 There are no random stat rolls anywhere. A gun's strength comes from its platform plus the
 attachments you chose in the gunsmith, and both are unlocked by level.
 
-## The world: Bristol, Florida and 30 miles around it
+## The world: Bristol, Florida at real 1:1 scale
 
-The map is a scaled model of the real area within 30 miles of **Bristol, Florida** (Liberty
-County), with Bristol at the centre. 30 real miles = 4 km, so 1 mile is about 133 m in game. Positions come from
-real latitude/longitude, from Wikipedia/GNIS coordinates, and are converted in `shared/geography.js`.
+The map is the real area around **Bristol, Florida** (Liberty County) at **real scale**: one game
+metre is one real metre. It is 30 × 30 km, centred 5 km east and 1.5 km north of Bristol so it takes
+in the real places around it. Positions come from real latitude/longitude (Wikipedia/GNIS) and are
+converted in `shared/geography.js`. Real distances hold: Bristol to Blountstown is 6.6 km, Bristol to Hosford 17 km.
 
-- **21 real towns** in their real relative positions: Bristol, Blountstown, Hosford, Telogia,
-  Estiffanulga, Lake Mystic, Sumatra (Liberty); Altha, Clarksville, Kinard, Scotts Ferry (Calhoun);
-  Chattahoochee, Greensboro, Gretna, Quincy, Mount Pleasant (Gadsden); Sneads, Grand Ridge,
-  Marianna, Cottondale (Jackson); Wewahitchka (Gulf). Size follows population. Waterfront towns
-  are nudged just onto dry ground.
-- **Rivers:** the **Apalachicola** from the Jim Woodruff Dam south between Blountstown and Bristol,
-  past Estiffanulga and east of Wewahitchka. The **Chipola** from Marianna past Altha, Clarksville
-  and Scotts Ferry through the Dead Lakes. The **Ochlockonee** out of Lake Talquin along the
-  Liberty County line. Floodplain swamp lines them, and they're too deep to wade.
-- **Lakes:** Lake Seminole (behind the dam), Lake Talquin, the Dead Lakes, Lake Mystic, Merritt's
-  Mill Pond.
-- **Highways:** SR 20, SR 12, SR 65, SR 71, SR 69, SR 267, US 90 and I-10, with **bridges where
-  they cross the rivers**, the only dry crossings, so they're natural chokepoints. Examples: the SR 20
-  bridge between Blountstown and Bristol, the US 90 and I-10 bridges at Chattahoochee, SR 20 over the
-  Ochlockonee.
-- **Terrain:** the steep **Torreya bluffs** on the east bank of the Apalachicola and the rolling
-  **Red Hills** of Gadsden County, karst hills around **Marianna / Florida Caverns**, farmland in
-  Jackson, Calhoun and Gadsden, **Apalachicola National Forest** pine flatwoods across the south and
-  east, and white **sandhill scrub**.
-- **Landmarks:** Torreya, Three Rivers and Florida Caverns State Parks (ranger stations and loot),
-  the Jim Woodruff Dam.
+- **Towns:** Bristol, Blountstown (Calhoun), Hosford, Telogia, Estiffanulga, Lake Mystic, sized by
+  population. Small towns are mostly single-storey houses in yards. Waterfront towns are nudged just onto dry ground.
+- **The Apalachicola River:** a real ~140 m wide channel with a floodplain swamp up to ~2 km wide,
+  too deep to wade. The **SR 20 bridge** between Blountstown and Bristol is the only dry crossing,
+  so it's the map's big chokepoint.
+- **Highways:** SR 20, SR 12, SR 65, SR 71, SR 69 and SR 267 on their real routes.
+- **Terrain:** the steep **Torreya bluffs** on the east bank north of Bristol (Torreya State Park),
+  the sandhills of the **Apalachicola Bluffs & Ravines Preserve**, pine plantations and the
+  **Apalachicola National Forest** flatwoods toward Hosford and Telogia, and farmland around Blountstown.
+- **Countryside detail:** trees, rocks and scrub aren't stored. At real scale there are hundreds of thousands of them, so
+  each 128 m tile generates its own the first time anything (collision, a shot, the renderer) looks at
+  it. They come from a seed per tile, so the server and every client get the same trees in any order.
+- **Real buildings and roads** (optional): `tools/import-real-data.mjs` fetches FEMA/ORNL USA
+  Structures footprints and OpenStreetMap roads. With them, every real structure is a map object and the procedural
+  stand-ins (town blocks, farms, roadside homesteads) are left out. See the README.
+- Outside this 30 km square, the earlier layout's towns (Chattahoochee, Quincy, Marianna,
+  Wewahitchka…), the Chipola, Ochlockonee, Lake Seminole and Lake Talquin are still defined in
+  `geography.js`. A bigger `WORLD_SIZE` would bring them in, but it would also need more of the real data.
 
-There are no real mountains or deserts here. The game's "hills" are the Torreya bluffs and Red
-Hills (exaggerated), and the sandy terrain is sandhill scrub. Rivers are drawn a little wider than
-life so they read at this scale.
+There are no real mountains or deserts here. The game's "hills" are the Torreya bluffs (exaggerated a little) and the sandy terrain is sandhill scrub.
+Not real yet: **elevation** is shaped by hand plus noise, not taken from a real elevation model (USGS 3DEP would be the next import).
 
 ## Stash houses: claiming and home levels
 
@@ -234,7 +231,7 @@ they're within 9 m or a tag or sensor has exposed them, so it can't be beaten by
 - Per-weapon XP and challenges to unlock specific parts (as in Future Soldier), in place of or
   alongside player level.
 - Offline raid protection: should doors get tougher while the owner is offline?
-- Vehicles: 8 km is a long walk. Bikes or trucks would pair well with the walk-home rule.
+- Vehicles: at real scale it's 17 km from Bristol to Hosford, about 40 minutes on foot. Trucks, bikes or boats on the Apalachicola are the obvious next step, along with the loot extraction question.
 - Rivers, bridges and boats; climbable watchtowers and multi-storey builds.
 - Base decay or upkeep, so abandoned bases eventually fall apart.
 - More gadgets: UAV drone, cross-com sync shot (squad fires together on tagged targets for a bonus),

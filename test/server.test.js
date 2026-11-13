@@ -27,7 +27,7 @@ const relic = makeWeapon('carbine', { optic: 'holo' }, 'desert');
 const lmg = makeWeapon('lmg', { magazine: 'drum' });
 const seed = {
   seed: 1337,
-  version: 6, size: 8000,
+  version: 7, size: 30000,
   characters: {
     [TOK_A]: character('Alice', h.x + 3, h.crate.z + 2, { primary: null, secondary: makeWeapon('sidearm', 'scrap'), armor: null, pack: [] }, { active: 'secondary' }),
     [TOK_B]: character('Bob', h.x, h.door.maxZ + 3, { primary: lmg, secondary: null, armor: null, pack: [] }, { mags: { [lmg.id]: 80 } }),
@@ -39,7 +39,7 @@ seed.houses[0] = { owner: TOK_A, ownerName: 'Alice', doorHp: 300, doorOpen: fals
 fs.writeFileSync(DATA_FILE, JSON.stringify(seed));
 
 function startServer() {
-  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT, DATA_FILE, BOTS: '0', DOOR_HP: '300' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT, DATA_FILE, BOTS: '0', DOOR_HP: '300' }, stdio: ['ignore', 'pipe', 'inherit'] });
   return new Promise((resolve) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) resolve(proc); }));
 }
 
@@ -174,14 +174,14 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   const lvl10 = 4000;
   const frankKit = { primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] };
   const kit = () => ({ primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] });
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 6, size: 8000, houses, bags: [], characters: {
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 7, size: 30000, houses, bags: [], characters: {
     [TOK_C]: character('Carol', tx, tz, kit(), { xp: lvl10, tech: 100 }),
     [TOK_D]: character('Dave', tx + 2, tz + 1, kit()),
     [TOK_E]: character('Eve', tx + 6, tz + 4, kit()),
     [TOK_F]: character('Frank', h1.x, h1.door.maxZ + 1, frankKit, { xp: 9000, tech: 40, mags: { [frankKit.primary.id]: 30 } }),
     [TOK_G]: character('Grace', h2.crate.x + 1, h2.crate.z + 1.2, kit(), { intel: 5 }),
   } }));
-  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: PORT + 1, DATA_FILE: file, BOTS: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT: PORT + 1, DATA_FILE: file, BOTS: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));
   await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));
   const conn = (name, token) => {

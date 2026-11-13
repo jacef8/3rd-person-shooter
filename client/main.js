@@ -70,13 +70,19 @@ const objVis = new Map();       // contract crate id -> mesh
 const doorMat = new THREE.MeshStandardMaterial({ color: 0x5a5f66, metalness: 0.4, roughness: 0.5 });
 const termGeo = new THREE.BoxGeometry(0.8, 1.5, 0.35);
 
+/** Real buildings / roads imported by tools/import-real-data.mjs, served by the game server. */
+async function loadRealData(info) {
+  const get = async (name) => { try { const r = await fetch(`/data/real/${name}`); return r.ok ? (await r.json()).rows : undefined; } catch { return undefined; } };
+  return { structures: info.structures ? await get('structures.json') : undefined, roads: info.roads ? await get('roads.json') : undefined };
+}
+
 function initWorld(m) {
-  const map = generateMap(m.seed, m.size);
+  const map = generateMap(m.seed, m.size, m.realData || {});
   if (mapChecksum(map) !== m.mapSum) toast('⚠ World mismatch with server — update your client');
   state.map = map;
   state.view = createWorldView(scene, map, { viewRange: MOBILE ? 230 : 320, mobile: MOBILE });
   state.view.setOwnHouse(m.houseId);
-  state.mapBase = buildMapBase(map, MOBILE ? 1000 : 1400);
+  state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000);
   // Contacts: friendly NPCs standing in each town square.
   for (const c of map.contacts) {
     const g = makeCharacter('contact', c.name);
@@ -410,7 +416,23 @@ function connect(name) {
   state.ws = ws;
   ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, token: localStorage.getItem('dz_token') }));
   ws.onclose = (e) => { toast(e.reason || 'Disconnected from server'); $('login').hidden = false; $('hud').hidden = true; };
-  ws.onmessage = (ev) => handle(JSON.parse(ev.data));
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    // While real-world map data downloads, hold everything else until the world exists.
+    if (state.loadingWorld) return state.loadingWorld.push(m);
+    if (m.t === 'welcome' && !state.map && m.real) {
+      state.loadingWorld = [];
+      toast('Downloading real-world map data…');
+      loadRealData(m.real).then((real) => {
+        const queued = state.loadingWorld;
+        state.loadingWorld = null;
+        handle({ ...m, realData: real });
+        for (const q of queued) handle(q);
+      });
+      return;
+    }
+    handle(m);
+  };
 }
 const send = (m) => state.ws?.readyState === 1 && state.ws.send(JSON.stringify(m));
 
@@ -868,7 +890,7 @@ function openMapScreen(mode, opts = null) {
   state.deployOpts = opts || state.deployOpts;
   $('mapscreen').hidden = false;
   document.exitPointerLock?.();
-  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 2.5; }
+  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 8; }
   else { mapView.cx = 0; mapView.cz = 0; mapView.zoom = 1; }
   renderMapScreen();
 }
@@ -967,7 +989,7 @@ $('mapcanvas').addEventListener('click', (e) => {
     if (bh !== null) send({ t: 'deploy', kind: 'claim', id: bh });
   }
 });
-$('mapcanvas').addEventListener('wheel', (e) => { e.preventDefault(); mapView.zoom = Math.max(1, Math.min(16, mapView.zoom * (e.deltaY < 0 ? 1.25 : 0.8))); drawMapCanvas(); }, { passive: false });
+$('mapcanvas').addEventListener('wheel', (e) => { e.preventDefault(); mapView.zoom = Math.max(1, Math.min(60, mapView.zoom * (e.deltaY < 0 ? 1.25 : 0.8))); drawMapCanvas(); }, { passive: false });
 let mapDrag = null;
 $('mapcanvas').addEventListener('pointerdown', (e) => { mapDrag = { x: e.clientX, y: e.clientY, cx: mapView.cx, cz: mapView.cz }; });
 addEventListener('pointerup', () => { mapDrag = null; });
@@ -977,7 +999,7 @@ addEventListener('pointermove', (e) => {
   mapView.cz = mapDrag.cz - (e.clientY - mapDrag.y) / state.mapProj.k;
   drawMapCanvas();
 });
-$('mapZoomIn').onclick = () => { mapView.zoom = Math.min(16, mapView.zoom * 1.5); drawMapCanvas(); };
+$('mapZoomIn').onclick = () => { mapView.zoom = Math.min(60, mapView.zoom * 1.5); drawMapCanvas(); };
 $('mapZoomOut').onclick = () => { mapView.zoom = Math.max(1, mapView.zoom / 1.5); drawMapCanvas(); };
 
 // ------------------------------------------------------------------ gunsmith
@@ -1657,7 +1679,7 @@ function pollPad(dt, now) {
     if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
     if (just(BTN.VIEW) && !['login', 'mapscreen'].includes(panel.id)) doAction('inventory');
     if (just(BTN.MENU) && panel.id === 'mapscreen') doAction('map');
-    if (panel.id === 'mapscreen') { mapView.zoom = Math.max(1, Math.min(16, mapView.zoom * (1 + (val(BTN.RT) - val(BTN.LT)) * dt * 2))); if (val(BTN.RT) + val(BTN.LT) > 0.05) drawMapCanvas(); }
+    if (panel.id === 'mapscreen') { mapView.zoom = Math.max(1, Math.min(60, mapView.zoom * (1 + (val(BTN.RT) - val(BTN.LT)) * dt * 2))); if (val(BTN.RT) + val(BTN.LT) > 0.05) drawMapCanvas(); }
   } else if (state.me && !state.me.dead) {
     // Gameplay.
     pad.moveX = deadzone(ax[0]);
