@@ -60,6 +60,10 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   breached door by hand, and an intact door slowly repairs itself.
 - AI "Rogues" patrol the city, fight anyone they see, and drop parts, tech, intel and ammo.
 
+## Play the test build
+
+**https://deadzone-server-production-c9ff7400.up.railway.app** (hosted on Railway; redeploys on every push to this branch). Works on phones with a controller. See [docs/TESTING.md](docs/TESTING.md) for what to try.
+
 ## Game rules are data
 
 Every number and table (weapons, gunsmith parts, levels, XP, gadgets, stash upgrades, home levels,
