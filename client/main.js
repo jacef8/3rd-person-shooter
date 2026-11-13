@@ -501,11 +501,16 @@ function drawMinimap() {
 }
 
 // ------------------------------------------------------------------ networking
-function connect(name) {
-  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`);
+function connect(name, world = 1, ticket = null) {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/world/${world}`);
   state.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, token: localStorage.getItem('dz_token') }));
-  ws.onclose = (e) => { toast(e.reason || 'Disconnected from server'); $('login').hidden = false; $('hud').hidden = true; };
+  state.worldId = world;
+  ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, token: localStorage.getItem('dz_token'), ticket }));
+  ws.onclose = (e) => {
+    toast(e.reason || 'Disconnected from the world');
+    // Back to the lobby (a fresh page load keeps things simple after a session).
+    setTimeout(() => location.replace('/'), 1500);
+  };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     // While real-world map data downloads, hold everything else until the world exists.
@@ -530,7 +535,7 @@ function handle(m) {
   switch (m.t) {
     case 'welcome':
       localStorage.setItem('dz_token', m.token);
-      state.myName = $('name').value.trim() || 'Agent';
+      state.myName = lobby.account?.name || $('name').value.trim() || 'Agent';
       Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, doorBase: m.doorBase });
       if (!state.map) initWorld(m);
       selfMesh.visible = true;
@@ -641,6 +646,9 @@ function handle(m) {
       state.sensors.push({ meshes: [mesh, ring], until: performance.now() + (m.until - Date.now()) });
       break;
     }
+    case 'crewTicket':
+      hubSend({ t: 'invite', name: m.for, world: state.worldId, ticket: m.ticket });
+      break;
     case 'stunThrow': stunThrowFx(m); break;
     case 'stunBlast': stunBlastFx(m.x, m.y, m.z); break;
     case 'stunned':
@@ -1041,12 +1049,13 @@ function mapOptions() {
     // First deploy: any real town, or a landing zone out in the wilds. You claim a stash house
     // afterwards by planting your claim marker.
     return [
+      ...(o.crew || []).map((m) => ({ label: `👥 Deploy with ${m.name} (crew)`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' })),
       ...(o.towns || []).map((id) => ({ label: `🏙 ${map.towns[map.contacts[id].townId].name}${map.towns[map.contacts[id].townId].county ? ` (${map.towns[map.contacts[id].townId].county} Co.)` : ''}`, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#ffd29a' })),
       ...map.landingZones.map((lz) => ({ label: `🪂 ${lz.name}`, x: lz.x, z: lz.z, msg: { t: 'deploy', kind: 'lz', id: lz.id }, color: '#e0e0e0' })),
     ];
   }
   if (state.mapMode === 'redeploy') {
-    const list = [];
+    const list = (o.crew || []).map((m) => ({ label: `👥 Deploy with ${m.name}`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' }));
     if (o.claim) list.push({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' });
     for (const id of o.contacts || []) list.push({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' });
     for (const c of o.crates || []) list.push({ label: 'Your stash crate', x: c.x, z: c.z, msg: { t: 'deploy', kind: 'crate', id: c.id }, color: '#c9a36b' });
@@ -1379,11 +1388,6 @@ function doAction(a) {
     case 'crouch': state.crouch = !state.crouch; break;
   }
 }
-$('join').onclick = () => {
-  const name = $('name').value.trim() || 'Agent';
-  localStorage.setItem('dz_name', name);
-  connect(name);
-};
 $('name').value = localStorage.getItem('dz_name') || '';
 {
   // Login-screen controller help. Gamepads only exist on HTTPS/localhost pages.
@@ -1391,11 +1395,10 @@ $('name').value = localStorage.getItem('dz_name') || '';
   if (!window.isSecureContext) {
     hint.innerHTML = '<b style="color:#ff8a2a">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
   } else {
-    hint.innerHTML = '🎮 <b>Controller:</b> press any button on your Backbone One / gamepad. D-pad + A to pick Join.';
+    hint.innerHTML = '🎮 <b>Controller:</b> press any button on your Backbone One / gamepad. D-pad + A to pick a world.';
   }
   if (MOBILE) document.body.classList.add('mobile');
 }
-$('name').onkeydown = (e) => { if (e.key === 'Enter') $('join').click(); };
 
 canvas.addEventListener('click', () => { if (state.me && !state.invOpen && !state.me.dead) lockPointer(); });
 addEventListener('mousemove', (e) => {
@@ -1777,9 +1780,11 @@ function renderSquadPanel() {
     const row = document.createElement('div');
     row.className = 'item';
     row.innerHTML = `<div class="meta"><div class="nm">${p.name} <small style="color:#888">lvl ${p.level}</small></div></div>`;
-    if (canInvite) row.append(btn('Invite', () => send({ t: 'squad', action: 'invite', id: p.id })));
+    if (canInvite) row.append(btn('Crew invite', () => send({ t: 'squad', action: 'invite', id: p.id })));
+    if (lobby.state && !lobby.state.friends.some((f) => f.name === p.name) && !lobby.state.sent.includes(p.name)) row.append(btn('Add friend', () => hubSend({ t: 'friendRequest', name: p.name })));
     on.append(row);
   }
+  renderFriends($('sqFriends'), true);
   renderBoards();
 }
 function renderBoards() {
@@ -2364,3 +2369,141 @@ setInterval(() => {
   if ($('touch').hidden && touch.stick) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; }
   $('touch').querySelector('.aim')?.classList.toggle('on', state.aiming);
 }, 200);
+
+// ------------------------------------------------------------------ lobby: worlds, friends, invites
+// The hub (server/hub.js) runs the lobby: pick a world, manage friends, send and receive invites.
+// Its connection stays open while you play, so invites reach you anywhere.
+const lobby = { ws: null, account: null, state: null, results: null, invite: null, autoJoined: false };
+function hubSend(m) { if (lobby.ws?.readyState === 1) lobby.ws.send(JSON.stringify(m)); }
+function hubConnect() {
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/hub`);
+  lobby.ws = ws;
+  ws.onopen = () => hubSend({ t: 'hello', token: localStorage.getItem('dz_token'), name: localStorage.getItem('dz_name') });
+  ws.onclose = () => setTimeout(hubConnect, 3000);
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    switch (m.t) {
+      case 'needName':
+        $('lbName').hidden = false; $('lbMain').hidden = true;
+        if (m.suggest && !$('name').value) $('name').value = m.suggest;
+        break;
+      case 'account': {
+        lobby.account = m;
+        localStorage.setItem('dz_token', m.token);
+        localStorage.setItem('dz_name', m.name);
+        state.myName = m.name;
+        $('lbName').hidden = true; $('lbMain').hidden = false;
+        $('lbWho').textContent = m.name;
+        // Arrived from an invite link: go straight into that world.
+        const q = new URLSearchParams(location.search);
+        if (q.get('world') && !lobby.autoJoined && !state.ws) {
+          lobby.autoJoined = true;
+          history.replaceState(null, '', '/');
+          playWorld(Number(q.get('world')), q.get('ticket'));
+        }
+        break;
+      }
+      case 'state':
+        lobby.state = m;
+        renderLobby();
+        if (state.panelOpen) renderFriends($('sqFriends'), true);
+        break;
+      case 'search': lobby.results = m.results; renderLobby(); if (state.panelOpen) renderFriends($('sqFriends'), true); break;
+      case 'invite': showInvite(m); break;
+      case 'note': toast(m.text); break;
+      case 'error': toast(`⚠ ${m.text}`); break;
+    }
+  };
+}
+$('register').onclick = () => hubSend({ t: 'register', name: $('name').value, token: localStorage.getItem('dz_token') });
+$('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('register').click(); });
+function playWorld(id, ticket = null) {
+  if (!lobby.account) return;
+  if (state.ws && state.worldId !== id) { location.href = `/?world=${id}${ticket ? `&ticket=${ticket}` : ''}`; return; }
+  if (state.ws) return;
+  connect(lobby.account.name, id, ticket);
+}
+function renderLobby() {
+  const st = lobby.state;
+  if (!st) return;
+  const wl = $('lbWorlds'); wl.innerHTML = '';
+  for (const w of st.worlds) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    const friends = w.friends.length ? `<div class="st" style="color:#7dff9a">👥 ${w.friends.join(', ')}</div>` : '';
+    row.innerHTML = `<div class="meta"><div class="nm">🌎 ${w.name}</div><div class="st">${w.up ? `${w.online} / ${w.cap} playing` : 'starting…'}</div>${friends}</div>`;
+    const b = btn('Play', () => playWorld(w.id), '');
+    b.disabled = !w.up || w.online >= w.cap;
+    row.append(b);
+    wl.append(row);
+  }
+  renderFriends($('lbFriends'), false);
+}
+/** Friends list, requests, search and recent players. `inGame` adds invite-to-this-world buttons. */
+function renderFriends(el, inGame) {
+  const st = lobby.state;
+  if (!el) return;
+  if (!st) { el.innerHTML = '<div class="empty">Connecting…</div>'; return; }
+  el.innerHTML = '';
+  const add = (html, buttons = []) => { const row = document.createElement('div'); row.className = 'item'; row.innerHTML = `<div class="meta">${html}</div>`; row.append(...buttons); el.append(row); };
+  const head = (t) => { const h = document.createElement('h3'); h.textContent = t; el.append(h); };
+  // Search.
+  const srow = document.createElement('div');
+  srow.className = 'item';
+  const input = Object.assign(document.createElement('input'), { placeholder: 'Find agents by callsign', maxLength: 16, value: lobby.lastQ || '' });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  const go = () => { lobby.lastQ = input.value; hubSend({ t: 'search', q: input.value }); };
+  srow.append(input, btn('Search', go, ''));
+  el.append(srow);
+  for (const r of lobby.results || []) {
+    add(`<div class="nm">${r.name} <small style="color:${r.online ? '#7dff9a' : '#777'}">${r.online ? '● online' : 'offline'}</small></div>`,
+      r.friend ? [] : r.requested ? [Object.assign(btn('Requested', () => {}), { disabled: true })] : [btn('Add friend', () => hubSend({ t: 'friendRequest', name: r.name }))]);
+  }
+  if (st.requests.length) {
+    head('Friend requests');
+    for (const n of st.requests) add(`<div class="nm">${n}</div>`, [btn('Accept', () => hubSend({ t: 'friendAccept', name: n }), ''), btn('Decline', () => hubSend({ t: 'friendDecline', name: n }))]);
+  }
+  head(`Friends (${st.friends.length})`);
+  if (!st.friends.length) add('<div class="st">No friends yet. Search for a callsign above, or add people you play with.</div>');
+  const crewNames = new Set((state.squad.members || []).map((m) => m.name));
+  for (const f of st.friends) {
+    const where = f.world ? `in ${f.worldName}` : f.online ? 'in the lobby' : 'offline';
+    const buttons = [];
+    if (inGame && f.online && f.world !== state.worldId) buttons.push(btn('Invite here', () => send({ t: 'squad', action: 'ticket', for: f.name }), ''));
+    if (inGame && f.world === state.worldId && !crewNames.has(f.name)) buttons.push(btn('Crew invite', () => send({ t: 'squad', action: 'invite', name: f.name }), ''));
+    if (f.world && f.world !== state.worldId) buttons.push(btn(`Join ${f.worldName}`, () => playWorld(f.world)));
+    buttons.push(btn('✕', () => { if (confirm(`Remove ${f.name} from your friends?`)) hubSend({ t: 'unfriend', name: f.name }); }));
+    add(`<div class="nm"><span style="color:${f.online ? '#7dff9a' : '#666'}">●</span> ${f.name} <small style="color:#888">${where}${crewNames.has(f.name) ? ' · your crew' : ''}</small></div>`, buttons);
+  }
+  if (st.recent.length) {
+    head('Played with recently');
+    for (const r of st.recent) add(`<div class="nm">${r.name} <small style="color:#888">${r.world ? `in ${r.worldName}` : r.online ? 'online' : 'offline'}</small></div>`,
+      st.sent.includes(r.name) ? [Object.assign(btn('Requested', () => {}), { disabled: true })] : [btn('Add friend', () => hubSend({ t: 'friendRequest', name: r.name }))]);
+  }
+}
+/** An invite pops up wherever you are: in the lobby or mid-game. */
+function showInvite(m) {
+  lobby.invite = m;
+  const bar = $('invitebar');
+  bar.innerHTML = `<div><b>${m.from}</b> invited you to <b>${m.worldName}</b>${m.ticket ? ' and their crew' : ''}</div>`;
+  const yes = btn(state.worldId === m.world && state.ws ? 'Join crew' : 'Join', () => {
+    bar.hidden = true;
+    if (state.ws && state.worldId === m.world) { if (m.ticket) toast('You\'re already in this world — ask them for a crew invite (P)'); return; }
+    playWorld(m.world, m.ticket);
+  }, '');
+  const no = btn('Not now', () => { bar.hidden = true; });
+  bar.append(yes, no);
+  bar.hidden = false;
+  clearTimeout(lobby.inviteTimer);
+  lobby.inviteTimer = setTimeout(() => { bar.hidden = true; }, 60_000);
+}
+// Tell the hub who you've been playing alongside, for the "played with recently" list.
+setInterval(() => {
+  if (!state.ws || !lobby.account) return;
+  const names = [...state.players.values()].map((r) => r.data?.name).filter(Boolean);
+  for (const m of state.squad.members || []) if (m.name !== state.myName) names.push(m.name);
+  if (names.length) hubSend({ t: 'met', names: [...new Set(names)] });
+}, 30_000);
+
+// Start talking to the lobby once everything above exists.
+hubConnect();

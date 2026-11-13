@@ -5,8 +5,9 @@
   "description": "Prototype third-person looter shooter with a persistent, always-PvP shared world and raidable stash houses.",
   "type": "module",
   "scripts": {
-    "start": "node server/index.js",
-    "test": "node --test test/*.test.js"
+    "start": "node server/hub.js",
+    "test": "node --test test/*.test.js",
+    "start:world": "node server/index.js"
   },
   "engines": {
     "node": ">=20.10"

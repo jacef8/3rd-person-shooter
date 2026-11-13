@@ -262,3 +262,12 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
   .tbtn.r2 { right: calc(162px + env(safe-area-inset-right)); bottom: 12px; }   /* crouch */
   .tbtn.r6 { right: calc(214px + env(safe-area-inset-right)); bottom: 40px; }   /* heal */
 }
+
+/* ---- lobby ---- */
+#login.lobby { width: min(980px, 96vw); max-height: 94vh; overflow: auto; }
+.lbcols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; text-align: left; }
+.lbcols h3, #sqFriends h3 { font-size: 12px; letter-spacing: 0.1em; color: #ff8a2a; margin: 10px 0 4px; text-transform: uppercase; }
+.lobby .item input, #sqFriends .item input, #sqMembers .item input { flex: 1; min-width: 0; padding: 6px 8px; background: #11151a; color: #eee; border: 1px solid #333; }
+#lbName input { margin-right: 6px; }
+@media (max-width: 700px) { .lbcols { grid-template-columns: 1fr; } }
+#invitebar { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; gap: 10px; align-items: center; padding: 10px 14px; background: rgba(20,24,30,0.95); border: 1px solid #7dff9a; border-radius: 6px; color: #eee; font-size: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }

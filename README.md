@@ -75,13 +75,13 @@ They're engine-neutral so they carry over to the planned move to Unreal Engine 5
 
 ```bash
 npm install
-npm start            # http://localhost:8080
+npm start            # http://localhost:8080  (lobby + 2 worlds)
 ```
 
 Open the URL in several browser tabs (or on several machines on your network) to play against
 each other. Options are environment variables: `PORT`, `SEED` (map), `WORLD_SIZE` (metres, default 30000; smaller maps crop the same 1:1 layout around Bristol),
 `BOTS` (roaming rogues kept around each player, default 5), `SUPPLY_EVERY_MS` (supply drop
-interval), `EXTRACT_HOLD_MS` (how long to hold an extraction, default 90000), `DATA_FILE` (where the world is saved; default `data/world.json`).
+interval), `EXTRACT_HOLD_MS` (how long to hold an extraction, default 90000), `DATA_FILE` (where world 1 is saved; default `data/world.json`; other worlds and the lobby's accounts sit next to it), `WORLDS` (how many worlds the lobby runs, default 2), `WORLD_CAP` (players per world, default 40). `npm run start:world` runs a single world without the lobby.
 
 ## Real buildings and roads (parked for now)
 

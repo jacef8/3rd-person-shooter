@@ -20,6 +20,19 @@ characters persist between sessions and redeploys. A change to the save format w
 - Your character is tied to the browser you play in. Clearing its storage, or using another
   browser, makes a new character.
 
+## Lobby, friends and invites
+
+- **First visit:** pick a callsign. It's unique, it's how friends find you, and it's yours in every world.
+- **Worlds:** the lobby lists the worlds (Bristol 1, Bristol 2) with player counts and which friends
+  are in each. Each world is separate: its own players, crews, bases and loot, and its own character
+  for you. Your old character and base are in **Bristol 1**.
+- **Friends:** search a callsign → Add friend; they accept. Players you've played alongside show up
+  under "Played with recently" for one-tap adding. In-game, friends are in the crew panel (P / CREW).
+- **Invites:** in-game, tap **Invite here** on an online friend. They get a pop-up wherever they are
+  (lobby or another world); **Join** drops them into your world *and* your crew, and their deploy
+  screen offers "Deploy with <you>" to land right next to you. Friends already in your world get
+  **Crew invite** instead. From the lobby, **Join Bristol N** goes to a friend's world.
+
 ## Things to try
 
 Solo:

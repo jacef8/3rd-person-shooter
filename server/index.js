@@ -35,6 +35,8 @@ const PORT = Number(process.env.PORT || 8080);
 const SEED = Number(process.env.SEED || 1337);
 const WORLD_SIZE = Number(process.env.WORLD_SIZE || DEFAULT_WORLD_SIZE);
 const DATA_FILE = process.env.DATA_FILE || path.join(ROOT, 'data', 'world.json');
+const WORLD_ID = Number(process.env.WORLD_ID || 1);
+const WORLD_NAME = process.env.WORLD_NAME || 'Bristol';
 const TICK_HZ = 20;
 const SNAPSHOT_EVERY = 2;              // 10 Hz
 const INTEREST = 320;                  // metres: what each client is told about
@@ -121,6 +123,7 @@ for (const c of Object.values(db.crews)) {
   for (const t of s.members) squadOfToken.set(t, s.id);
 }
 const invites = new Map();
+const crewTickets = new Map();   // ticket -> { fromToken, fromName, expires }
 let nextId = 1;
 const uid = (p) => `${p}${nextId++}`;
 let nextDropAt = Date.now() + Math.min(SUPPLY_EVERY_MS, 2 * 60_000);
@@ -496,7 +499,7 @@ function squadAction(p, msg) {
   const now = Date.now();
   const s = squadOf(p);
   const rank = s ? rankOf(s, p.token) : null;
-  const target = msg.id ? players.get(msg.id) : null;
+  const target = msg.id ? players.get(msg.id) : msg.name ? [...players.values()].find((o) => o.name.toLowerCase() === String(msg.name).toLowerCase()) || null : null;
   // Members can be named by their public id (works for offline members) or, if online, by player id.
   const targetTok = s && (msg.pid ? tokenByPub(s, msg.pid) : target && s.members.has(target.token) ? target.token : null);
   if (msg.action === 'create') {
@@ -538,6 +541,15 @@ function squadAction(p, msg) {
     sendCrew(cs, { t: 'toast', text: `${p.name} joined ${cs.name}` });
     pushSquadState(cs);
     for (const m of crewOnline(cs)) dirty(m);
+  } else if (msg.action === 'ticket') {
+    // A one-time pass for a friend invited from the lobby / friends list: whoever joins this
+    // world with it lands in your crew (or starts one with you).
+    // Ordinary members can still invite friends to the world, just not straight into the crew.
+    if (s && rank === 'member') return send(p.ws, { t: 'crewTicket', ticket: null, for: String(msg.for || '') });
+    for (const [k, v] of crewTickets) if (v.expires < now) crewTickets.delete(k);
+    const ticket = crypto.randomBytes(9).toString('hex');
+    crewTickets.set(ticket, { fromToken: p.token, fromName: p.name, expires: now + 15 * 60_000 });
+    send(p.ws, { t: 'crewTicket', ticket, for: String(msg.for || '') });
   } else if (msg.action === 'decline') {
     invites.delete(p.token);
   } else if (msg.action === 'leave') {
@@ -1906,6 +1918,7 @@ function deployOptions(p) {
     towns: p.deploying ? map.contacts.map((ct) => ct.id) : [],
     contacts: p.discovered,
     lzs: map.landingZones.map((l) => l.id),
+    crew: squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.downed && !m.deploying).map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z) })),
     crates: [...structs.values()].filter((st) => st.owner === p.token && PIECES[st.type].container).map((st) => ({ id: st.id, x: st.x, z: st.z })),
   };
 }
@@ -1937,6 +1950,12 @@ function handleDeploy(p, msg) {
   } else if (msg.kind === 'lz') {
     at = map.landingZones[msg.id];
     if (!at) return;
+  } else if (msg.kind === 'crew') {
+    // Drop in next to a crewmate (not while they're in a firefight).
+    const m = players.get(msg.id);
+    if (!m || !sameSquad(m, p) || m === p || m.dead || m.downed || m.deploying) return toast(p, 'They can\'t take you right now');
+    if (Date.now() - (m.lastHit || 0) < 10_000) return toast(p, `${m.name} is in a fight — try again in a moment`);
+    at = { x: m.x + 1.5, z: m.z + 1.5 };
   } else return;
   if (!p.deploying) {
     const keepIntel = p.intel;
@@ -2080,8 +2099,18 @@ function handleJoin(ws, msg) {
   else if (!p.dead) { const fixed = resolveCircle(p.x, p.z, PLAYER_RADIUS, solidsNear(p.x, p.z, 3), terrain.height(p.x, p.z)); p.x = fixed.x; p.z = fixed.z; }
   players.set(p.id, p);
   ws.player = p;
+  // Arrived on a friend's invite: join their crew.
+  const tk = typeof msg.ticket === 'string' && crewTickets.get(msg.ticket);
+  if (tk && tk.expires > Date.now() && tk.fromToken !== token) {
+    crewTickets.delete(msg.ticket);
+    const host = onlineByToken(tk.fromToken);
+    if (host && (!squadOf(host) || squadOf(host) !== squadOf(p))) {
+      invites.set(token, { fromToken: tk.fromToken, fromName: tk.fromName, crewName: squadOf(host)?.name || null, expires: Date.now() + 60_000 });
+      squadAction(p, { action: 'accept' });
+    } else if (!host) toast(p, `${tk.fromName} has left this world — find them on your friends list`);
+  }
   send(ws, {
-    t: 'welcome', id: p.id, token, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
+    t: 'welcome', id: p.id, token, world: WORLD_ID, worldName: WORLD_NAME, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
     x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, doorBase: DOOR_HP,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
@@ -2179,6 +2208,11 @@ const STATIC = [
 ];
 const handler = (req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
+  // Who's playing, for the lobby (the hub polls this; it isn't exposed publicly through the hub).
+  if (url === '/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ world: WORLD_ID, name: WORLD_NAME, online: players.size, names: [...players.values()].map((p) => p.name) }));
+  }
   for (const [prefix, dir] of STATIC) {
     if (!url.startsWith(prefix)) continue;
     const rel = url.slice(prefix.length) || 'index.html';
@@ -2342,6 +2376,8 @@ const loop = setInterval(() => {
 }, 1000 / TICK_HZ);
 
 const saver = setInterval(saveDb, Number(process.env.SAVE_EVERY_MS || 10_000));
+// Run by the hub: if the hub goes away (even killed outright), save and stop too.
+if (process.send) process.on('disconnect', () => { try { saveDb(); } catch { /* best effort */ } process.exit(0); });
 // Hosting platforms stop the old server with SIGTERM on every redeploy: save the world and exit
 // cleanly, so nothing is lost and the platform doesn't report a crash.
 for (const sig of ['SIGTERM', 'SIGINT']) {

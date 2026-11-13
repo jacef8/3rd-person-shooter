@@ -16,13 +16,25 @@
 </head>
 <body>
   <button id="tclose" hidden>✕ Close</button>
+  <div id="invitebar" hidden></div>
   <canvas id="game"></canvas>
 
-  <div id="login" class="panel center">
+  <div id="login" class="panel center lobby">
     <h1>DEADZONE</h1>
-    <p class="sub">One persistent city. Always PvP. Your stash house stays in the world when you log off — and anyone can breach it.</p>
-    <input id="name" maxlength="16" placeholder="Callsign" autocomplete="off" />
-    <button id="join">Enter the zone</button>
+    <p class="sub">Persistent worlds. Always PvP. Your stash house stays in the world when you log off — and anyone can breach it.</p>
+    <div id="lbName" hidden>
+      <p class="sub" style="margin-bottom:6px">Pick your callsign. It's how friends find you, and it's yours in every world.</p>
+      <input id="name" maxlength="16" placeholder="Callsign" autocomplete="off" />
+      <button id="register">Create callsign</button>
+    </div>
+    <div id="lbMain" hidden>
+      <p class="sub" style="margin:0 0 8px">Agent <b id="lbWho"></b></p>
+      <div class="lbcols">
+        <section><h2>Worlds</h2><div id="lbWorlds"><div class="empty">Loading worlds…</div></div>
+          <p class="sub" style="text-align:left;font-size:12px">Each world is separate: its own players, crews, bases and loot. You have a character in each one.</p></section>
+        <section><h2>Friends</h2><div id="lbFriends"></div></section>
+      </div>
+    </div>
     <div id="padhint" class="controls"></div>
     <div class="controls kbonly">
       <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
@@ -112,6 +124,8 @@
         <div id="sqMembers"></div>
         <h2>Online agents nearby</h2>
         <div id="sqOnline"></div>
+        <h2>Friends</h2>
+        <div id="sqFriends"></div>
       </section>
       <section>
         <h2>Crew board</h2>
