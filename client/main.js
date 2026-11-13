@@ -1,13 +1,15 @@
 import * as THREE from 'three';
 import {
-  moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, INTERACT_RANGE,
+  generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, INTERACT_RANGE,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED,
 } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
-  xpForLevel, MAX_LEVEL, GADGETS,
+  xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS,
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
+import { createWorldView } from '/worldview.js';
+import { buildMapBase, drawMap } from '/mapview.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -22,7 +24,7 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9aa4ad);
 scene.fog = new THREE.Fog(0x9aa4ad, MOBILE ? 45 : 60, MOBILE ? 170 : 230);
-const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 600);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.1, MOBILE ? 260 : 360);
 scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 1.1));
 const sun = new THREE.DirectionalLight(0xfff1dc, 1.6);
 sun.castShadow = true;
@@ -38,39 +40,11 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-// Window texture for buildings (procedural so there are no asset files).
-function windowTexture() {
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const g = c.getContext('2d');
-  g.fillStyle = '#9a9ea3'; g.fillRect(0, 0, 64, 64);
-  g.fillStyle = '#4c5966'; g.fillRect(10, 14, 44, 30);
-  g.fillStyle = '#58616a'; g.fillRect(10, 44, 44, 4);
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-const winTex = windowTexture();
-
-function boxGeometry(w, h, d, tile) {
-  const g = new THREE.BoxGeometry(w, h, d);
-  if (tile) {
-    // Scale UVs by face size so the window texture tiles every `tile` meters.
-    const uv = g.attributes.uv;
-    const dims = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
-    for (let f = 0; f < 6; f++) for (let v = 0; v < 4; v++) {
-      const i = f * 4 + v;
-      uv.setXY(i, uv.getX(i) * dims[f][0] / tile, uv.getY(i) * dims[f][1] / tile);
-    }
-  }
-  return g;
-}
-
 // ------------------------------------------------------------------ game state
 const state = {
   exposed: new Map(), sensors: [], pings: [], alerts: [], squad: { id: null, members: [], leaderId: null }, invite: null,
-  hack: null, terminals: [], terminalMeshes: [], aimTargetId: null,
+  hack: null, aimTargetId: null, houseState: new Map(), termState: new Map(),
+  contracts: [], drops: [], objectives: [], contactMeshes: [],
   ws: null, id: null, map: null, houseId: null, me: null,
   x: 0, z: 0, yaw: 0, pitch: 0, crouch: false, aiming: false, sprint: false,
   keys: new Set(), mouseDown: false, firedThisPress: false, lastShot: 0,
@@ -80,62 +54,108 @@ const state = {
 };
 
 // ------------------------------------------------------------------ world construction
-const mats = {
-  terminal: new THREE.MeshStandardMaterial({ color: 0x23303a, emissive: 0x16c2ff, emissiveIntensity: 0.6 }),
-  building: new THREE.MeshStandardMaterial({ map: winTex, roughness: 0.9 }),
-  housewall: new THREE.MeshStandardMaterial({ color: 0x8a6e52, roughness: 0.95 }),
-  ownwall: new THREE.MeshStandardMaterial({ color: 0x4f8a5a, roughness: 0.95 }),
-  crate: new THREE.MeshStandardMaterial({ color: 0xff8a2a, roughness: 0.6 }),
-  cover: new THREE.MeshStandardMaterial({ color: 0x9c9c95, roughness: 1 }),
-  border: new THREE.MeshStandardMaterial({ color: 0x2b2f33 }),
-  door: new THREE.MeshStandardMaterial({ color: 0x5a5f66, metalness: 0.4, roughness: 0.5 }),
-};
-const carColors = [0x7a2222, 0x2a3f6b, 0x444444, 0xbbb59a, 0x2f5a3a];
-let doorMeshes = [];
-let houseLabels = [];
+// The client regenerates the same world as the server from (seed, size) and streams it in chunks.
+const houseVis = new Map();     // houseId -> { door, label }
+const termVis = new Map();      // terminalId -> mesh
+const dropVis = new Map();      // supply drop id -> group
+const objVis = new Map();       // contract crate id -> mesh
+const doorMat = new THREE.MeshStandardMaterial({ color: 0x5a5f66, metalness: 0.4, roughness: 0.5 });
+const termGeo = new THREE.BoxGeometry(0.8, 1.5, 0.35);
 
-function buildWorld(map) {
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(map.half * 2 + 40, map.half * 2 + 40), new THREE.MeshStandardMaterial({ color: 0x3d4145, roughness: 1 }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
-  scene.add(ground);
-  const grid = new THREE.GridHelper(map.half * 2, map.half / 5, 0x555a60, 0x4a4f54);
-  grid.position.y = 0.01;
-  scene.add(grid);
+function initWorld(m) {
+  const map = generateMap(m.seed, m.size);
+  if (mapChecksum(map) !== m.mapSum) toast('⚠ World mismatch with server — update your client');
+  state.map = map;
+  state.view = createWorldView(scene, map, { viewRange: MOBILE ? 230 : 320, mobile: MOBILE });
+  state.view.setOwnHouse(m.houseId);
+  state.mapBase = buildMapBase(map, MOBILE ? 1000 : 1400);
+  // Contacts: friendly NPCs standing in each town square.
+  for (const c of map.contacts) {
+    const g = makeCharacter('contact', c.name);
+    g.position.set(c.x, 0, c.z);
+    g.rotation.y = Math.PI / 4;
+    setLabel(g.userData.label, `✦ ${c.name}`, '#7fd6ff');
+    g.userData.bars.visible = false;
+    state.contactMeshes.push(g);
+  }
+}
 
-  map.boxes.forEach((b, i) => {
-    const w = b.maxX - b.minX, d = b.maxZ - b.minZ;
-    let mat = mats[b.type] || mats.cover;
-    if (b.type === 'terminal') mat = mats.terminal.clone();
-    if (b.type === 'housewall' && b.houseId === state.houseId) mat = mats.ownwall;
-    if (b.type === 'car') mat = new THREE.MeshStandardMaterial({ color: carColors[i % carColors.length], metalness: 0.3, roughness: 0.6 });
-    if (b.type === 'building') {
-      mat = mats.building.clone();
-      mat.color.setHSL(0.07 + (i % 7) * 0.015, 0.08, 0.55 + (i % 5) * 0.06);
+function syncHouses(list) {
+  const seen = new Set();
+  for (const h of list) {
+    seen.add(h.id);
+    state.houseState.set(h.id, h);
+    let v = houseVis.get(h.id);
+    const def = state.map.houses[h.id];
+    if (!v) {
+      const d = def.door;
+      const door = new THREE.Mesh(new THREE.BoxGeometry(d.maxX - d.minX, d.h, d.maxZ - d.minZ), doorMat.clone());
+      door.position.set((d.minX + d.maxX) / 2, d.h / 2, (d.minZ + d.maxZ) / 2);
+      door.castShadow = true;
+      const label = makeLabel('', 0.012);
+      label.position.set(def.x, 5.2, def.z);
+      scene.add(door, label);
+      houseVis.set(h.id, (v = { door, label }));
     }
-    const mesh = new THREE.Mesh(boxGeometry(w, b.h, d, b.type === 'building' ? 4 : 0), mat);
-    mesh.position.set((b.minX + b.maxX) / 2, b.h / 2, (b.minZ + b.maxZ) / 2);
-    mesh.castShadow = b.h < 12;
-    mesh.receiveShadow = true;
-    if (b.type === 'terminal') state.terminalMeshes[b.terminalId] = mesh;
-    scene.add(mesh);
-  });
+    const f = h.max ? h.hp / h.max : 0;
+    v.door.visible = h.hp > 0 && !h.open;
+    v.door.material.color.setRGB(0.35 + 0.5 * (1 - f), 0.37 * f + 0.05, 0.4 * f + 0.05 + h.upg.door * 0.08);
+    const own = h.id === state.houseId;
+    const status = h.hp <= 0 ? 'BREACHED' : h.open ? 'open' : `${Math.round(f * 100)}%`;
+    setLabel(v.label, `${own ? 'YOUR STASH' : (h.owner ? `${h.owner}'s stash` : 'Unclaimed stash')} · ${status}`, own ? '#7dff9a' : h.hp <= 0 ? '#ff6b6b' : '#ffd29a');
+    if (own) $('housestatus').textContent = `Your stash house: ${status}`;
+  }
+  for (const [id, v] of houseVis) if (!seen.has(id)) { scene.remove(v.door, v.label); v.door.geometry.dispose(); houseVis.delete(id); state.houseState.delete(id); }
+  state.doorSolids = list.filter((h) => h.hp > 0 && !h.open).map((h) => ({ ...state.map.houses[h.id].door, type: 'door' }));
+}
 
-  doorMeshes = map.houses.map((h) => {
-    const d = h.door;
-    const m = new THREE.Mesh(new THREE.BoxGeometry(d.maxX - d.minX, d.h, d.maxZ - d.minZ), mats.door.clone());
-    m.position.set((d.minX + d.maxX) / 2, d.h / 2, (d.minZ + d.maxZ) / 2);
-    m.castShadow = true;
-    scene.add(m);
-    return m;
-  });
-  houseLabels = map.houses.map((h) => {
-    const s = makeLabel('', 0.012);
-    s.position.set(h.x, 5.2, h.z);
-    scene.add(s);
-    return s;
-  });
-  buildMinimapBase(map);
+function syncTerminals(list) {
+  const seen = new Set();
+  for (const [id, ready] of list) {
+    seen.add(id);
+    state.termState.set(id, !!ready);
+    let mesh = termVis.get(id);
+    if (!mesh) {
+      const t = state.map.terminals[id];
+      mesh = new THREE.Mesh(termGeo, new THREE.MeshStandardMaterial({ color: 0x23303a, emissive: 0x16c2ff, emissiveIntensity: 0.7 }));
+      mesh.position.set(t.x, 0.75, t.z - 0.17);
+      scene.add(mesh);
+      termVis.set(id, mesh);
+    }
+    mesh.material.emissive.setHex(ready ? 0x16c2ff : 0x552222);
+  }
+  for (const [id, mesh] of termVis) if (!seen.has(id)) { scene.remove(mesh); mesh.material.dispose(); termVis.delete(id); state.termState.delete(id); }
+}
+
+function syncDrops() {
+  const seen = new Set(state.drops.map((d) => d.id));
+  for (const d of state.drops) {
+    if (dropVis.has(d.id)) continue;
+    const g = new THREE.Group();
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1, 1.4), new THREE.MeshStandardMaterial({ color: 0x3b5a8a, emissive: 0x112244 }));
+    crate.position.y = 0.5;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.4, 60, 8, 1, true), new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+    beam.position.y = 30;
+    g.add(crate, beam);
+    g.userData = { crate, drop: d };
+    g.position.set(d.x, 0, d.z);
+    scene.add(g);
+    dropVis.set(d.id, g);
+  }
+  for (const [id, g] of dropVis) if (!seen.has(id)) { scene.remove(g); dropVis.delete(id); }
+}
+
+function syncObjectives(list) {
+  const seen = new Set(list.map((o) => o.id));
+  for (const o of list) {
+    if (objVis.has(o.id)) continue;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 0.7, 0.8), new THREE.MeshStandardMaterial({ color: 0xffc53d, emissive: 0x553300 }));
+    mesh.position.set(o.x, 0.35, o.z);
+    scene.add(mesh);
+    objVis.set(o.id, mesh);
+  }
+  for (const [id, mesh] of objVis) if (!seen.has(id)) { scene.remove(mesh); objVis.delete(id); }
+  state.objectives = list;
 }
 
 function makeLabel(text, scale = 0.01, color = '#fff') {
@@ -166,7 +186,7 @@ function setLabel(s, text, color = '#fff') {
 // ------------------------------------------------------------------ characters
 function makeCharacter(kind, name) {
   const g = new THREE.Group();
-  const color = kind === 'self' ? 0x3a7bd5 : kind === 'bot' ? 0x3d2b4f : 0xd0602a;
+  const color = kind === 'self' ? 0x3a7bd5 : kind === 'bot' ? 0x3d2b4f : kind === 'contact' ? 0x2a6f7a : 0xd0602a;
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.33, 0.95, 4, 10), new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
   body.position.y = 0.82;
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), new THREE.MeshStandardMaterial({ color: kind === 'bot' ? 0x222222 : 0xc9a27e }));
@@ -182,7 +202,7 @@ function makeCharacter(kind, name) {
   const upper = new THREE.Group();
   g.userData = { body, head, visor, gun, pack };
   if (kind !== 'self') {
-    const label = makeLabel(name, 0.0042, kind === 'bot' ? '#ff6b6b' : '#ffb27a');
+    const label = makeLabel(name, kind === 'contact' ? 0.006 : 0.0042, kind === 'bot' ? '#ff6b6b' : '#ffb27a');
     label.position.y = 2.35;
     g.add(label);
     const barBg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.08), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.6 }));
@@ -320,42 +340,37 @@ function feedLine(text) {
 }
 
 // ------------------------------------------------------------------ minimap
-let minimapBase = null;
-const MM_SCALE = 2;
-function buildMinimapBase(map) {
-  const size = (map.half * 2 + 10) * MM_SCALE;
-  minimapBase = document.createElement('canvas');
-  minimapBase.width = minimapBase.height = size;
-  const g = minimapBase.getContext('2d');
-  g.fillStyle = '#1a1e23'; g.fillRect(0, 0, size, size);
-  for (const b of map.boxes) {
-    g.fillStyle = b.type === 'building' ? '#4a5058' : b.type === 'housewall' ? (b.houseId === state.houseId ? '#4fbf6a' : '#a8774c') : b.type === 'crate' ? '#ff8a2a' : '#363b40';
-    g.fillRect((b.minX + map.half + 5) * MM_SCALE, (b.minZ + map.half + 5) * MM_SCALE, (b.maxX - b.minX) * MM_SCALE, (b.maxZ - b.minZ) * MM_SCALE);
-  }
-}
-
+const MM_COLORS = { building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
 function drawMinimap() {
   const c = $('minimap'), g = c.getContext('2d');
-  const R = 100, view = 70;   // meters shown radius
+  const R = 100, view = 80;   // metres shown radius
+  const k = R / view;
   g.clearRect(0, 0, 200, 200);
   g.save();
   g.beginPath(); g.arc(R, R, R, 0, Math.PI * 2); g.clip();
-  const k = R / view;
-  const off = state.map.half + 5;
-  // Map is drawn with +X to the right and +Z downward (north-up = -Z).
-  g.drawImage(minimapBase, (state.x + off - view) * MM_SCALE, (state.z + off - view) * MM_SCALE, view * 2 * MM_SCALE, view * 2 * MM_SCALE, 0, 0, 200, 200);
-  for (const [, l] of state.loot) {
-    if (l.data.kind !== 'parts') continue;
-    g.fillStyle = '#ffc53d';
-    g.fillRect(R + (l.data.x - state.x) * k - 1.5, R + (l.data.z - state.z) * k - 1.5, 3, 3);
+  g.fillStyle = '#26301f'; g.fillRect(0, 0, 200, 200);
+  const X = (x) => R + (x - state.x) * k, Z = (z) => R + (z - state.z) * k;
+  for (const t of state.map.towns) { const q = t.rect; g.fillStyle = '#2f3236'; g.fillRect(X(q.minX), Z(q.minZ), (q.maxX - q.minX) * k, (q.maxZ - q.minZ) * k); }
+  for (const b of state.map.grid.near(state.x, state.z, view * 1.42)) {
+    g.fillStyle = b.type === 'housewall' && b.houseId === state.houseId ? '#4fbf6a' : MM_COLORS[b.type] || '#3a3f44';
+    g.fillRect(X(b.minX), Z(b.minZ), Math.max(1.5, (b.maxX - b.minX) * k), Math.max(1.5, (b.maxZ - b.minZ) * k));
   }
-  // Player arrow (screen-up = -Z, so rotate by yaw accordingly).
-  const dot = (x, z, color, size = 4) => { g.fillStyle = color; g.fillRect(R + (x - state.x) * k - size / 2, R + (z - state.z) * k - size / 2, size, size); };
-  state.map.terminals.forEach((t, i) => dot(t.x, t.z, state.terminals[i] === false ? '#553333' : '#16c2ff', 3));
+  const dot = (x, z, color, size = 4) => { g.fillStyle = color; g.fillRect(X(x) - size / 2, Z(z) - size / 2, size, size); };
+  for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; dot(t.x, t.z, ready ? '#16c2ff' : '#553333', 3); }
+  for (const ct of state.map.contacts) if (Math.abs(ct.x - state.x) < view * 1.5 && Math.abs(ct.z - state.z) < view * 1.5) dot(ct.x, ct.z, '#7fd6ff', 6);
   for (const [, r] of state.players) if (r.data.sq && !r.data.dead) dot(r.data.x, r.data.z, '#7dff9a', 5);
   const now = performance.now();
   for (const p of state.pings) if (p.until > now) dot(p.x, p.z, p.objective ? '#ffc53d' : '#ffffff', p.objective ? 7 : 5);
   for (const a of state.alerts) if (a.until > now && Math.floor(now / 250) % 2) dot(a.x, a.z, '#ff3b3b', 8);
+  // Off-screen objectives (contracts, drops, home) are pinned to the minimap edge.
+  const edge = (x, z, color, size) => {
+    const dx = x - state.x, dz = z - state.z, d = Math.hypot(dx, dz);
+    if (d * k < R - 6) return dot(x, z, color, size);
+    g.fillStyle = color; g.beginPath(); g.arc(R + dx / d * (R - 6), R + dz / d * (R - 6), size / 2 + 1, 0, Math.PI * 2); g.fill();
+  };
+  for (const ct of state.contracts) edge(ct.x, ct.z, '#ffc53d', 7);
+  for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
+  if (state.houseId !== null && state.houseId !== undefined) { const h = state.map.houses[state.houseId]; edge(h.x, h.z, '#4fbf6a', 7); }
   g.translate(R, R);
   g.rotate(-state.yaw + Math.PI);
   g.fillStyle = '#5aa8ff';
@@ -378,14 +393,13 @@ function handle(m) {
     case 'welcome':
       localStorage.setItem('dz_token', m.token);
       state.myName = $('name').value.trim() || 'Agent';
-      Object.assign(state, { id: m.id, map: m.map, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, doorMax: m.doorMax });
-      buildWorld(m.map);
+      Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, doorBase: m.doorBase });
+      if (!state.map) initWorld(m);
       selfMesh.visible = true;
       selfMesh.position.set(m.x, 0, m.z);
       $('login').hidden = true; $('hud').hidden = false;
-      if (m.houseId !== null) toast(`Your stash house is marked green on the minimap. It stays in the world while you're offline.`);
-      else toast('All stash houses are claimed — survive and take one by force… (claim when an owner is freed)');
-      lockPointer();
+      if (m.deploy) openMapScreen(m.firstDeploy ? 'first' : 'redeploy', m.deploy);
+      else { toast('Back in the zone where you left off.'); lockPointer(); }
       break;
     case 'snap': {
       for (const p of m.players) {
@@ -400,33 +414,30 @@ function handle(m) {
       for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
         let rec = state.bots.get(b.id);
-        if (!rec) { rec = { mesh: makeCharacter('bot', 'Rogue') }; rec.mesh.position.set(b.x, 0, b.z); setCharacterGun(rec.mesh, { a: 'carbine', paint: 'factory' }); state.bots.set(b.id, rec); }
+        if (!rec) {
+          rec = { mesh: makeCharacter('bot', b.name || 'Rogue') };
+          rec.mesh.position.set(b.x, 0, b.z);
+          setCharacterGun(rec.mesh, { a: b.kind === 'hvt' ? 'dmr' : 'carbine', paint: 'factory' });
+          if (b.kind === 'hvt') rec.mesh.scale.setScalar(1.15);
+          state.bots.set(b.id, rec);
+        }
         rec.data = { ...b, armor: 0, maxArmor: 0 };
       }
       for (const [id, rec] of state.bots) if (!m.bots.some((b) => b.id === id)) { scene.remove(rec.mesh); state.bots.delete(id); }
       syncEntities(m.loot, state.loot, (e) => lootMesh(e.kind));
       syncEntities(m.bags, state.bags, () => lootMesh('bag'));
-      state.houses = m.houses;
       if (state.panelOpen && performance.now() - (state.panelDrawn || 0) > 1000) { state.panelDrawn = performance.now(); renderSquadPanel(); }
-      state.terminals = m.terminals || [];
-      state.terminals.forEach((ready, i) => { const tm = state.terminalMeshes[i]; if (tm) tm.material.emissive.setHex(ready ? 0x16c2ff : 0x552222); });
-      state.doorSolids = m.houses.filter((h) => h.hp > 0 && !h.open).map((h) => ({ ...state.map.houses[h.id].door, type: 'door' }));
-      m.houses.forEach((h, i) => {
-        const dm = doorMeshes[i];
-        dm.visible = h.hp > 0 && !h.open;
-        dm.material.color.setRGB(0.35 + 0.5 * (1 - h.hp / state.doorMax), 0.37 * (h.hp / state.doorMax) + 0.05, 0.4 * (h.hp / state.doorMax) + 0.05);
-        const own = h.id === state.houseId;
-        const status = h.hp <= 0 ? 'BREACHED' : h.open ? 'open' : `${Math.round(h.hp / state.doorMax * 100)}%`;
-        setLabel(houseLabels[i], `${own ? 'YOUR STASH' : (h.owner ? `${h.owner}'s stash` : 'Unclaimed stash')} · ${status}`, own ? '#7dff9a' : h.hp <= 0 ? '#ff6b6b' : '#ffd29a');
-        if (own) $('housestatus').textContent = `Your stash house: ${status}`;
-      });
+      syncHouses(m.houses);
+      syncTerminals(m.terminals || []);
+      syncObjectives(m.objectives || []);
       break;
     }
     case 'you': {
       const wasDead = state.me?.dead;
       state.me = m;
-      if (m.dead && !wasDead) { /* death handled by 'died' */ }
-      if (!m.dead && wasDead) $('death').hidden = true;
+      if (m.houseId !== state.houseId) { state.houseId = m.houseId; state.view?.setOwnHouse(m.houseId); }
+      if (state.mapMode && state.mapOpen) renderMapScreen();
+      if (state.contactOpen) renderContact();
       updateHud();
       if (state.invOpen) renderInventory();
       if (state.gunsmithOpen) renderGunsmith();
@@ -438,6 +449,7 @@ function handle(m) {
     }
     case 'correct':
       state.x = m.x; state.z = m.z;
+      if (m.force) { selfMesh.position.set(m.x, 0, m.z); state.view?.update(m.x, m.z); }
       break;
     case 'shot': {
       // Suppressed fire from other players only shows up close.
@@ -504,11 +516,33 @@ function handle(m) {
       break;
     case 'toast': toast(m.text); break;
     case 'died':
-      $('deathby').textContent = `Killed by ${m.by}`;
-      $('death').hidden = false;
       state.gunsmithOpen = false; $('gunsmith').hidden = true;
-      closeInventory();
-      document.exitPointerLock?.();
+      closeInventory(); closeContact();
+      if (state.panelOpen) closeSquadPanel();
+      state.killedBy = m.by;
+      openMapScreen('redeploy', m.deploy);
+      break;
+    case 'deployed':
+      closeMapScreen();
+      state.view.setOwnHouse(state.houseId);
+      toast(m.kind === 'claim' ? 'Stash house claimed. Open the crate (E) to reach your stash, gunsmith and upgrades.' : 'Deployed — 10 seconds of spawn protection.');
+      lockPointer();
+      break;
+    case 'events':
+      state.drops = m.drops;
+      syncDrops();
+      if (m.announce) toast('📦 Supply drop inbound — salvage, parts, tech and a commendation. Check the map (M).');
+      break;
+    case 'contracts':
+      state.contracts = m.list;
+      renderTracker();
+      break;
+    case 'contact':
+      state.contact = m;
+      openContact();
+      break;
+    case 'contractDone':
+      toast(`✔ Contract complete: ${m.name} — ${Object.entries(m.reward).map(([k, v]) => `+${v} ${k === 'comms' ? 'commendations' : k}`).join(', ')}`);
       break;
     case 'container':
       if (m.closed) {
@@ -537,7 +571,7 @@ function updateHud() {
   $('reserve').textContent = me.ammo;
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
-  $('resources').innerHTML = `<span title="Build guns and armor">⚙ ${me.parts} parts</span><span title="Powers gadgets">⌁ ${me.tech} tech</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span>`;
+  $('resources').innerHTML = `<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades">⛭ ${me.salvage} salvage</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
   const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
   $('level').textContent = `LEVEL ${me.level}`;
   $('xpbar').style.width = me.level >= MAX_LEVEL ? '100%' : `${((me.xp - lo) / (hi - lo)) * 100}%`;
@@ -622,10 +656,17 @@ function renderInventory() {
       bar.querySelector('#openGs').onclick = openGunsmith;
       bar.querySelector('#bankIntel').onclick = () => send({ t: 'container', action: 'bank' });
     }
+    if (c.gunsmith) {
+      const tr = document.createElement('div');
+      tr.className = 'gsentry';
+      tr.append(btn('Fast travel…', () => { closeInventory(); openMapScreen('travel'); }));
+      box.append(tr);
+    }
+    if (c.upg) box.append(upgradePanel(c));
     if (c.canPut) {
       const dep = document.createElement('div');
       dep.className = 'gsentry';
-      for (const r of ['parts', 'tech', 'ammo']) {
+      for (const r of ['parts', 'tech', 'salvage', 'ammo']) {
         if (!me[r]) continue;
         const b = document.createElement('button');
         b.className = 'ghost'; b.textContent = `Deposit ${me[r]} ${r}`;
@@ -634,11 +675,11 @@ function renderInventory() {
       }
       if (dep.children.length) box.append(dep);
     }
-    const label = { parts: 'parts', tech: 'tech', intel: 'intel drives', ammo: 'rounds' };
-    for (const r of ['parts', 'tech', 'intel', 'ammo']) {
+    const label = { parts: 'parts', tech: 'tech', intel: 'intel drives', ammo: 'rounds', salvage: 'salvage' };
+    for (const r of ['parts', 'tech', 'salvage', 'intel', 'ammo']) {
       if (c[r]) box.append(itemCard({ kind: r, name: `${c[r]} ${label[r]}` }, { buttons: [['← Take', () => send({ t: 'container', action: 'take', res: r })]] }));
     }
-    if (!c.items.length && !['parts', 'tech', 'intel', 'ammo'].some((r) => c[r])) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty' }));
+    if (!c.items.length && !['parts', 'tech', 'salvage', 'intel', 'ammo'].some((r) => c[r])) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty' }));
     for (const item of c.items) box.append(itemCard(item, { buttons: [['← Take', () => send({ t: 'container', action: 'take', itemId: item.id })]] }));
   }
 }
@@ -654,6 +695,211 @@ function closeInventory() {
   $('inventory').hidden = true;
   if (state.container) { state.container = null; send({ t: 'closeContainer' }); }
 }
+
+// ------------------------------------------------------------------ stash house upgrades
+function costText(cost) {
+  const names = { salvage: 'salvage', parts: 'parts', tech: 'tech', comms: '★' };
+  return Object.entries(cost).map(([k, v]) => `${v} ${names[k]}`).join(' · ');
+}
+function upgradePanel(c) {
+  const me = state.me;
+  const wrap = document.createElement('div');
+  wrap.className = 'upgrades';
+  wrap.innerHTML = '<h2>Stash house upgrades</h2>';
+  const have = (k) => (k === 'comms' ? me.comms : (me[k] || 0) + (c[k] || 0));
+  for (const [key, u] of Object.entries(UPGRADES)) {
+    const tier = c.upg[key] || 0;
+    const next = u.tiers[tier + 1];
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">${u.name} <small style="color:#888">${u.tiers[tier].label}</small></div><div class="st">${u.desc}</div>${next ? `<div class="at">Next: ${next.label} — ${costText(next.cost)}${me.level < next.level ? ` · needs level ${next.level}` : ''}</div>` : '<div class="at">Maxed</div>'}</div>`;
+    if (next) {
+      const ok = me.level >= next.level && Object.entries(next.cost).every(([k, v]) => have(k) >= v);
+      const b = btn('Install', () => send({ t: 'upgrade', track: key }));
+      b.disabled = !ok;
+      row.append(b);
+    }
+    wrap.append(row);
+  }
+  return wrap;
+}
+
+// ------------------------------------------------------------------ contacts (contracts + field requisitions)
+function openContact() {
+  state.contactOpen = true;
+  $('contactpanel').hidden = false;
+  document.exitPointerLock?.();
+  renderContact();
+}
+function closeContact() {
+  if (!state.contactOpen) return;
+  state.contactOpen = false;
+  $('contactpanel').hidden = true;
+  lockPointer();
+}
+function renderContact() {
+  const c = state.contact, me = state.me;
+  if (!c || !me) return;
+  $('ctTitle').textContent = c.name;
+  $('ctComms').textContent = `★ ${me.comms} commendations`;
+  const offers = $('ctOffers'); offers.innerHTML = '';
+  for (const o of c.offers) {
+    const def = CONTRACT_TYPES[o.type];
+    const d = Math.round(Math.hypot(o.x - state.x, o.z - state.z));
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">${def.name} <small style="color:#888">${d} m away</small></div><div class="st">${def.desc}</div><div class="at">Reward: ${Object.entries(def.reward).map(([k, v]) => `${v} ${k === 'comms' ? '★' : k}`).join(' · ')} · ${def.xp} XP</div></div>`;
+    const b = btn('Accept', () => send({ t: 'acceptContract', contactId: c.id, id: o.id }));
+    b.disabled = state.contracts.length >= 2;
+    row.append(b);
+    offers.append(row);
+  }
+  const active = $('ctActive'); active.innerHTML = '';
+  if (!state.contracts.length) active.innerHTML = '<div class="empty">No active contracts (max 2).</div>';
+  for (const ct of state.contracts) {
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">${CONTRACT_TYPES[ct.type].name}</div><div class="st">${Math.round(Math.hypot(ct.x - state.x, ct.z - state.z))} m · expires in ${Math.max(0, Math.round((ct.expires - Date.now()) / 60000))} min</div></div>`;
+    row.append(btn('Abandon', () => send({ t: 'abandonContract', id: ct.id })));
+    active.append(row);
+  }
+  // Quartermaster: field gear bought with commendations (earned only from contracts and events).
+  const qm = $('ctShop'); qm.innerHTML = '';
+  const entries = [
+    ...Object.entries(PARTS).filter(([, d]) => d.field).map(([id, d]) => ['part', id, d, `Attachment · ${SLOT_LABELS[d.slot]}`]),
+    ...Object.entries(ARMORS).filter(([, d]) => d.field).map(([id, d]) => ['armor', id, d, `Armor blueprint · ${d.armor} armor`]),
+    ...Object.entries(PAINTS).filter(([, d]) => d.field).map(([id, d]) => ['paint', id, d, 'Paint']),
+    ...Object.entries(FIELD_PERKS).map(([id, d]) => ['perk', id, d, d.desc]),
+  ];
+  for (const [kind, id, d, sub] of entries) {
+    const owned = me.field.includes(id);
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.innerHTML = `<div class="meta"><div class="nm">★ ${d.name}</div><div class="st">${sub}${d.level > 1 ? ` · level ${d.level}+` : ''}</div></div>`;
+    if (owned) row.insertAdjacentHTML('beforeend', '<small style="color:#5fd35f">OWNED</small>');
+    else {
+      const b = btn(`★ ${d.field}`, () => send({ t: 'requisition', contactId: c.id, kind, id }));
+      b.disabled = me.comms < d.field || me.level < (d.level || 1);
+      row.append(b);
+    }
+    qm.append(row);
+  }
+}
+
+/** Active contracts shown under the kill feed. */
+function renderTracker() {
+  const el = $('tracker');
+  el.innerHTML = state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${Math.round(Math.hypot(c.x - state.x, c.z - state.z))} m</span></div>`).join('');
+}
+setInterval(() => { if (state.map) renderTracker(); }, 1000);
+
+// ------------------------------------------------------------------ map screen (M), deploy + fast travel
+const mapView = { cx: 0, cz: 0, zoom: 1 };
+function openMapScreen(mode, opts = null) {
+  state.mapOpen = true;
+  state.mapMode = mode;
+  state.deployOpts = opts || state.deployOpts;
+  $('mapscreen').hidden = false;
+  document.exitPointerLock?.();
+  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 2.5; }
+  else { mapView.cx = 0; mapView.cz = 0; mapView.zoom = 1; }
+  renderMapScreen();
+}
+function closeMapScreen() {
+  state.mapOpen = false;
+  $('mapscreen').hidden = true;
+  if (state.mapMode === 'view' || state.mapMode === 'travel') lockPointer();
+}
+/** The options the side list shows for the current mode. */
+function mapOptions() {
+  const map = state.map, o = state.deployOpts || {};
+  const town = (h) => map.towns[map.houses[h].townId].name;
+  if (state.mapMode === 'first') {
+    // One entry per town with free houses (the first free one), so a controller can pick quickly.
+    const byTown = new Map();
+    for (const id of o.freeHouses || []) { const t = map.houses[id].townId; if (!byTown.has(t)) byTown.set(t, []); byTown.get(t).push(id); }
+    return [...byTown.entries()].map(([t, ids]) => ({ label: `${map.towns[t].name} — ${ids.length} free`, x: map.houses[ids[0]].x, z: map.houses[ids[0]].z, msg: { t: 'deploy', kind: 'claim', id: ids[0] }, color: '#ffd29a' }));
+  }
+  if (state.mapMode === 'redeploy') {
+    const list = [];
+    if (o.houseId !== null && o.houseId !== undefined) list.push({ label: `Your stash house (${town(o.houseId)})`, x: map.houses[o.houseId].x, z: map.houses[o.houseId].z, msg: { t: 'deploy', kind: 'house' }, color: '#4fbf6a' });
+    for (const id of o.contacts || []) list.push({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' });
+    for (const id of o.lzs || []) list.push({ label: map.landingZones[id].name, x: map.landingZones[id].x, z: map.landingZones[id].z, msg: { t: 'deploy', kind: 'lz', id }, color: '#e0e0e0' });
+    return list;
+  }
+  if (state.mapMode === 'travel') {
+    const list = (state.me?.discovered || []).map((id) => ({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'travel', kind: 'contact', id }, color: '#7fd6ff' }));
+    for (const m of state.squad.members) if (m.id !== state.id) list.push({ label: `Join ${m.name}`, x: m.x, z: m.z, msg: { t: 'travel', kind: 'squad', id: m.id }, color: '#7dff9a' });
+    return list;
+  }
+  return [];
+}
+function renderMapScreen() {
+  if (!state.mapOpen || !state.map) return;
+  const titles = { first: 'Choose your stash house', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
+  const notes = {
+    first: 'This is your base: it stays in the world while you\'re offline, and anyone can raid it. Pick a town — you\'ll spawn at the house.',
+    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
+    travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
+    view: 'Gold ◆ contracts · red ● supply drops · blue ✦ Contacts (dim = undiscovered) · green = home & squad.',
+  };
+  $('mapTitle').textContent = titles[state.mapMode];
+  $('mapNote').textContent = notes[state.mapMode];
+  const list = $('mapList'); list.innerHTML = '';
+  const opts = mapOptions();
+  for (const o of opts) {
+    const b = btn(o.label, () => send(o.msg));
+    b.className = 'gsweapon';
+    b.onmouseenter = () => { state.mapHover = o; drawMapCanvas(); };
+    list.append(b);
+  }
+  if (state.mapMode === 'view' || state.mapMode === 'travel') list.append(btn('Close', closeMapScreen));
+  drawMapCanvas();
+}
+function drawMapCanvas() {
+  const cv = $('mapcanvas');
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const map = state.map, markers = [];
+  const dim = new Set(state.me?.discovered || []);
+  for (const c of map.contacts) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: dim.has(c.id) ? '#7fd6ff' : '#3a5560', size: 5 });
+  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: '#cfcfcf', size: 4, label: state.mapMode === 'redeploy' ? lz.name : '' });
+  for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
+  for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
+  for (const m of state.squad.members) if (m.id !== state.id) markers.push({ x: m.x, z: m.z, color: '#7dff9a', size: 5, label: m.name });
+  for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
+  if (state.houseId !== null && state.houseId !== undefined) { const hh = map.houses[state.houseId]; markers.push({ x: hh.x, z: hh.z, color: '#4fbf6a', size: 7, label: 'Home' }); }
+  for (const o of mapOptions()) { const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
+  if (state.me && !state.me.dead) markers.push({ x: state.x, z: state.z, kind: 'player', yaw: state.yaw, color: '#5aa8ff', size: 7 });
+  state.mapProj = drawMap(cv, map, state.mapBase, mapView, markers);
+}
+$('mapcanvas').addEventListener('click', (e) => {
+  if (!state.mapProj) return;
+  const r = e.target.getBoundingClientRect();
+  const w = state.mapProj.toWorld(e.clientX - r.left, e.clientY - r.top);
+  // Pick the nearest option within ~20 px.
+  let best = null, bd = 20 / state.mapProj.k;
+  for (const o of mapOptions()) { const d = Math.hypot(o.x - w.x, o.z - w.z); if (d < bd) { bd = d; best = o; } }
+  if (best) send(best.msg);
+  else if (state.mapMode === 'first') {
+    // Clicking a specific free house on the map claims that one.
+    let bh = null, bhd = 30 / state.mapProj.k;
+    for (const id of state.deployOpts?.freeHouses || []) { const hh = state.map.houses[id]; const d = Math.hypot(hh.x - w.x, hh.z - w.z); if (d < bhd) { bhd = d; bh = id; } }
+    if (bh !== null) send({ t: 'deploy', kind: 'claim', id: bh });
+  }
+});
+$('mapcanvas').addEventListener('wheel', (e) => { e.preventDefault(); mapView.zoom = Math.max(1, Math.min(16, mapView.zoom * (e.deltaY < 0 ? 1.25 : 0.8))); drawMapCanvas(); }, { passive: false });
+let mapDrag = null;
+$('mapcanvas').addEventListener('pointerdown', (e) => { mapDrag = { x: e.clientX, y: e.clientY, cx: mapView.cx, cz: mapView.cz }; });
+addEventListener('pointerup', () => { mapDrag = null; });
+addEventListener('pointermove', (e) => {
+  if (!mapDrag || !state.mapProj) return;
+  mapView.cx = mapDrag.cx - (e.clientX - mapDrag.x) / state.mapProj.k;
+  mapView.cz = mapDrag.cz - (e.clientY - mapDrag.y) / state.mapProj.k;
+  drawMapCanvas();
+});
+$('mapZoomIn').onclick = () => { mapView.zoom = Math.min(16, mapView.zoom * 1.5); drawMapCanvas(); };
+$('mapZoomOut').onclick = () => { mapView.zoom = Math.max(1, mapView.zoom / 1.5); drawMapCanvas(); };
 
 // ------------------------------------------------------------------ gunsmith
 const gs = { selectedId: null, slot: 'optic', hover: null, explode: 0, explodeTarget: 0, model: null, modelKey: '' };
@@ -750,20 +996,23 @@ function renderGunsmith() {
 
   // Blueprints (build new platforms / armor from parts).
   const bp = $('gsBuild'); bp.innerHTML = '';
-  const blueprint = (label, lvl, cost, action, type) => {
+  const discount = UPGRADES.workbench.tiers[state.container?.upg?.workbench || 0].discount;
+  const blueprint = (label, def, id, action, type) => {
+    const locked = !isUnlocked(def, id, me);
+    const cost = Math.round(def.cost * (1 - discount));
     const row = document.createElement('div');
-    row.className = 'bprow' + (lvl > me.level ? ' locked' : '');
-    row.innerHTML = `<span>${label}</span>`;
+    row.className = 'bprow' + (locked ? ' locked' : '');
+    row.innerHTML = `<span>${def.field ? '★ ' : ''}${label}</span>`;
     const b = document.createElement('button');
     b.className = 'ghost';
-    b.textContent = lvl > me.level ? `LVL ${lvl}` : cost ? `Build · ${cost}` : 'Build · free';
-    b.disabled = lvl > me.level || totalParts < cost;
+    b.textContent = locked ? lockLabel(def) : cost ? `Build · ${cost}` : 'Build · free';
+    b.disabled = locked || totalParts < cost;
     b.onclick = () => send({ t: 'gunsmith', action, type });
     row.append(b);
     bp.append(row);
   };
-  for (const [k, a] of Object.entries(ARCHETYPES)) blueprint(a.label, a.level, a.cost, 'build', k);
-  for (const [k, a] of Object.entries(ARMORS)) blueprint(`${a.name} (armor ${a.armor})`, a.level, a.cost, 'buildArmor', k);
+  for (const [k, a] of Object.entries(ARCHETYPES)) blueprint(a.label, a, k, 'build', k);
+  for (const [k, a] of Object.entries(ARMORS)) blueprint(`${a.name} (armor ${a.armor})`, a, k, 'buildArmor', k);
 
   const item = list.find((w) => w.item.id === gs.selectedId)?.item;
   $('gsTitle').textContent = item ? item.name : 'Gunsmith';
@@ -784,11 +1033,11 @@ function renderGunsmith() {
     slotsEl.append(b);
   }
 
-  const option = (label, lvl, equipped, hover, onPick) => {
+  const option = (label, def, id, equipped, hover, onPick) => {
     const b = document.createElement('button');
-    const locked = lvl > me.level;
+    const locked = !isUnlocked(def, id, me);
     b.className = 'gsopt' + (equipped ? ' sel' : '') + (locked ? ' locked' : '');
-    b.innerHTML = `${label}${locked ? `<small>LVL ${lvl}</small>` : equipped ? '<small>equipped</small>' : ''}`;
+    b.innerHTML = `${def.field ? '★ ' : ''}${label}${locked ? `<small>${lockLabel(def)}</small>` : equipped ? '<small>equipped</small>' : ''}`;
     b.onmouseenter = () => { gs.hover = hover; setPreviewModel(previewItem(item, hover)); renderStatBars(item, previewItem(item, hover)); setExplode(gs.model, gs.explode, gs.slot); };
     b.onmouseleave = () => { gs.hover = null; setPreviewModel(item); renderStatBars(item, item); };
     if (!locked && !equipped) b.onclick = onPick;
@@ -796,14 +1045,20 @@ function renderGunsmith() {
   };
   if (gs.slot === 'paint') {
     for (const [id, p] of Object.entries(PAINTS)) {
-      option(`<i class="swatch" style="background:${p.color}"></i>${p.name}`, p.level, item.paint === id, { paint: id }, () => send({ t: 'gunsmith', action: 'paint', itemId: item.id, paint: id }));
+      option(`<i class="swatch" style="background:${p.color}"></i>${p.name}`, p, id, item.paint === id, { paint: id }, () => send({ t: 'gunsmith', action: 'paint', itemId: item.id, paint: id }));
     }
   } else {
     for (const [id, p] of Object.entries(PARTS)) {
       if (p.slot !== gs.slot || !partFits(id, item.archetype)) continue;
-      option(p.name, p.level, item.parts[gs.slot] === id, { slot: gs.slot, partId: id }, () => send({ t: 'gunsmith', action: 'attach', itemId: item.id, slot: gs.slot, partId: id }));
+      option(p.name, p, id, item.parts[gs.slot] === id, { slot: gs.slot, partId: id }, () => send({ t: 'gunsmith', action: 'attach', itemId: item.id, slot: gs.slot, partId: id }));
     }
   }
+}
+
+/** "LVL 9" for level locks; "★3 at a Contact" for field gear you've reached the level for. */
+function lockLabel(def) {
+  const lvl = state.me?.level ?? 1;
+  return def.field && lvl >= (def.level || 1) ? `★${def.field} · Contact` : `LVL ${def.level}`;
 }
 
 function drawGunsmith(dt) {
@@ -848,12 +1103,16 @@ function doAction(a) {
   if (!state.me) return;
   switch (a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
+    case 'map':
+      if (state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) closeMapScreen();
+      else if (!state.mapOpen && !state.me.dead) openMapScreen('view');
+      return;
     case 'inventory':
       if (state.me.dead) return;
       if (state.invOpen) { state.gunsmithOpen = false; $('gunsmith').hidden = true; closeInventory(); lockPointer(); } else openInventory();
       return;
   }
-  if (state.me.dead || state.invOpen || state.panelOpen) return;
+  if (state.me.dead || state.invOpen || state.panelOpen || state.mapOpen || state.contactOpen) return;
   switch (a) {
     case 'interact': send({ t: 'interact' }); break;
     case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
@@ -884,7 +1143,6 @@ $('name').value = localStorage.getItem('dz_name') || '';
   if (MOBILE) document.body.classList.add('mobile');
 }
 $('name').onkeydown = (e) => { if (e.key === 'Enter') $('join').click(); };
-$('respawn').onclick = () => { send({ t: 'respawn' }); $('death').hidden = true; lockPointer(); };
 
 canvas.addEventListener('click', () => { if (state.me && !state.invOpen && !state.me.dead) lockPointer(); });
 addEventListener('mousemove', (e) => {
@@ -912,6 +1170,9 @@ addEventListener('keydown', (e) => {
   if (document.activeElement === $('name')) return;
   setInputMode('kb');
   if (e.code === 'KeyP') { doAction('squadPanel'); return; }
+  if (e.code === 'KeyM') { doAction('map'); return; }
+  if (e.code === 'Escape' && state.contactOpen) { closeContact(); return; }
+  if (e.code === 'Escape' && state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) { closeMapScreen(); return; }
   if (e.code === 'Escape' && state.panelOpen) { closeSquadPanel(); return; }
   if (e.code === 'Tab' || e.code === 'KeyI') { e.preventDefault(); doAction('inventory'); return; }
   if (e.code === 'Escape' && state.gunsmithOpen) { closeGunsmith(); return; }
@@ -924,7 +1185,15 @@ addEventListener('keyup', (e) => state.keys.delete(e.code));
 addEventListener('blur', () => { state.keys.clear(); state.mouseDown = false; state.aiming = false; });
 
 // ------------------------------------------------------------------ simulation helpers
-function solids() { return state.doorSolids.length ? state.map.boxes.concat(state.doorSolids) : state.map.boxes; }
+function solidsNear(x, z, r) {
+  const out = state.map.grid.near(x, z, r);
+  for (const d of state.doorSolids) if (Math.abs(d.minX - x) < r + 2 && Math.abs(d.minZ - z) < r + 2) out.push(d);
+  return out;
+}
+function solidsAlongRay(ox, oz, dx, dz, dist) {
+  const out = state.map.grid.ray(ox, oz, dx, dz, dist);
+  return out.concat(state.doorSolids);
+}
 
 function lookDir() {
   return new THREE.Vector3(Math.sin(state.yaw) * Math.cos(state.pitch), Math.sin(state.pitch), Math.cos(state.yaw) * Math.cos(state.pitch));
@@ -935,7 +1204,7 @@ function eyeHeight() { return state.crouch ? CROUCH_EYE : STAND_EYE; }
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
   const o = camera.position, d = lookDir();
-  let best = rayAgainstBoxes(o.x, o.y, o.z, d.x, d.y, d.z, solids(), 400).t;
+  let best = rayAgainstBoxes(o.x, o.y, o.z, d.x, d.y, d.z, solidsAlongRay(o.x, o.z, d.x, d.z, 400), 400).t;
   const minT = o.distanceTo(new THREE.Vector3(state.x, eyeHeight(), state.z));
   state.aimTargetId = null;
   const test = (c) => {
@@ -979,18 +1248,20 @@ function nearestInteractable() {
   const consider = (d, text) => { if (d < bestD) { bestD = d; best = text; } };
   for (const [, l] of state.loot) consider(Math.hypot(l.data.x - state.x, l.data.z - state.z), `Pick up ${l.data.name}${l.data.amount ? ` (+${l.data.amount})` : ''}`);
   for (const [, b] of state.bags) consider(Math.hypot(b.data.x - state.x, b.data.z - state.z), `Search ${b.data.label}`);
-  state.map.terminals.forEach((t, i) => consider(Math.hypot(t.x - state.x, t.z - state.z), state.terminals[i] === false ? 'Terminal rebooting' : 'Hack terminal (stand still 5s) — intel + tech'));
-  state.map.houses.forEach((h, i) => {
-    const hs = state.houses[i];
-    if (!hs) return;
-    const own = h.id === state.houseId;
-    consider(Math.hypot(h.crate.x - state.x, h.crate.z - state.z) - 0.3, own ? 'Open your stash' : `Loot ${hs.owner || 'unclaimed'}'s stash`);
+  for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; consider(Math.hypot(t.x - state.x, t.z - state.z), ready ? 'Hack terminal (stand still 5s) — intel + tech' : 'Terminal rebooting'); }
+  for (const c of state.map.contacts) if (Math.abs(c.x - state.x) < 5 && Math.abs(c.z - state.z) < 5) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.8, `Talk to ${c.name} — contracts & field gear`);
+  for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
+  for (const o of state.objectives) consider(Math.hypot(o.x - state.x, o.z - state.z) - 0.5, 'Recover contract crate (3s)');
+  for (const [id, hs] of state.houseState) {
+    const h = state.map.houses[id];
+    const own = id === state.houseId;
+    consider(Math.hypot(h.crate.x - state.x, h.crate.z - state.z) - 0.3, own ? 'Open your stash · gunsmith · upgrades' : `Loot ${hs.owner || 'unclaimed'}'s stash`);
     const d = h.door;
     const squadHouse = !own && hs.owner && state.squad.members.some((m) => m.name === hs.owner);
     const lockText = (state.me?.level ?? 1) >= GADGETS.doorHack.level ? `Hack lock (${GADGETS.doorHack.cost} tech, 8s)` : `Locked — shoot it down (hack at lvl ${GADGETS.doorHack.level})`;
-    const doorText = own || squadHouse ? (hs.hp <= 0 ? (own ? 'Rebuild door' : 'Doorway (breached)') : hs.open ? 'Close door' : 'Open door') : (hs.hp <= 0 ? 'Doorway (breached)' : hs.open ? 'Doorway (open)' : `${lockText} · ${Math.round(hs.hp / state.doorMax * 100)}%`);
+    const doorText = own || squadHouse ? (hs.hp <= 0 ? (own ? 'Rebuild door' : 'Doorway (breached)') : hs.open ? 'Close door' : 'Open door') : (hs.hp <= 0 ? 'Doorway (breached)' : hs.open ? 'Doorway (open)' : `${lockText} · ${Math.round(hs.hp / hs.max * 100)}%`);
     consider(Math.hypot((d.minX + d.maxX) / 2 - state.x, (d.minZ + d.maxZ) / 2 - state.z), doorText);
-  });
+  }
   return best;
 }
 
@@ -1039,6 +1310,13 @@ function drawMarkers() {
     }
     state.pings = state.pings.filter((p) => p.until > now);
     state.pings.forEach((p, i) => marker(`p${i}`, p.objective ? 'objective' : 'ping', `${p.objective ? '★ OBJECTIVE' : `◎ ${p.from}`} · ${Math.round(Math.hypot(p.x - state.x, p.z - state.z))}m`, new THREE.Vector3(p.x, 1.5, p.z)));
+    for (const ct of state.contracts) marker(`c${ct.id}`, 'objective', `◆ ${CONTRACT_TYPES[ct.type].name} · ${Math.round(Math.hypot(ct.x - state.x, ct.z - state.z))}m`, new THREE.Vector3(ct.x, 2.5, ct.z));
+    for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${Math.round(Math.hypot(d.x - state.x, d.z - state.z))}m`, new THREE.Vector3(d.x, 3, d.z));
+    if (state.houseId !== null && state.houseId !== undefined) {
+      const hh = state.map.houses[state.houseId];
+      const dh = Math.hypot(hh.x - state.x, hh.z - state.z);
+      if (dh > 40) marker('home', 'squad', `⌂ Home ${Math.round(dh)}m`, new THREE.Vector3(hh.x, 4, hh.z));
+    }
     state.alerts = state.alerts.filter((a) => a.until > now);
     state.alerts.forEach((a, i) => marker(`a${i}`, 'alert', '⚠', new THREE.Vector3(a.x, 2, a.z)));
   }
@@ -1139,7 +1417,7 @@ const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU:
 const PAD_ACTIONS = {
   [BTN.A]: 'interact', [BTN.B]: 'crouch', [BTN.X]: 'reload', [BTN.Y]: 'swap', [BTN.LB]: 'sensor', [BTN.RB]: 'tag',
   [BTN.R3]: 'camo', [BTN.UP]: 'heal', [BTN.DOWN]: 'ping', [BTN.LEFT]: 'rally', [BTN.RIGHT]: 'squadPanel',
-  [BTN.VIEW]: 'inventory', [BTN.MENU]: 'squadPanel',
+  [BTN.VIEW]: 'inventory', [BTN.MENU]: 'map',
 };
 const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: '▶' };
 const pad = { prev: [], moveX: 0, moveY: 0, sprint: false, navAt: 0, settings: { lookSpeed: 2.6, invertY: false } };
@@ -1164,11 +1442,11 @@ function readPad() {
 const deadzone = (v, d = 0.16) => (Math.abs(v) < d ? 0 : Math.sign(v) * (Math.abs(v) - d) / (1 - d));
 
 function topPanel() {
-  for (const id of ['death', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
+  for (const id of ['mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
   return null;
 }
 function focusables(root) {
-  return [...root.querySelectorAll('button:not([disabled]), input')].filter((el) => el.offsetParent !== null);
+  return [...root.querySelectorAll('button:not([disabled]):not(.nopad), input')].filter((el) => el.offsetParent !== null);
 }
 function padFocus(el) {
   const prev = document.activeElement;
@@ -1176,7 +1454,7 @@ function padFocus(el) {
   el.classList.add('padfocus');
   el.focus({ preventScroll: true });
   el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  el.dispatchEvent(new MouseEvent('mouseenter'));   // drives gunsmith hover previews
+  el.dispatchEvent(new MouseEvent('mouseenter'));   // drives gunsmith previews and map highlights
 }
 /** Spatial menu navigation: move to the nearest control in the pushed direction. */
 function moveFocus(root, dx, dy) {
@@ -1203,7 +1481,9 @@ function moveFocus(root, dx, dy) {
   padFocus(best);
 }
 function padBack() {
-  if (state.gunsmithOpen) closeGunsmith();
+  if (state.mapOpen) { if (state.mapMode === 'view' || state.mapMode === 'travel') closeMapScreen(); }
+  else if (state.contactOpen) closeContact();
+  else if (state.gunsmithOpen) closeGunsmith();
   else if (state.panelOpen) closeSquadPanel();
   else if (state.invOpen) closeInventory();
 }
@@ -1241,8 +1521,9 @@ function pollPad(dt, now) {
     }
     if (just(BTN.B)) padBack();
     if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
-    if (just(BTN.VIEW) && panel.id !== 'login' && panel.id !== 'death') doAction('inventory');
-    if (just(BTN.MENU) && panel.id !== 'login' && panel.id !== 'death') doAction('squadPanel');
+    if (just(BTN.VIEW) && !['login', 'mapscreen'].includes(panel.id)) doAction('inventory');
+    if (just(BTN.MENU) && panel.id === 'mapscreen') doAction('map');
+    if (panel.id === 'mapscreen') { mapView.zoom = Math.max(1, Math.min(16, mapView.zoom * (1 + (val(BTN.RT) - val(BTN.LT)) * dt * 2))); if (val(BTN.RT) + val(BTN.LT) > 0.05) drawMapCanvas(); }
   } else if (state.me && !state.me.dead) {
     // Gameplay.
     pad.moveX = deadzone(ax[0]);
@@ -1263,8 +1544,6 @@ function pollPad(dt, now) {
     if (firing && !state.mouseDown) state.firedThisPress = false;
     state.mouseDown = firing;
     for (const [i, action] of Object.entries(PAD_ACTIONS)) if (just(Number(i))) doAction(action);
-  } else if (state.me?.dead && just(BTN.A)) {
-    $('respawn').click();
   }
   pad.prev = g.buttons.map((x) => x.pressed);
 }
@@ -1305,7 +1584,7 @@ function frame(now) {
     const len = Math.hypot(mx, mz);
     if (len > 0.05) {
       if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
-      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solids());
+      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3));
       state.x = p.x; state.z = p.z;
     }
     if (state.mouseDown) tryFire(now); else state.firedThisPress = false;
@@ -1339,7 +1618,7 @@ function frame(now) {
   const toCam = want.clone().sub(pivot);
   const tl = toCam.length();
   toCam.normalize();
-  const hit = rayAgainstBoxes(pivot.x, pivot.y, pivot.z, toCam.x, toCam.y, toCam.z, solids(), tl);
+  const hit = rayAgainstBoxes(pivot.x, pivot.y, pivot.z, toCam.x, toCam.y, toCam.z, solidsNear(pivot.x, pivot.z, tl + 1), tl);
   const camDist = Math.max(0.3, Math.min(tl, hit.t - 0.25));
   camera.position.copy(pivot).addScaledVector(toCam, camDist);
   if (camera.position.y < 0.3) camera.position.y = 0.3;
@@ -1352,7 +1631,14 @@ function frame(now) {
   $('crosshair').classList.toggle('aim', aim);
 
   // Hide stash labels you're standing right under.
-  state.map.houses.forEach((h, i) => { houseLabels[i].visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; });
+  for (const [id, v] of houseVis) { const h = state.map.houses[id]; v.label.visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; }
+  state.view.update(state.x, state.z);
+  for (const g of state.contactMeshes) g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
+  for (const g of dropVis.values()) {
+    // Falling crate until it lands.
+    const left = g.userData.drop.landsAt - Date.now();
+    g.userData.crate.position.y = left > 0 ? 0.5 + Math.min(60, left / 1000) : 0.5;
+  }
   sun.position.set(state.x + 40, 80, state.z + 25);
   sun.target.position.set(state.x, 0, state.z);
 

@@ -25,13 +25,14 @@
     <div id="padhint" class="controls"></div>
     <div class="controls kbonly">
       <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
-      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory · <b>P</b> squad &amp; leaderboard<br />
+      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory · <b>P</b> squad &amp; leaderboard · <b>M</b> map<br />
       <b>F</b> tag · <b>G</b> sensor grenade · <b>V</b> optical camo · <b>T</b> rally (leader) · <b>B</b> squad ping<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
     </div>
   </div>
 
   <div id="hud" hidden>
     <div id="feed"></div>
+    <div id="tracker"></div>
     <canvas id="minimap" width="200" height="200"></canvas>
     <div id="crosshair"><i></i><i></i><i></i><i></i></div>
     <div id="prompt"></div>
@@ -116,11 +117,35 @@
     <div class="hint"><span class="kbonly">P / Esc to close</span><span class="padonly">Ⓑ back</span></div>
   </div>
 
-  <div id="death" class="panel center" hidden>
-    <h1>DOWN</h1>
-    <p id="deathby"></p>
-    <p class="sub">Everything you carried is in a bag where you fell. Anyone can take it — including whoever killed you.</p>
-    <button id="respawn">Redeploy</button>
+  <div id="mapscreen" class="panel" hidden>
+    <div class="mapgrid">
+      <div class="mapwrap"><canvas id="mapcanvas"></canvas>
+        <div class="mapzoom"><button class="ghost nopad" id="mapZoomIn">＋</button><button class="ghost nopad" id="mapZoomOut">－</button></div>
+      </div>
+      <aside>
+        <h2 id="mapTitle"></h2>
+        <p id="mapNote" class="sub"></p>
+        <div id="mapList"></div>
+      </aside>
+    </div>
+  </div>
+
+  <div id="contactpanel" class="panel" hidden>
+    <header><h2 id="ctTitle"></h2><span id="ctComms"></span></header>
+    <div class="cols">
+      <section>
+        <h2>Contracts</h2>
+        <div id="ctOffers"></div>
+        <h2>Active</h2>
+        <div id="ctActive"></div>
+      </section>
+      <section>
+        <h2>Quartermaster — field gear</h2>
+        <p class="sub" style="text-align:left">Paid with ★ commendations, which you only earn by completing contracts and securing supply drops. Field gear is permanent and is never lost on death.</p>
+        <div id="ctShop"></div>
+      </section>
+    </div>
+    <div class="hint"><span class="kbonly">Esc to close</span><span class="padonly">Ⓑ back</span></div>
   </div>
 
   <script type="module" src="/main.js"></script>

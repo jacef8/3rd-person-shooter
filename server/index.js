@@ -1,8 +1,10 @@
-// Authoritative game server: one persistent, always-live shared world.
-// - Serves the browser client over HTTP and runs the simulation over WebSocket.
-// - Every position, shot, hit, pickup and stash transfer is validated here.
-// - World state (characters, stash contents, door damage, dropped bags) persists to disk,
-//   so the world keeps existing while players are offline — including their stash houses.
+// Authoritative game server: one persistent, always-live 8 x 8 km open world.
+// - Serves the browser client over HTTP(S) and runs the simulation over WebSocket.
+// - Every position, shot, hit, pickup, hack, contract and stash transfer is validated here.
+// - World state (characters, stash houses and their upgrades, dropped bags) persists to disk, so the
+//   world keeps existing while players are offline — including their stash houses.
+// - Interest management: each player only receives what's within ~320 m of them, and AI only runs
+//   near players, which is what lets one server host a PUBG-sized map.
 
 import http from 'node:http';
 import https from 'node:https';
@@ -12,63 +14,67 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import {
-  generateMap, moveWithCollision, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE,
+  generateMap, mapChecksum, moveWithCollision, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
 } from '../shared/world.js';
 import {
-  makeWeapon, makeArmor, makeConsumable, weaponStats, armorStats, worldSupply, partFits,
-  levelFromXp, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS,
-  TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
+  makeWeapon, makeArmor, makeConsumable, weaponStats, armorStats, worldSupply, partFits, isUnlocked,
+  levelFromXp, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
+  UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
 const SEED = Number(process.env.SEED || 1337);
+const WORLD_SIZE = Number(process.env.WORLD_SIZE || DEFAULT_WORLD_SIZE);
 const DATA_FILE = process.env.DATA_FILE || path.join(ROOT, 'data', 'world.json');
 const TICK_HZ = 20;
-const SNAPSHOT_EVERY = 2;            // snapshots at 10 Hz
-const BOT_COUNT = Number(process.env.BOTS ?? 14);
+const SNAPSHOT_EVERY = 2;              // 10 Hz
+const INTEREST = 320;                  // metres: what each client is told about
+const AMBIENT_BOTS = Number(process.env.BOTS ?? 5);   // roaming rogues kept around each active player
+const BOT_ACTIVE_RANGE = 450;
 const PACK_SIZE = 12;
-const STASH_SIZE = 30;
 const DOOR_HP = Number(process.env.DOOR_HP || 1500);
-const LOOT_RESPAWN_MS = 90_000;
+const LOOT_RESPAWN_MS = 5 * 60_000;
 const BAG_LIFETIME_MS = 30 * 60_000;
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const SQUAD_MAX = 4;
-const RESOURCES = ['ammo', 'parts', 'tech', 'intel'];   // carried counters; all drop on death, all stealable
-const CAMO_REVEAL_DIST = 9;      // cloaked players are only sent to others this close (or if exposed)
+const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage'];   // carried; all drop on death, all stealable
+const CAMO_REVEAL_DIST = 9;
 const MARK_MS = 8000;
-const SENSOR = { radius: 18, duration: 10_000, throwRange: 30, cooldown: 12_000 };
-const HACK_MS = { terminal: 5000, door: 8000 };
+const SENSOR = { radius: 18, radiusMk2: 26, duration: 10_000, throwRange: 30, cooldown: 12_000 };
+const HACK_MS = { terminal: 5000, door: 8000, drop: 6000, crate: 3000 };
 const RALLY = { radius: 30, buffMs: 10_000, cooldown: 90_000 };
+const SPAWN_PROTECT_MS = 10_000;
+const MAX_CONTRACTS = 2;
+const CONTRACT_MS = 60 * 60_000;
+const SUPPLY_EVERY_MS = Number(process.env.SUPPLY_EVERY_MS || 10 * 60_000);
+const SUPPLY_FALL_MS = Number(process.env.SUPPLY_FALL_MS || 60_000);
 
-const map = generateMap(SEED);
-const staticSolids = map.boxes;
+const map = generateMap(SEED, WORLD_SIZE);
+const grid = map.grid;
+const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
+const freshHouse = () => ({ owner: null, ownerName: null, doorHp: DOOR_HP, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} });
 function freshDb() {
-  return {
-    characters: {},   // token -> persistent character
-    houses: Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: DOOR_HP, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0 }])),
-    bags: [],
-  };
+  return { characters: {}, houses: Object.fromEntries(map.houses.map((h) => [h.id, freshHouse()])), bags: [] };
 }
-
 function loadDb() {
   try {
     const db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    if (db.seed !== SEED || db.version !== DB_VERSION) throw new Error('incompatible save');
-    for (const h of map.houses) db.houses[h.id] ??= freshDb().houses[h.id];
+    if (db.seed !== SEED || db.version !== DB_VERSION || db.size !== WORLD_SIZE) throw new Error('incompatible save');
     return db;
   } catch {
-    return { seed: SEED, version: DB_VERSION, ...freshDb() };
+    return { seed: SEED, version: DB_VERSION, size: WORLD_SIZE, ...freshDb() };
   }
 }
-
 const db = loadDb();
-db.seed = SEED;
-db.version = DB_VERSION;
-for (const h of Object.values(db.houses)) { h.parts ??= 0; h.tech ??= 0; h.intel ??= 0; }
+Object.assign(db, { seed: SEED, version: DB_VERSION, size: WORLD_SIZE });
+for (const h of map.houses) {
+  db.houses[h.id] = { ...freshHouse(), ...(db.houses[h.id] || {}) };
+  db.houses[h.id].upg = { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0, ...db.houses[h.id].upg };
+}
 
 function saveDb() {
   for (const p of players.values()) persistCharacter(p);
@@ -79,72 +85,72 @@ function saveDb() {
 }
 
 // ---------------------------------------------------------------- runtime state
-const players = new Map();   // id -> live player session
+const players = new Map();
 const bots = new Map();
-const loot = new Map();      // id -> { id, x, z, item, spawnIndex }
-const spawnCooldown = new Map(map.lootSpawns.map((_, i) => [i, 0]));
+const loot = new Map();           // id -> { id, x, z, item, spawnIndex }
+const lootAtSpawn = new Map();    // spawnIndex -> loot id
+const spawnReadyAt = new Map(map.lootSpawns.map((_, i) => [i, 0]));
 const terminalReadyAt = new Map(map.terminals.map((t) => [t.id, 0]));
-const sensors = [];          // active sensor grenades
-const squads = new Map();    // squadId -> { id, leader: token, members: Set<token> }
+const objectives = new Map();     // contract crates: id -> { id, x, z, contractId, owner }
+const drops = new Map();          // supply drops: id -> { id, x, z, landsAt, expires }
+const sensors = [];
+const squads = new Map();
 const squadOfToken = new Map();
-const invites = new Map();   // invitee token -> { fromToken, fromName, expires }
+const invites = new Map();
 let nextId = 1;
 const uid = (p) => `${p}${nextId++}`;
+let nextDropAt = Date.now() + Math.min(SUPPLY_EVERY_MS, 2 * 60_000);
 
+// ---------------------------------------------------------------- world queries
+function doorMax(houseId) { return DOOR_HP * UPGRADES.door.tiers[db.houses[houseId].upg.door].hp; }
+function stashCap(houseId) { return UPGRADES.storage.tiers[db.houses[houseId].upg.storage].slots; }
 function doorBox(houseId) {
   const h = db.houses[houseId];
   if (h.doorHp <= 0 || h.doorOpen) return null;
   return { ...map.houses[houseId].door, type: 'door', houseId };
 }
-
-function solids() {
-  const list = staticSolids.slice();
-  for (const h of map.houses) { const d = doorBox(h.id); if (d) list.push(d); }
-  return list;
+function doorsNear(x, z, r, out) {
+  for (const h of map.houses) if (Math.abs(h.x - x) < r + 8 && Math.abs(h.z - z) < r + 8) { const d = doorBox(h.id); if (d) out.push(d); }
+  return out;
 }
+function solidsNear(x, z, r) { return doorsNear(x, z, r, grid.near(x, z, r)); }
+function solidsAlongRay(ox, oz, dx, dz, dist) {
+  const out = grid.ray(ox, oz, dx, dz, dist);
+  return doorsNear(ox + dx * dist / 2, oz + dz * dist / 2, dist / 2 + 2, out);
+}
+function lineOfSight(ax, ay, az, bx, by, bz) {
+  const dx = bx - ax, dy = by - ay, dz = bz - az;
+  const d = Math.hypot(dx, dy, dz);
+  const ux = dx / d, uy = dy / d, uz = dz / d;
+  return rayAgainstBoxes(ax, ay, az, ux, uy, uz, solidsAlongRay(ax, az, ux, uz, d), d).t >= d - 0.05;
+}
+const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
 
 // ---------------------------------------------------------------- characters
 function starterKit() {
-  return {
-    primary: null,
-    secondary: makeWeapon('sidearm'),
-    armor: null,
-    pack: [makeConsumable('medkit')],
-  };
+  return { primary: null, secondary: makeWeapon('sidearm'), armor: null, pack: [makeConsumable('medkit')] };
 }
-
 function starterLoadout() {
   const inv = starterKit();
-  return { inv, ammo: 90, parts: 0, tech: 0, intel: 0, mags: { [inv.secondary.id]: weaponStats(inv.secondary).mag }, active: 'secondary' };
+  return { inv, ammo: 90, parts: 0, tech: 0, intel: 0, salvage: 0, mags: { [inv.secondary.id]: weaponStats(inv.secondary).mag }, active: 'secondary' };
 }
-
 function newCharacter(name) {
-  const sp = map.playerSpawns[Math.floor(Math.random() * map.playerSpawns.length)];
   return {
-    name, x: sp.x, z: sp.z, yaw: 0, hp: 100, armor: 0, ...starterLoadout(), parts: 60, tech: 20, dead: false, kills: 0, xp: 0,
+    name, x: 0, z: 0, yaw: 0, hp: 100, armor: 0, ...starterLoadout(), parts: 60, tech: 20, dead: false, kills: 0, xp: 0,
+    comms: 0, field: [], discovered: [], contracts: [], needsDeploy: true,
   };
 }
-
-function claimHouse(token, name) {
-  const owned = Object.entries(db.houses).find(([, h]) => h.owner === token);
-  if (owned) return Number(owned[0]);
-  const free = Object.entries(db.houses).find(([, h]) => !h.owner);
-  if (!free) return null;
-  free[1].owner = token;
-  free[1].ownerName = name;
-  return Number(free[0]);
+function ownedHouse(token) {
+  const e = Object.entries(db.houses).find(([, h]) => h.owner === token);
+  return e ? Number(e[0]) : null;
 }
-
 function maxHp() { return 100; }
 function maxArmor(p) { return armorStats(p.inv.armor).armor; }
 function activeWeapon(p) { return p.inv[p.active] || p.inv.primary || p.inv.secondary || null; }
 function stats(p) { return weaponStats(activeWeapon(p)); }
 function level(p) { return levelFromXp(p.xp || 0); }
+function hasField(p, id) { return (p.field || []).includes(id); }
 
-/**
- * Grant XP; announces level-ups along with exactly what they unlocked.
- * With `share`, squadmates within 50 m get a cut — playing together levels everyone faster.
- */
 function award(p, amount, reason, share = false) {
   if (!p || p.isBot || !amount) return;
   if (share) {
@@ -163,29 +169,26 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-function persistCharacter(p) {
-  db.characters[p.token] = {
-    name: p.name, x: p.x, z: p.z, yaw: p.yaw, hp: p.hp, armor: p.armor, inv: p.inv,
-    ammo: p.ammo, mags: p.mags, active: p.active, dead: p.dead, kills: p.kills, xp: p.xp, parts: p.parts,
-    tech: p.tech, intel: p.intel,
-  };
-}
+const PERSIST = ['name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'parts', 'tech', 'intel', 'salvage', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy'];
+function persistCharacter(p) { db.characters[p.token] = Object.fromEntries(PERSIST.map((k) => [k, p[k]])); }
 
 // ---------------------------------------------------------------- networking helpers
-function send(ws, msg) { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+function send(ws, msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
 function broadcast(msg) { const s = JSON.stringify(msg); for (const p of players.values()) if (p.ws.readyState === 1) p.ws.send(s); }
 function feed(text) { broadcast({ t: 'feed', text }); }
 function toast(p, text) { send(p.ws, { t: 'toast', text }); }
+function dirty(p) { p.dirty = true; }
 
 function privateState(p) {
   const w = activeWeapon(p);
   return {
     t: 'you', hp: p.hp, maxHp: maxHp(p), armor: p.armor, maxArmor: maxArmor(p), ammo: p.ammo,
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
-    xp: p.xp, level: level(p), parts: p.parts, tech: p.tech, intel: p.intel, atStash: atOwnStash(p),
+    xp: p.xp, level: level(p), parts: p.parts, tech: p.tech, intel: p.intel, salvage: p.salvage, comms: p.comms,
+    field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
     reloading: p.reloadUntil > Date.now(), houseId: p.houseId,
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
-    buffUntil: p.buffUntil || 0,
+    buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
   };
 }
 
@@ -206,14 +209,12 @@ function squadMembersOnline(p) {
   return [...s.members].map(onlineByToken).filter(Boolean);
 }
 function sendSquad(p, msg) { for (const m of squadMembersOnline(p)) send(m.ws, msg); }
-
 function pushSquadState(squad) {
   const members = [...squad.members].map(onlineByToken).filter(Boolean);
   const leader = onlineByToken(squad.leader);
-  const view = { t: 'squad', id: squad.id, leaderId: leader?.id ?? null, members: members.map((m) => ({ id: m.id, name: m.name, level: level(m) })) };
+  const view = { t: 'squad', id: squad.id, leaderId: leader?.id ?? null, members: members.map((m) => ({ id: m.id, name: m.name, level: level(m), x: Math.round(m.x), z: Math.round(m.z) })) };
   for (const m of members) send(m.ws, view);
 }
-
 function leaveSquad(p, reason = 'left') {
   const s = squadOf(p);
   if (!s) return;
@@ -226,18 +227,13 @@ function leaveSquad(p, reason = 'left') {
     squads.delete(s.id);
     return;
   }
-  if (s.leader === p.token) {
-    s.leader = [...s.members][0];
-    const nl = onlineByToken(s.leader);
-    if (nl) toast(nl, 'You are now squad leader');
-  }
+  if (s.leader === p.token) { s.leader = [...s.members][0]; const nl = onlineByToken(s.leader); if (nl) toast(nl, 'You are now squad leader'); }
   pushSquadState(s);
 }
-
 function squadAction(p, msg) {
   const now = Date.now();
+  const target = msg.id ? players.get(msg.id) : null;
   if (msg.action === 'invite') {
-    const target = [...players.values()].find((o) => o.id === msg.id);
     if (!target || target === p) return;
     const s = squadOf(p);
     if (s && s.leader !== p.token) return toast(p, 'Only the squad leader can invite');
@@ -254,11 +250,7 @@ function squadAction(p, msg) {
     if (!inviter) return toast(p, 'Inviter went offline');
     leaveSquad(p);
     let s = squadOf(inviter);
-    if (!s) {
-      s = { id: uid('sq'), leader: inviter.token, members: new Set([inviter.token]) };
-      squads.set(s.id, s);
-      squadOfToken.set(inviter.token, s.id);
-    }
+    if (!s) { s = { id: uid('sq'), leader: inviter.token, members: new Set([inviter.token]) }; squads.set(s.id, s); squadOfToken.set(inviter.token, s.id); }
     if (s.members.size >= SQUAD_MAX) return toast(p, 'Squad is full');
     s.members.add(p.token);
     squadOfToken.set(p.token, s.id);
@@ -270,17 +262,14 @@ function squadAction(p, msg) {
     leaveSquad(p);
   } else if (msg.action === 'kick') {
     const s = squadOf(p);
-    const target = [...players.values()].find((o) => o.id === msg.id);
     if (!s || s.leader !== p.token || !target || !s.members.has(target.token) || target === p) return;
     leaveSquad(target, 'was removed from');
   } else if (msg.action === 'promote') {
     const s = squadOf(p);
-    const target = [...players.values()].find((o) => o.id === msg.id);
     if (!s || s.leader !== p.token || !target || !s.members.has(target.token)) return;
     s.leader = target.token;
     pushSquadState(s);
   } else if (msg.action === 'ping') {
-    // Waypoints: the leader's ping becomes the squad objective; members' pings are short callouts.
     const x = Number(msg.x), z = Number(msg.z);
     if (!Number.isFinite(x) || !Number.isFinite(z) || now - (p.lastPing || 0) < 500) return;
     p.lastPing = now;
@@ -288,7 +277,6 @@ function squadAction(p, msg) {
     sendSquad(p, { t: 'ping', x, z, from: p.name, objective: !!s && s.leader === p.token });
   }
 }
-
 function rally(p) {
   const now = Date.now();
   const s = squadOf(p);
@@ -308,17 +296,10 @@ function rally(p) {
 }
 
 // ---------------------------------------------------------------- tech: camo, tagging, sensors, hacking
-function camoActive(p) {
-  return !!p.camoOn && !p.dead && p.tech > 0 && (p.speed || 0) < 3.2 && Date.now() > (p.camoBreakUntil || 0);
-}
+function camoActive(p) { return !!p.camoOn && !p.dead && p.tech > 0 && (p.speed || 0) < 3.2 && Date.now() > (p.camoBreakUntil || 0); }
 function breakCamo(p, ms) { if (p.camoOn) p.camoBreakUntil = Math.max(p.camoBreakUntil || 0, Date.now() + ms); }
-
-function expose(target, key, ms) {
-  target.exposed ??= {};
-  target.exposed[key] = Math.max(target.exposed[key] || 0, Date.now() + ms);
-}
+function expose(target, key, ms) { target.exposed ??= {}; target.exposed[key] = Math.max(target.exposed[key] || 0, Date.now() + ms); }
 function exposedTo(target, viewer) { return (target.exposed?.[squadKey(viewer)] || 0) > Date.now(); }
-
 function findCharacter(id) { return players.get(id) || bots.get(id) || null; }
 
 function markTarget(p, msg) {
@@ -326,9 +307,8 @@ function markTarget(p, msg) {
   if (now - (p.lastMark || 0) < 700) return;
   const t = findCharacter(msg.id);
   if (!t || t.dead || sameSquad(p, t)) return;
-  const d = Math.hypot(t.x - p.x, t.z - p.z);
   const eye = p.crouch ? CROUCH_EYE : STAND_EYE;
-  if (d > 100 || !lineOfSight(p.x, eye, p.z, t.x, t.crouch ? 0.9 : 1.3, t.z, solids())) return;
+  if (Math.hypot(t.x - p.x, t.z - p.z) > 120 || !lineOfSight(p.x, eye, p.z, t.x, t.crouch ? 0.9 : 1.3, t.z)) return;
   p.lastMark = now;
   const key = squadKey(p);
   expose(t, key, MARK_MS);
@@ -338,8 +318,7 @@ function markTarget(p, msg) {
 
 function throwSensor(p, msg) {
   const now = Date.now();
-  const lvl = level(p);
-  if (lvl < GADGETS.sensor.level) return toast(p, `Sensor grenade unlocks at level ${GADGETS.sensor.level}`);
+  if (level(p) < GADGETS.sensor.level) return toast(p, `Sensor grenade unlocks at level ${GADGETS.sensor.level}`);
   if (now < (p.sensorReadyAt || 0)) return;
   if (p.tech < GADGETS.sensor.cost) return toast(p, `Sensor needs ${GADGETS.sensor.cost} tech`);
   let x = Number(msg.x), z = Number(msg.z);
@@ -348,11 +327,11 @@ function throwSensor(p, msg) {
   if (d > SENSOR.throwRange) { x = p.x + (x - p.x) * SENSOR.throwRange / d; z = p.z + (z - p.z) * SENSOR.throwRange / d; }
   p.tech -= GADGETS.sensor.cost;
   p.sensorReadyAt = now + SENSOR.cooldown;
-  sensors.push({ x, z, until: now + SENSOR.duration, key: squadKey(p), owner: p });
-  sendSquad(p, { t: 'sensor', x, z, until: now + SENSOR.duration, radius: SENSOR.radius });
+  const radius = hasField(p, 'sensorMk2') ? SENSOR.radiusMk2 : SENSOR.radius;
+  sensors.push({ x, z, until: now + SENSOR.duration, key: squadKey(p), owner: p, radius });
+  sendSquad(p, { t: 'sensor', x, z, until: now + SENSOR.duration, radius });
   dirty(p);
 }
-
 function tickSensors(now) {
   for (let i = sensors.length - 1; i >= 0; i--) {
     const s = sensors[i];
@@ -360,42 +339,48 @@ function tickSensors(now) {
     const ids = [];
     for (const c of [...players.values(), ...bots.values()]) {
       if (c.dead || sameSquad(c, s.owner)) continue;
-      if (Math.hypot(c.x - s.x, c.z - s.z) <= SENSOR.radius) { expose(c, s.key, 1200); ids.push(c.id); }
+      if (Math.hypot(c.x - s.x, c.z - s.z) <= s.radius) { expose(c, s.key, 1200); ids.push(c.id); }
     }
     if (ids.length) sendSquad(s.owner, { t: 'expose', ids, until: now + 1200, kind: 'sensor' });
   }
 }
 
+/** Timed, interruptible channel: terminals, door bypass, supply drops, contract crates. */
 function startHack(p, kind, id) {
   const now = Date.now();
+  let src;
   if (kind === 'terminal') {
     if ((terminalReadyAt.get(id) || 0) > now) return toast(p, `Terminal rebooting — ${Math.ceil((terminalReadyAt.get(id) - now) / 1000)}s`);
-  } else {
+    src = map.terminals[id];
+  } else if (kind === 'door') {
     if (level(p) < GADGETS.doorHack.level) return toast(p, `Locked. Shoot it down, or reach level ${GADGETS.doorHack.level} to hack it.`);
     if (p.tech < GADGETS.doorHack.cost) return toast(p, `Lock bypass needs ${GADGETS.doorHack.cost} tech`);
+    src = map.houses[id];
+  } else if (kind === 'drop') {
+    const d = drops.get(id);
+    if (!d || d.landsAt > now) return toast(p, 'The drop hasn\'t landed yet');
+    src = d;
+  } else {
+    src = objectives.get(id);
+    if (!src || src.owner !== p.token) return toast(p, 'Not your contract');
   }
   p.hack = { kind, id, start: now, until: now + HACK_MS[kind], x: p.x, z: p.z };
   send(p.ws, { t: 'hack', kind, until: p.hack.until, total: HACK_MS[kind] });
-  // Hacking is loud: anyone nearby sees it on their HUD. It's bait as much as it's loot.
-  const src = kind === 'terminal' ? map.terminals[id] : map.houses[id];
+  if (kind === 'crate') return;
+  const text = { terminal: 'Terminal hack detected', door: 'Stash lock bypass detected', drop: 'Someone is opening the supply drop' }[kind];
   for (const o of players.values()) {
-    if (o !== p && !sameSquad(o, p) && Math.hypot(o.x - src.x, o.z - src.z) < 80) send(o.ws, { t: 'alert', x: src.x, z: src.z, text: kind === 'terminal' ? 'Terminal hack detected' : 'Stash lock bypass detected' });
+    if (o !== p && !sameSquad(o, p) && Math.hypot(o.x - src.x, o.z - src.z) < 80) send(o.ws, { t: 'alert', x: src.x, z: src.z, text });
   }
 }
-
-function cancelHack(p, reason) {
-  if (!p.hack) return;
-  p.hack = null;
-  send(p.ws, { t: 'hack', cancel: true, reason });
-}
+function cancelHack(p, reason) { if (!p.hack) return; p.hack = null; send(p.ws, { t: 'hack', cancel: true, reason }); }
 
 function tickHacks(now) {
   for (const p of players.values()) {
     const h = p.hack;
     if (!h) continue;
     if (p.dead) { cancelHack(p, 'You went down'); continue; }
-    if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Hack interrupted — you moved'); continue; }
-    if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Hack interrupted — taking fire'); continue; }
+    if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Interrupted — you moved'); continue; }
+    if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
     if (now < h.until) continue;
     p.hack = null;
     if (h.kind === 'terminal') {
@@ -404,7 +389,8 @@ function tickHacks(now) {
       p.tech += TERMINAL_REWARD.tech;
       award(p, XP.hackTerminal, 'Terminal hacked', true);
       send(p.ws, { t: 'hack', done: true, text: `+${TERMINAL_REWARD.intel} intel, +${TERMINAL_REWARD.tech} tech. Bank intel at your stash for XP.` });
-    } else {
+      for (const c of [...p.contracts]) if (c.type === 'heist' && c.terminalId === h.id) completeContract(p, c);
+    } else if (h.kind === 'door') {
       const house = db.houses[h.id];
       if (house.doorHp <= 0 || house.doorOpen) { send(p.ws, { t: 'hack', done: true, text: 'Door already open' }); continue; }
       p.tech -= GADGETS.doorHack.cost;
@@ -412,37 +398,46 @@ function tickHacks(now) {
       award(p, XP.hackDoor, 'Lock bypassed', true);
       notifyOwner(h.id, `⚠ ${p.name} hacked open your stash house door!`);
       send(p.ws, { t: 'hack', done: true, text: `${house.ownerName || 'The'}'s door is open` });
+    } else if (h.kind === 'drop') {
+      const d = drops.get(h.id);
+      if (!d) { send(p.ws, { t: 'hack', done: true, text: 'Someone beat you to it' }); continue; }
+      drops.delete(h.id);
+      const { comms, ...res } = SUPPLY_DROP_CONTENTS;
+      for (const [k, v] of Object.entries(res)) p[k] += v;
+      p.comms += comms;
+      award(p, XP.supplyDrop, 'Supply drop secured', true);
+      feed(`${p.name} secured a supply drop`);
+      broadcast({ t: 'events', drops: dropList() });
+      send(p.ws, { t: 'hack', done: true, text: `+${res.salvage} salvage, +${res.parts} parts, +${res.tech} tech, +${comms} commendation. Get it home!` });
+    } else if (h.kind === 'crate') {
+      const o = objectives.get(h.id);
+      if (!o) continue;
+      if (p.inv.pack.length >= PACK_SIZE) { send(p.ws, { t: 'hack', done: true, text: 'Backpack full' }); continue; }
+      objectives.delete(h.id);
+      p.inv.pack.push({ id: uid('pkg'), kind: 'package', name: 'Recovered supply crate', contractId: o.contractId });
+      send(p.ws, { t: 'hack', done: true, text: 'Crate recovered — deliver it to any Contact' });
+      pushContracts(p);
     }
     dirty(p);
   }
 }
-function dirty(p) { p.dirty = true; }
 
 // ---------------------------------------------------------------- combat
 function applyDamage(target, amount, attacker, isBot, headshot = false) {
   if (target.dead) return;
+  if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
   let dmg = amount;
-  if (!isBot && target.armor > 0) {
-    const absorbed = Math.min(target.armor, dmg);
-    target.armor -= absorbed;
-    dmg -= absorbed;
-  }
+  if (!isBot && target.armor > 0) { const absorbed = Math.min(target.armor, dmg); target.armor -= absorbed; dmg -= absorbed; }
   target.hp -= dmg;
   target.lastHit = Date.now();
-  if (!isBot) breakCamo(target, 3000);
-  if (!isBot) dirty(target);
-  if (target.hp <= 0) {
-    target.hp = 0;
-    if (isBot) killBot(target, attacker, headshot); else killPlayer(target, attacker, headshot);
-  }
+  if (!isBot) { breakCamo(target, 3000); dirty(target); }
+  if (target.hp <= 0) { target.hp = 0; if (isBot) killBot(target, attacker, headshot); else killPlayer(target, attacker, headshot); }
 }
-
 function dropBag(x, z, items, res = {}, label = 'Bag') {
   const bag = { id: 'bag' + crypto.randomBytes(6).toString('hex'), x, z, items: items.filter(Boolean), label, expires: Date.now() + BAG_LIFETIME_MS };
   for (const r of RESOURCES) bag[r] = Math.floor(res[r] || 0);
   if (bag.items.length || RESOURCES.some((r) => bag[r])) db.bags.push(bag);
 }
-
 function markAssist(target, killer) {
   const m = target.markedBy;
   target.markedBy = null;
@@ -451,13 +446,19 @@ function markAssist(target, killer) {
   if (marker) award(marker, XP.markAssist, 'Tagged target eliminated');
 }
 
+/**
+ * Death: everything you carry (gear, ammo, parts, tech, salvage, intel) drops in a bag where you fell.
+ * You keep your level, unlocks, commendations, field gear and everything in your stash house.
+ */
 function killPlayer(p, attacker, headshotKill) {
   p.dead = true;
   const { primary, secondary, armor, pack } = p.inv;
-  dropBag(p.x, p.z, [primary, secondary, armor, ...pack], p, `${p.name}'s bag`);
+  const keepIntel = hasField(p, 'pouch') ? Math.min(3, p.intel) : 0;
+  dropBag(p.x, p.z, [primary, secondary, armor, ...pack], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
   p.inv = { primary: null, secondary: null, armor: null, pack: [] };
   p.mags = {}; p.armor = 0; p.camoOn = false;
   for (const r of RESOURCES) p[r] = 0;
+  p.intel = keepIntel;
   cancelHack(p, 'You went down');
   markAssist(p, attacker);
   const by = attacker ? attacker.name : 'the city';
@@ -466,39 +467,42 @@ function killPlayer(p, attacker, headshotKill) {
     award(attacker, XP.playerKill + 20 * level(p) + (headshotKill ? XP.headshotKill : 0), `Killed ${p.name}`, true);
   }
   feed(`${by} ➜ ${p.name}`);
-  send(p.ws, { t: 'died', by });
+  send(p.ws, { t: 'died', by, deploy: deployOptions(p) });
   dirty(p);
 }
 
 function killBot(b, attacker, headshotKill) {
   b.dead = true;
-  b.respawnAt = Date.now() + 45_000;
-  // Rogues carry a fixed, readable payout — no stat lottery.
-  dropBag(b.x, b.z, b.drops % 3 === 0 ? [makeConsumable('medkit')] : [], { ammo: 30, parts: 20, tech: 5, intel: b.drops % 2 }, 'Rogue cache');
-  b.drops++;
+  const res = b.kind === 'hvt' ? { ammo: 60, parts: 40, tech: 20, salvage: 30, intel: 2 } : { ammo: 30, parts: 15, tech: 5, salvage: 8, intel: b.serial % 2 };
+  dropBag(b.x, b.z, b.serial % 3 === 0 ? [makeConsumable('medkit')] : [], res, b.kind === 'hvt' ? 'Lieutenant\'s cache' : 'Rogue cache');
   markAssist(b, attacker);
   if (attacker && !attacker.isBot) {
     attacker.kills++;
-    award(attacker, XP.rogueKill + (headshotKill ? XP.headshotKill : 0), 'Rogue down', true);
+    award(attacker, (b.kind === 'hvt' ? 300 : XP.rogueKill) + (headshotKill ? XP.headshotKill : 0), b.kind === 'hvt' ? 'Lieutenant down' : 'Rogue down', true);
+    if (b.kind !== 'ambient') feed(`${attacker.name} ➜ ${b.name}`);
   }
-  if (attacker) feed(`${attacker.name} ➜ ${b.name}`);
+  bots.delete(b.id);
+  if (b.contractId && !b.contractId.endsWith('-escort')) {
+    const owner = onlineByToken(b.ownerToken);
+    const rest = [...bots.values()].some((o) => o.contractId === b.contractId && !o.dead);
+    if (rest) return;
+    if (owner) { const c = owner.contracts.find((x) => x.id === b.contractId); if (c) completeContract(owner, c); }
+    else { const c = db.characters[b.ownerToken]?.contracts?.find((x) => x.id === b.contractId); if (c) c.ready = true; }
+  }
 }
 
-/**
- * Trace a shot from (ox,oy,oz) along unit dir. Hits world geometry, doors, players and bots.
- * Returns { t, target, kind, headshot }.
- */
 function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
-  const world = rayAgainstBoxes(ox, oy, oz, dx, dy, dz, staticSolids, range);
+  const world = rayAgainstBoxes(ox, oy, oz, dx, dy, dz, grid.ray(ox, oz, dx, dz, range), range);
   let best = world.t, target = null, kind = world.box ? 'world' : null, headshot = false;
   for (const h of map.houses) {
+    if (Math.abs(h.x - ox) > range + 8 || Math.abs(h.z - oz) > range + 8) continue;
     const d = doorBox(h.id);
     if (!d) continue;
     const t = rayBox(ox, oy, oz, dx, dy, dz, d.minX, 0, d.minZ, d.maxX, d.h, d.maxZ);
     if (t < best) { best = t; target = h.id; kind = 'door'; }
   }
   const check = (c, k) => {
-    if (c.dead || c.id === shooterId) return;
+    if (c.dead || c.id === shooterId || Math.abs(c.x - ox) > best + 1 || Math.abs(c.z - oz) > best + 1) return;
     const b = characterBounds(c.x, c.z, c.crouch);
     const t = rayBox(ox, oy, oz, dx, dy, dz, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
     if (t < best) { best = t; target = c; kind = k; headshot = oy + dy * t > b.maxY - 0.3; }
@@ -512,30 +516,26 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
   const s = isBot ? shooter.weapon : stats(shooter);
   const eye = shooter.crouch ? CROUCH_EYE : STAND_EYE;
   const ox = shooter.x, oy = eye, oz = shooter.z;
-  let base = dir;
-  const len = Math.hypot(base[0], base[1], base[2]) || 1;
-  base = [base[0] / len, base[1] / len, base[2] / len];
+  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+  const base = [dir[0] / len, dir[1] / len, dir[2] / len];
   const moving = !isBot && shooter.speed > 0.5;
   const baseSpread = isBot ? s.hipSpread * 0.6 : shooter.aiming ? s.adsSpread : s.hipSpread;
   const spreadMul = (moving ? 1.6 : 1) * (shooter.crouch ? 0.8 * s.crouchSpread : 1) / botAccuracy;
   const tracers = [];
   for (let i = 0; i < s.pellets; i++) {
     const sp = baseSpread * spreadMul;
-    let dx = base[0] + (Math.random() - 0.5) * 2 * sp;
-    let dy = base[1] + (Math.random() - 0.5) * 2 * sp;
-    let dz = base[2] + (Math.random() - 0.5) * 2 * sp;
+    let dx = base[0] + (Math.random() - 0.5) * 2 * sp, dy = base[1] + (Math.random() - 0.5) * 2 * sp, dz = base[2] + (Math.random() - 0.5) * 2 * sp;
     const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
     const maxRange = s.range * 2.2;
     const hit = traceShot(ox, oy, oz, dx, dy, dz, maxRange, shooter.id);
     const t = Math.min(hit.t, maxRange);
     tracers.push([+(ox + dx * t).toFixed(2), +(oy + dy * t).toFixed(2), +(oz + dz * t).toFixed(2), hit.kind ? 1 : 0]);
     if (!hit.kind || hit.kind === 'world') continue;
-    // Damage falls off linearly past optimal range down to 40%.
     const falloff = t <= s.range ? 1 : Math.max(0.4, 1 - (t - s.range) / (s.range * 1.2) * 0.6);
     let dmg = s.damage * falloff;
     if (hit.headshot) dmg *= 1.5;
-    if (!isBot && (shooter.buffUntil || 0) > Date.now()) dmg *= 1.2;   // squad leader's Rally
-    if (hit.kind === 'player' && !isBot && sameSquad(shooter, hit.target)) continue;   // no friendly fire
+    if (!isBot && (shooter.buffUntil || 0) > Date.now()) dmg *= 1.2;
+    if (hit.kind === 'player' && !isBot && sameSquad(shooter, hit.target)) continue;
     if (hit.kind === 'door') {
       const h = db.houses[hit.target];
       h.doorHp = Math.max(0, h.doorHp - dmg);
@@ -553,71 +553,85 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1) {
       if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2] });
     }
   }
-  if (!isBot) breakCamo(shooter, 2000);
-  broadcast({ t: 'shot', from: shooter.id, sup: !!s.suppressed, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
+  if (!isBot) { breakCamo(shooter, 2000); shooter.protectedUntil = 0; }
+  const msg = JSON.stringify({ t: 'shot', from: shooter.id, sup: !!s.suppressed, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
+  for (const p of players.values()) if (p.ws.readyState === 1 && Math.abs(p.x - ox) < INTEREST && Math.abs(p.z - oz) < INTEREST) p.ws.send(msg);
 }
+function notifyOwner(houseId, text) { const owner = onlineByToken(db.houses[houseId].owner); if (owner) toast(owner, text); }
 
-function notifyOwner(houseId, text) {
-  const owner = db.houses[houseId].owner;
-  for (const p of players.values()) if (p.token === owner) toast(p, text);
-}
-
-// ---------------------------------------------------------------- bots ("Rogues")
+// ---------------------------------------------------------------- AI ("Rogues")
+let botSerial = 0;
 const BOT_WEAPONS = ['carbine', 'smg', 'shotgun', 'lmg'];
-function spawnBot(b) {
-  const sp = map.lootSpawns[Math.floor(Math.random() * map.lootSpawns.length)];
-  const arche = BOT_WEAPONS[Math.floor(Math.random() * BOT_WEAPONS.length)];
-  Object.assign(b, {
-    x: sp.x, z: sp.z, homeX: sp.x, homeZ: sp.z, yaw: 0, hp: 140, maxHp: 140, dead: false,
-    weapon: (() => { const w = weaponStats(makeWeapon(arche)); return { ...w, damage: w.damage * 0.55 }; })(),
-    nextShot: 0, wander: null, crouch: false, target: null, burst: 0,
-  });
-}
-for (let i = 0; i < BOT_COUNT; i++) {
-  const b = { id: uid('b'), name: 'Rogue', isBot: true, drops: i };
-  spawnBot(b);
+function spawnBot(x, z, kind = 'ambient', extra = {}) {
+  const arche = kind === 'hvt' ? 'dmr' : BOT_WEAPONS[botSerial % BOT_WEAPONS.length];
+  const w = weaponStats(makeWeapon(arche));
+  const hp = kind === 'hvt' ? 500 : 140;
+  const p = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3));
+  const b = {
+    id: uid('b'), name: kind === 'hvt' ? 'Rogue Lieutenant' : 'Rogue', isBot: true, kind, serial: botSerial++,
+    x: p.x, z: p.z, homeX: p.x, homeZ: p.z, yaw: 0, hp, maxHp: hp, dead: false,
+    weapon: { ...w, damage: w.damage * (kind === 'hvt' ? 0.45 : 0.55) },
+    nextShot: 0, wander: null, crouch: false, burst: 0, ...extra,
+  };
   bots.set(b.id, b);
+  return b;
 }
 
-function lineOfSight(ax, ay, az, bx, by, bz, list) {
-  const dx = bx - ax, dy = by - ay, dz = bz - az;
-  const d = Math.hypot(dx, dy, dz);
-  return rayAgainstBoxes(ax, ay, az, dx / d, dy / d, dz / d, list, d).t >= d - 0.05;
-}
-
-function updateBots(dt, now, sol) {
+/** Keep a few roaming rogues around every active player; despawn ones nobody is near. */
+function manageAmbientBots() {
+  const alive = [...players.values()].filter((p) => !p.dead);
   for (const b of bots.values()) {
-    if (b.dead) { if (now > b.respawnAt) spawnBot(b); continue; }
-    // Acquire nearest visible player within 32 m.
-    let best = null, bestD = 32;
-    for (const p of players.values()) {
-      if (p.dead) continue;
-      const d = Math.hypot(p.x - b.x, p.z - b.z);
-      if (camoActive(p) && d > 6) continue;
-      if (d < bestD && lineOfSight(b.x, STAND_EYE, b.z, p.x, p.crouch ? 0.9 : 1.3, p.z, sol)) { best = p; bestD = d; }
+    if (b.kind !== 'ambient') continue;
+    if (!alive.some((p) => dist2(p, b) < 550 * 550)) bots.delete(b.id);
+  }
+  if (!AMBIENT_BOTS) return;
+  for (const p of alive) {
+    let near = 0;
+    for (const b of bots.values()) if (b.kind === 'ambient' && dist2(p, b) < 300 * 300) near++;
+    if (near >= AMBIENT_BOTS) continue;
+    for (let tries = 0; tries < 25; tries++) {
+      const sp = map.lootSpawns[Math.floor(Math.random() * map.lootSpawns.length)];
+      const d = Math.hypot(sp.x - p.x, sp.z - p.z);
+      if (d < 110 || d > 280) continue;
+      if (alive.some((o) => Math.hypot(o.x - sp.x, o.z - sp.z) < 90)) continue;
+      spawnBot(sp.x + 2, sp.z + 2);
+      break;
     }
-    b.target = best;
+  }
+}
+
+function updateBots(dt, now) {
+  const alive = [...players.values()].filter((p) => !p.dead);
+  for (const b of bots.values()) {
+    if (b.dead) continue;
+    if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
+    let best = null, bestD = b.kind === 'hvt' ? 45 : 32;
+    for (const p of alive) {
+      const d = Math.hypot(p.x - b.x, p.z - b.z);
+      if (d >= bestD) continue;
+      if (camoActive(p) && d > 6) continue;
+      if ((p.protectedUntil || 0) > now) continue;
+      if (lineOfSight(b.x, STAND_EYE, b.z, p.x, p.crouch ? 0.9 : 1.3, p.z)) { best = p; bestD = d; }
+    }
     let mx = 0, mz = 0;
     if (best) {
       b.yaw = Math.atan2(best.x - b.x, best.z - b.z);
       if (bestD > 14) { mx = Math.sin(b.yaw); mz = Math.cos(b.yaw); }
       if (now >= b.nextShot) {
-        const ty = best.crouch ? 0.8 : 1.2;
-        const dir = [best.x - b.x, ty - STAND_EYE, best.z - b.z];
-        const accuracy = Math.max(0.35, 1.2 - bestD / 30);
-        fire(b, dir, true, accuracy);
+        const dir = [best.x - b.x, (best.crouch ? 0.8 : 1.2) - STAND_EYE, best.z - b.z];
+        fire(b, dir, true, Math.max(0.35, 1.2 - bestD / 30));
         b.burst = (b.burst + 1) % 5;
         b.nextShot = now + (b.burst === 0 ? 1400 : 60_000 / b.weapon.rpm * 1.3);
       }
     } else {
+      const leash = b.kind === 'ambient' ? 30 : 12;
       if (!b.wander || Math.hypot(b.wander.x - b.x, b.wander.z - b.z) < 1 || Math.random() < 0.003) {
-        b.wander = { x: b.homeX + (Math.random() - 0.5) * 30, z: b.homeZ + (Math.random() - 0.5) * 30 };
+        b.wander = { x: b.homeX + (Math.random() - 0.5) * leash, z: b.homeZ + (Math.random() - 0.5) * leash };
       }
       b.yaw = Math.atan2(b.wander.x - b.x, b.wander.z - b.z);
       mx = Math.sin(b.yaw) * 0.45; mz = Math.cos(b.yaw) * 0.45;
     }
-    const speed = 3.2;
-    const np = moveWithCollision(b.x, b.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, sol);
+    const np = moveWithCollision(b.x, b.z, mx * 3.2 * dt, mz * 3.2 * dt, PLAYER_RADIUS, solidsNear(b.x, b.z, 3));
     if (Math.hypot(np.x - b.x, np.z - b.z) < 0.001 && (mx || mz)) b.wander = null;
     b.x = np.x; b.z = np.z;
   }
@@ -626,81 +640,201 @@ function updateBots(dt, now, sol) {
 // ---------------------------------------------------------------- loot
 function refillLoot(now) {
   map.lootSpawns.forEach((sp, i) => {
-    if (spawnCooldown.get(i) > now) return;
-    for (const l of loot.values()) if (l.spawnIndex === i) return;
-    const item = { ...worldSupply(i), id: uid('i') };
+    if (lootAtSpawn.has(i) || spawnReadyAt.get(i) > now) return;
     const id = uid('l');
-    loot.set(id, { id, x: sp.x, z: sp.z, item, spawnIndex: i });
-    spawnCooldown.set(i, Infinity);
+    loot.set(id, { id, x: sp.x, z: sp.z, item: { ...worldSupply(i, sp.zone), id: uid('i') }, spawnIndex: i });
+    lootAtSpawn.set(i, id);
   });
 }
-
 function addToPack(p, item) {
-  if (item.kind === 'ammo') { p.ammo += item.amount || 60; return true; }
-  if (item.kind === 'parts') { p.parts += item.amount || 10; return true; }
-  if (item.kind === 'tech') { p.tech += item.amount || 5; return true; }
+  if (RESOURCES.includes(item.kind)) { p[item.kind] += item.amount || 10; return true; }
   if (p.inv.pack.length >= PACK_SIZE) return false;
   p.inv.pack.push(item);
   return true;
+}
+
+// ---------------------------------------------------------------- contracts
+function nearestBy(list, x, z, minD, maxD) {
+  const inRange = list.filter((o) => { const d = Math.hypot(o.x - x, o.z - z); return d >= minD && d <= maxD; });
+  if (inRange.length) return inRange[Math.floor(Math.random() * inRange.length)];
+  return list.reduce((a, o) => (!a || Math.hypot(o.x - x, o.z - z) < Math.hypot(a.x - x, a.z - z) ? o : a), null);
+}
+function makeContract(type, contact) {
+  const c = { id: uid('c'), type, contactId: contact.id, expires: Date.now() + CONTRACT_MS };
+  if (type === 'heist') { const t = nearestBy(map.terminals, contact.x, contact.z, 250, 1000); Object.assign(c, { x: t.x, z: t.z, terminalId: t.id }); }
+  else if (type === 'recovery') {
+    // Placed beside (not on) a loot spot so the two don't overlap.
+    const s = nearestBy(map.lootSpawns.filter((l) => l.zone !== 'town'), contact.x, contact.z, 300, 1100);
+    const spot = resolveCircle(s.x + 2.5, s.z, 0.8, solidsNear(s.x + 2.5, s.z, 3));
+    Object.assign(c, { x: spot.x, z: spot.z });
+  }
+  else { const s = nearestBy(map.campSites, contact.x, contact.z, 250, 1200); Object.assign(c, { x: s.x, z: s.z }); }
+  return c;
+}
+function contactOffers(p, contactId) {
+  p.offers ??= {};
+  if (!p.offers[contactId]) {
+    const contact = map.contacts[contactId];
+    p.offers[contactId] = Object.keys(CONTRACT_TYPES).sort(() => Math.random() - 0.5).slice(0, 3).map((t) => makeContract(t, contact));
+  }
+  return p.offers[contactId];
+}
+/** Spawn whatever a contract needs in the world (also used to restore them after a restart/login). */
+function instantiateContract(p, c) {
+  if (c.type === 'camp' && ![...bots.values()].some((b) => b.contractId === c.id)) {
+    for (let i = 0; i < 4; i++) spawnBot(c.x + (i % 2 ? 4 : -4), c.z + (i < 2 ? 4 : -4), 'camp', { contractId: c.id, ownerToken: p.token });
+  } else if (c.type === 'hvt' && ![...bots.values()].some((b) => b.contractId === c.id)) {
+    spawnBot(c.x, c.z, 'hvt', { contractId: c.id, ownerToken: p.token });
+    for (let i = 0; i < 2; i++) spawnBot(c.x + (i ? 5 : -5), c.z + 3, 'camp', { contractId: `${c.id}-escort`, ownerToken: p.token });
+  } else if (c.type === 'recovery' && ![...objectives.values()].some((o) => o.contractId === c.id)
+    && !p.inv.pack.some((i) => i.contractId === c.id) && !db.bags.some((b) => b.items.some((i) => i.contractId === c.id))) {
+    const id = uid('o');
+    objectives.set(id, { id, x: c.x, z: c.z, contractId: c.id, owner: p.token });
+  }
+}
+function cleanupContract(c) {
+  for (const b of bots.values()) if (b.contractId === c.id || b.contractId === `${c.id}-escort`) bots.delete(b.id);
+  for (const o of objectives.values()) if (o.contractId === c.id) objectives.delete(o.id);
+}
+function pushContracts(p) {
+  send(p.ws, { t: 'contracts', list: p.contracts.map((c) => ({ id: c.id, type: c.type, x: c.x, z: c.z, expires: c.expires, contactId: c.contactId })) });
+}
+function acceptContract(p, msg) {
+  const contact = map.contacts[msg.contactId];
+  if (!contact || Math.hypot(contact.x - p.x, contact.z - p.z) > 6) return;
+  const offers = contactOffers(p, contact.id);
+  const idx = offers.findIndex((o) => o.id === msg.id);
+  if (idx < 0) return;
+  if (p.contracts.length >= MAX_CONTRACTS) return toast(p, `You can run ${MAX_CONTRACTS} contracts at once`);
+  const c = offers.splice(idx, 1)[0];
+  offers.push(makeContract(Object.keys(CONTRACT_TYPES)[Math.floor(Math.random() * 4)], contact));
+  c.expires = Date.now() + CONTRACT_MS;
+  p.contracts.push(c);
+  instantiateContract(p, c);
+  toast(p, `Contract accepted: ${CONTRACT_TYPES[c.type].name} — marked on your map`);
+  pushContracts(p);
+  send(p.ws, contactView(p, contact.id));
+  dirty(p);
+}
+/** Rewards are fixed and land in your pack — the salvage still has to get home. */
+function completeContract(p, c) {
+  const def = CONTRACT_TYPES[c.type];
+  p.contracts = p.contracts.filter((x) => x.id !== c.id);
+  cleanupContract(c);
+  const { comms = 0, ...res } = def.reward;
+  for (const [k, v] of Object.entries(res)) p[k] += v;
+  p.comms += comms;
+  award(p, def.xp, `Contract: ${def.name}`, true);
+  send(p.ws, { t: 'contractDone', name: def.name, reward: def.reward });
+  pushContracts(p);
+  dirty(p);
+}
+function abandonContract(p, id) {
+  const c = p.contracts.find((x) => x.id === id);
+  if (!c) return;
+  p.contracts = p.contracts.filter((x) => x !== c);
+  cleanupContract(c);
+  p.inv.pack = p.inv.pack.filter((i) => i.contractId !== c.id);
+  pushContracts(p);
+  dirty(p);
+}
+function contactView(p, contactId) {
+  return { t: 'contact', id: contactId, name: map.contacts[contactId].name, offers: contactOffers(p, contactId), active: p.contracts.map((c) => c.id), comms: p.comms };
+}
+function requisition(p, msg) {
+  const contact = map.contacts[msg.contactId];
+  if (!contact || Math.hypot(contact.x - p.x, contact.z - p.z) > 6) return;
+  const table = { part: PARTS, paint: PAINTS, armor: ARMORS, perk: FIELD_PERKS }[msg.kind];
+  const def = table?.[msg.id];
+  if (!def?.field) return;
+  if (hasField(p, msg.id)) return toast(p, 'Already requisitioned');
+  if (level(p) < (def.level || 1)) return toast(p, `Requires level ${def.level}`);
+  if (p.comms < def.field) return toast(p, `Needs ${def.field} commendations — earned from contracts and supply drops`);
+  p.comms -= def.field;
+  p.field.push(msg.id);
+  toast(p, `Requisitioned ${def.name}`);
+  send(p.ws, contactView(p, contact.id));
+  dirty(p);
+}
+
+// ---------------------------------------------------------------- supply drops (world events)
+function dropList() { return [...drops.values()].map((d) => ({ id: d.id, x: d.x, z: d.z, landsAt: d.landsAt })); }
+function scheduleDrop(now) {
+  if (now < nextDropAt || !players.size) return;
+  nextDropAt = now + SUPPLY_EVERY_MS;
+  const spots = map.lootSpawns.filter((l) => l.zone !== 'town');
+  const sp = spots[Math.floor(Math.random() * spots.length)];
+  const id = uid('d');
+  drops.set(id, { id, x: sp.x + 1.5, z: sp.z + 1.5, landsAt: now + SUPPLY_FALL_MS, expires: now + SUPPLY_FALL_MS + 15 * 60_000 });
+  feed('📦 Supply drop inbound — marked on the map');
+  broadcast({ t: 'events', drops: dropList(), announce: true });
 }
 
 // ---------------------------------------------------------------- interaction
 function nearestInteractable(p) {
   let best = null, bestD = INTERACT_RANGE;
   const consider = (d, obj) => { if (d < bestD) { bestD = d; best = obj; } };
-  for (const l of loot.values()) consider(Math.hypot(l.x - p.x, l.z - p.z), { kind: 'loot', ref: l });
-  for (const bag of db.bags) consider(Math.hypot(bag.x - p.x, bag.z - p.z), { kind: 'bag', ref: bag });
+  for (const l of loot.values()) if (Math.abs(l.x - p.x) < 4 && Math.abs(l.z - p.z) < 4) consider(Math.hypot(l.x - p.x, l.z - p.z), { kind: 'loot', ref: l });
+  for (const bag of db.bags) if (Math.abs(bag.x - p.x) < 4 && Math.abs(bag.z - p.z) < 4) consider(Math.hypot(bag.x - p.x, bag.z - p.z), { kind: 'bag', ref: bag });
   for (const h of map.houses) {
+    if (Math.abs(h.x - p.x) > 12 || Math.abs(h.z - p.z) > 12) continue;
     consider(Math.hypot(h.crate.x - p.x, h.crate.z - p.z) - 0.3, { kind: 'stash', ref: h });
     const d = h.door;
     consider(Math.hypot((d.minX + d.maxX) / 2 - p.x, (d.minZ + d.maxZ) / 2 - p.z), { kind: 'door', ref: h });
   }
-  for (const t of map.terminals) consider(Math.hypot(t.x - p.x, t.z - p.z), { kind: 'terminal', ref: t });
+  for (const t of map.terminals) if (Math.abs(t.x - p.x) < 4 && Math.abs(t.z - p.z) < 4) consider(Math.hypot(t.x - p.x, t.z - p.z), { kind: 'terminal', ref: t });
+  for (const c of map.contacts) if (Math.abs(c.x - p.x) < 5 && Math.abs(c.z - p.z) < 5) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.8, { kind: 'contact', ref: c });
+  for (const d of drops.values()) consider(Math.hypot(d.x - p.x, d.z - p.z) - 0.6, { kind: 'drop', ref: d });
+  for (const o of objectives.values()) if (o.owner === p.token) consider(Math.hypot(o.x - p.x, o.z - p.z) - 0.5, { kind: 'crate', ref: o });
   return best;
 }
-
 function containerView(p, kind, id) {
   if (kind === 'stash') {
     const h = db.houses[id];
     const mine = h.owner === p.token;
     const squad = !mine && !!h.owner && tokenInSquadWith(p, h.owner);
     const title = mine ? 'Your stash' : `${h.ownerName || 'Unclaimed'}'s stash${squad ? ' (squad)' : ''}`;
-    return { t: 'container', kind, id, title, items: h.items, ammo: 0, parts: h.parts, tech: h.tech, intel: h.intel, canPut: mine || squad, cap: STASH_SIZE, gunsmith: mine, bank: mine };
+    return { t: 'container', kind, id, title, items: h.items, ammo: 0, parts: h.parts, tech: h.tech, intel: h.intel, salvage: h.salvage, canPut: mine || squad, cap: stashCap(id), gunsmith: mine, bank: mine, upg: mine ? h.upg : null };
   }
   const bag = db.bags.find((b) => b.id === id);
-  return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ammo: bag.ammo, parts: bag.parts || 0, tech: bag.tech || 0, intel: bag.intel || 0, canPut: false, cap: 0 } : { t: 'container', closed: true };
+  return bag ? { t: 'container', kind, id, title: bag.label, items: bag.items, ammo: bag.ammo, parts: bag.parts || 0, tech: bag.tech || 0, intel: bag.intel || 0, salvage: bag.salvage || 0, canPut: false, cap: 0 } : { t: 'container', closed: true };
 }
-
 function nearContainer(p, kind, id) {
-  if (kind === 'stash') {
-    const h = map.houses[id];
-    return h && Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6;
-  }
+  if (kind === 'stash') { const h = map.houses[id]; return h && Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6; }
   const bag = db.bags.find((b) => b.id === id);
   return bag && Math.hypot(bag.x - p.x, bag.z - p.z) < INTERACT_RANGE + 0.6;
 }
-
 function refreshContainerViewers(kind, id) {
-  for (const p of players.values()) {
-    if (p.openContainer?.kind === kind && p.openContainer.id === id) send(p.ws, containerView(p, kind, id));
-  }
+  for (const p of players.values()) if (p.openContainer?.kind === kind && p.openContainer.id === id) send(p.ws, containerView(p, kind, id));
 }
 
 function interact(p) {
-  if (p.hack) return cancelHack(p, 'Hack cancelled');
+  if (p.hack) return cancelHack(p, 'Cancelled');
   const it = nearestInteractable(p);
   if (!it) return;
   if (it.kind === 'terminal') return startHack(p, 'terminal', it.ref.id);
+  if (it.kind === 'drop') return startHack(p, 'drop', it.ref.id);
+  if (it.kind === 'crate') return startHack(p, 'crate', it.ref.id);
+  if (it.kind === 'contact') {
+    // Deliver any recovered crates first, then open the contact board.
+    for (const pkg of p.inv.pack.filter((i) => i.kind === 'package')) {
+      const c = p.contracts.find((x) => x.id === pkg.contractId);
+      if (!c) continue;
+      p.inv.pack = p.inv.pack.filter((i) => i !== pkg);
+      completeContract(p, c);
+    }
+    return send(p.ws, contactView(p, it.ref.id));
+  }
   if (it.kind === 'loot') {
     if (!addToPack(p, it.ref.item)) return toast(p, 'Backpack full');
     loot.delete(it.ref.id);
+    lootAtSpawn.delete(it.ref.spawnIndex);
+    spawnReadyAt.set(it.ref.spawnIndex, Date.now() + LOOT_RESPAWN_MS);
     award(p, XP.pickup, it.ref.item.name);
-    spawnCooldown.set(it.ref.spawnIndex, Date.now() + LOOT_RESPAWN_MS);
     dirty(p);
   } else if (it.kind === 'bag' || it.kind === 'stash') {
-    const id = it.kind === 'bag' ? it.ref.id : it.ref.id;
-    p.openContainer = { kind: it.kind, id };
-    send(p.ws, containerView(p, it.kind, id));
+    p.openContainer = { kind: it.kind, id: it.ref.id };
+    send(p.ws, containerView(p, it.kind, it.ref.id));
   } else if (it.kind === 'door') {
     const h = db.houses[it.ref.id];
     const allowed = h.owner === p.token || (h.owner && tokenInSquadWith(p, h.owner));
@@ -709,14 +843,12 @@ function interact(p) {
       return toast(p, 'Not your door');
     }
     if (h.doorHp <= 0) {
-      // A breached door has to be rebuilt in stages — the owner must stand there working on it.
       if (Date.now() - (p.lastRepair || 0) < 1500) return;
       p.lastRepair = Date.now();
       h.rebuild = (h.rebuild || 0) + 1;
-      if (h.rebuild >= 4) { h.rebuild = 0; h.doorHp = DOOR_HP * 0.25; h.doorOpen = false; toast(p, 'Door rebuilt (25%) — it repairs itself while undamaged'); }
+      if (h.rebuild >= 4) { h.rebuild = 0; h.doorHp = doorMax(it.ref.id) * 0.25; h.doorOpen = false; toast(p, 'Door rebuilt (25%) — it repairs itself while undamaged'); }
       else toast(p, `Rebuilding door… ${h.rebuild}/4`);
     } else {
-      // Don't let the door close on top of someone.
       if (h.doorOpen) {
         const d = map.houses[it.ref.id].door;
         const blocked = [...players.values(), ...bots.values()].some((c) => !c.dead && Math.abs(c.x - (d.minX + d.maxX) / 2) < 1.4 && Math.abs(c.z - (d.minZ + d.maxZ) / 2) < 0.8);
@@ -744,13 +876,12 @@ function containerAction(p, msg) {
     if (kind !== 'stash') return;
     const h = db.houses[id];
     if (!(h.owner === p.token || (h.owner && tokenInSquadWith(p, h.owner)))) return;
-    if (['parts', 'tech', 'intel', 'ammo'].includes(msg.res)) { store[msg.res] = (store[msg.res] || 0) + p[msg.res]; p[msg.res] = 0; dirty(p); return refreshContainerViewers(kind, id); }
-    if (store.items.length >= STASH_SIZE) return toast(p, 'Stash full');
+    if (RESOURCES.includes(msg.res)) { store[msg.res] = (store[msg.res] || 0) + p[msg.res]; p[msg.res] = 0; dirty(p); return refreshContainerViewers(kind, id); }
+    if (store.items.length >= stashCap(id)) return toast(p, 'Stash full — upgrade storage');
     const idx = p.inv.pack.findIndex((i) => i.id === msg.itemId);
-    if (idx < 0) return;
+    if (idx < 0 || p.inv.pack[idx].kind === 'package') return;
     store.items.push(p.inv.pack.splice(idx, 1)[0]);
   } else if (msg.action === 'bank') {
-    // Intel is the extraction loop: worthless until you get it home, lost if you die on the way.
     if (kind !== 'stash' || db.houses[id].owner !== p.token) return;
     const n = p.intel + (store.intel || 0);
     if (!n) return toast(p, 'No intel to bank');
@@ -763,13 +894,12 @@ function containerAction(p, msg) {
   refreshContainerViewers(kind, id);
 }
 
-// ---------------------------------------------------------------- gunsmith (at your own stash house)
+// ---------------------------------------------------------------- stash house: gunsmith + upgrades
 function atOwnStash(p) {
   if (p.houseId === null || p.houseId === undefined || p.dead) return false;
   const h = map.houses[p.houseId];
   return Math.hypot(h.crate.x - p.x, h.crate.z - p.z) < INTERACT_RANGE + 0.6;
 }
-
 function findOwnedWeapon(p, itemId) {
   const inv = p.inv;
   for (const slot of ['primary', 'secondary']) if (inv[slot]?.id === itemId) return inv[slot];
@@ -778,20 +908,23 @@ function findOwnedWeapon(p, itemId) {
   if (p.houseId !== null) return db.houses[p.houseId].items.find((i) => i.id === itemId) || null;
   return null;
 }
-
-/** Spend parts, carried first, then from the stash you're standing at. */
-function spendParts(p, cost) {
+/** Pay a cost from carried resources first, then the stash you're standing at. Commendations are personal. */
+function spend(p, cost) {
   const stash = db.houses[p.houseId];
-  if (p.parts + (stash.parts || 0) < cost) return false;
-  const fromPack = Math.min(p.parts, cost);
-  p.parts -= fromPack;
-  stash.parts -= cost - fromPack;
+  for (const [k, v] of Object.entries(cost)) {
+    const have = k === 'comms' ? p.comms : p[k] + (stash[k] || 0);
+    if (have < v) return false;
+  }
+  for (const [k, v] of Object.entries(cost)) {
+    if (k === 'comms') { p.comms -= v; continue; }
+    const fromPack = Math.min(p[k], v);
+    p[k] -= fromPack;
+    stash[k] -= v - fromPack;
+  }
   return true;
 }
-
 function gunsmithAction(p, msg) {
   if (!atOwnStash(p)) return toast(p, 'The gunsmith bench is at your stash house');
-  const lvl = level(p);
   if (msg.action === 'attach' || msg.action === 'paint') {
     const w = findOwnedWeapon(p, msg.itemId);
     if (!w || w.kind !== 'weapon') return;
@@ -799,25 +932,27 @@ function gunsmithAction(p, msg) {
       const part = PARTS[msg.partId];
       if (!part || !SLOTS.includes(msg.slot) || part.slot !== msg.slot) return;
       if (!partFits(msg.partId, w.archetype)) return toast(p, `${part.name} doesn't fit a ${ARCHETYPES[w.archetype].label}`);
-      if (part.level > lvl) return toast(p, `${part.name} unlocks at level ${part.level}`);
+      if (!isUnlocked(part, msg.partId, p)) return toast(p, part.field && level(p) >= part.level ? `${part.name} is field gear — requisition it from a Contact` : `${part.name} unlocks at level ${part.level}`);
       w.parts[msg.slot] = msg.partId;
       const cap = weaponStats(w).mag;
       if ((p.mags[w.id] ?? 0) > cap) { p.ammo += p.mags[w.id] - cap; p.mags[w.id] = cap; }
     } else {
       const paint = PAINTS[msg.paint];
       if (!paint) return;
-      if (paint.level > lvl) return toast(p, `${paint.name} unlocks at level ${paint.level}`);
+      if (!isUnlocked(paint, msg.paint, p)) return toast(p, paint.field && level(p) >= paint.level ? `${paint.name} is field gear — requisition it from a Contact` : `${paint.name} unlocks at level ${paint.level}`);
       w.paint = msg.paint;
     }
   } else if (msg.action === 'build' || msg.action === 'buildArmor') {
     const isArmor = msg.action === 'buildArmor';
     const def = isArmor ? ARMORS[msg.type] : ARCHETYPES[msg.type];
     if (!def) return;
-    if (def.level > lvl) return toast(p, `${isArmor ? def.name : def.label} unlocks at level ${def.level}`);
+    const label = isArmor ? def.name : def.label;
+    if (!isUnlocked(def, msg.type, p)) return toast(p, def.field && level(p) >= def.level ? `${label} is field gear — requisition it from a Contact` : `${label} unlocks at level ${def.level}`);
     const stash = db.houses[p.houseId];
     const roomInPack = p.inv.pack.length < PACK_SIZE;
-    if (!roomInPack && stash.items.length >= STASH_SIZE) return toast(p, 'Backpack and stash are full');
-    if (!spendParts(p, def.cost)) return toast(p, `Needs ${def.cost} parts`);
+    if (!roomInPack && stash.items.length >= stashCap(p.houseId)) return toast(p, 'Backpack and stash are full');
+    const cost = Math.round(def.cost * (1 - UPGRADES.workbench.tiers[stash.upg.workbench].discount));
+    if (!spend(p, { parts: cost })) return toast(p, `Needs ${cost} parts`);
     const item = isArmor ? makeArmor(msg.type) : makeWeapon(msg.type);
     if (roomInPack) p.inv.pack.push(item); else stash.items.push(item);
     award(p, XP.build, `Built ${item.name}`);
@@ -825,6 +960,59 @@ function gunsmithAction(p, msg) {
   } else return;
   dirty(p);
   refreshContainerViewers('stash', p.houseId);
+}
+function upgradeAction(p, msg) {
+  if (!atOwnStash(p)) return toast(p, 'Upgrades are installed at your stash house');
+  const track = UPGRADES[msg.track];
+  if (!track) return;
+  const h = db.houses[p.houseId];
+  const next = track.tiers[h.upg[msg.track] + 1];
+  if (!next) return toast(p, 'Already fully upgraded');
+  if (level(p) < next.level) return toast(p, `Requires level ${next.level}`);
+  if (!spend(p, next.cost)) return toast(p, `Not enough materials: ${Object.entries(next.cost).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+  const before = doorMax(p.houseId);
+  h.upg[msg.track]++;
+  if (msg.track === 'door' && h.doorHp > 0) h.doorHp += doorMax(p.houseId) - before;
+  award(p, 100, `Stash upgrade: ${track.name}`);
+  toast(p, `Installed: ${track.name} — ${next.label}`);
+  dirty(p);
+  refreshContainerViewers('stash', p.houseId);
+}
+function tickHouses(now) {
+  for (const [idStr, h] of Object.entries(db.houses)) {
+    const id = Number(idStr);
+    if (!h.owner) continue;
+    const max = doorMax(id);
+    if (h.doorHp > 0 && h.doorHp < max && now - (h.lastDamaged || 0) > 60_000) h.doorHp = Math.min(max, h.doorHp + max * 0.02);
+    // Generator: produces into the stash (where raiders can take it), even while you're offline.
+    const rate = UPGRADES.generator.tiers[h.upg.generator].rate;
+    if (rate) {
+      h.genAcc = (h.genAcc || 0) + rate / 3600;
+      if (h.genAcc >= 1) {
+        const n = Math.floor(h.genAcc);
+        h.genAcc -= n;
+        if (h.parts < 400) h.parts += n;
+        h.genTech = (h.genTech || 0) + n / 2;
+        if (h.genTech >= 1) { if (h.tech < 200) h.tech += Math.floor(h.genTech); h.genTech %= 1; }
+      }
+    }
+    // Perimeter alarm: tells the owner (anywhere on the map) and exposes the intruder. Camo beats it.
+    const radius = UPGRADES.alarm.tiers[h.upg.alarm].radius;
+    if (!radius) continue;
+    const owner = onlineByToken(h.owner);
+    if (!owner) continue;
+    const house = map.houses[id];
+    for (const o of players.values()) {
+      if (o.dead || tokenInSquadWith(o, h.owner) || camoActive(o)) continue;
+      if (Math.hypot(o.x - house.x, o.z - house.z) > radius) continue;
+      expose(o, squadKey(owner), 5000);
+      if (now - (h.lastAlarm || 0) > 20_000) {
+        h.lastAlarm = now;
+        toast(owner, `🚨 Perimeter alarm: ${o.name} is at your stash house`);
+        send(owner.ws, { t: 'alert', x: house.x, z: house.z, text: 'Perimeter alarm' });
+      }
+    }
+  }
 }
 
 function invAction(p, msg) {
@@ -842,7 +1030,6 @@ function invAction(p, msg) {
     inv[slot] = item;
     if (slot !== 'armor') p.active = slot;
     p.armor = Math.min(p.armor, maxArmor(p));
-    p.hp = Math.min(p.hp, maxHp(p));
   } else if (msg.action === 'unequip') {
     const slot = msg.slot;
     if (!['primary', 'secondary', 'armor'].includes(slot) || !inv[slot]) return;
@@ -850,7 +1037,6 @@ function invAction(p, msg) {
     inv.pack.push(inv[slot]);
     inv[slot] = null;
     p.armor = Math.min(p.armor, maxArmor(p));
-    p.hp = Math.min(p.hp, maxHp(p));
   } else if (msg.action === 'drop') {
     const idx = inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0) return;
@@ -866,16 +1052,98 @@ function invAction(p, msg) {
   dirty(p);
 }
 
+// ---------------------------------------------------------------- deployment + travel
+/** Where a player may enter the map from. */
+function deployOptions(p) {
+  const own = ownedHouse(p.token);
+  return {
+    houseId: own,
+    freeHouses: own === null ? map.houses.filter((h) => !db.houses[h.id].owner).map((h) => h.id) : [],
+    contacts: p.discovered,
+    lzs: map.landingZones.map((l) => l.id),
+  };
+}
+function placeAt(p, x, z) {
+  const fixed = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3));
+  p.x = fixed.x; p.z = fixed.z;
+  send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true });
+}
+function handleDeploy(p, msg) {
+  if (!p.dead && !p.deploying) return;
+  const own = ownedHouse(p.token);
+  let at = null;
+  if (msg.kind === 'claim') {
+    if (own !== null) return toast(p, 'You already own a stash house');
+    const h = db.houses[msg.id];
+    if (!h || h.owner) return toast(p, 'That stash house is taken');
+    Object.assign(h, freshHouse(), { owner: p.token, ownerName: p.name, upg: h.upg });
+    h.doorHp = doorMax(msg.id);
+    p.houseId = msg.id;
+    at = map.houses[msg.id].crate;
+    feed(`${p.name} claimed a stash house in ${map.towns[map.houses[msg.id].townId].name}`);
+  } else if (msg.kind === 'house') {
+    if (own === null) return;
+    at = map.houses[own].crate;
+  } else if (msg.kind === 'contact') {
+    if (!p.discovered.includes(msg.id)) return;
+    at = { x: map.contacts[msg.id].x + 3, z: map.contacts[msg.id].z + 3 };
+  } else if (msg.kind === 'lz') {
+    at = map.landingZones[msg.id];
+    if (!at) return;
+  } else return;
+  if (!p.deploying) {
+    const keepIntel = p.intel;
+    Object.assign(p, { hp: 100, armor: 0, ...starterLoadout() });
+    p.intel = keepIntel;
+  }
+  if (msg.kind === 'house' && db.houses[own].upg.infirmary) {
+    p.inv.armor = makeArmor('light');
+    p.armor = maxArmor(p);
+    p.inv.pack.push(makeConsumable('medkit'), makeConsumable('medkit'));
+  }
+  p.deploying = false; p.needsDeploy = false; p.dead = false;
+  p.protectedUntil = Date.now() + SPAWN_PROTECT_MS;
+  placeAt(p, at.x, at.z + (msg.kind === 'claim' || msg.kind === 'house' ? 1.2 : 0));
+  for (const c of p.contracts) instantiateContract(p, c);
+  pushContracts(p);
+  send(p.ws, { t: 'deployed', kind: msg.kind });
+  dirty(p);
+}
+/** Fast travel only goes OUT from your stash house — getting loot home is still on foot. */
+function handleTravel(p, msg) {
+  if (p.dead || !atOwnStash(p)) return toast(p, 'Fast travel leaves from your stash house');
+  if (Date.now() - (p.lastHit || 0) < 10_000) return toast(p, 'Can\'t travel while in combat');
+  if (msg.kind === 'contact') {
+    if (!p.discovered.includes(msg.id)) return toast(p, 'Discover that Contact on foot first');
+    const c = map.contacts[msg.id];
+    placeAt(p, c.x + 3, c.z + 3);
+  } else if (msg.kind === 'squad') {
+    const m = players.get(msg.id);
+    if (!m || !sameSquad(p, m) || m === p || m.dead) return;
+    if (Date.now() - (m.lastHit || 0) < 10_000) return toast(p, `${m.name} is in combat`);
+    placeAt(p, m.x + 1.5, m.z + 1.5);
+  } else return;
+  p.protectedUntil = Date.now() + 5000;
+  p.openContainer = null;
+  send(p.ws, { t: 'container', closed: true });
+  dirty(p);
+}
+function discoverContacts(p) {
+  for (const c of map.contacts) {
+    if (p.discovered.includes(c.id) || Math.abs(c.x - p.x) > 40 || Math.abs(c.z - p.z) > 40 || Math.hypot(c.x - p.x, c.z - p.z) > 40) continue;
+    p.discovered.push(c.id);
+    award(p, XP.discoverContact, `Discovered ${c.name}`);
+    toast(p, `Contact discovered: ${c.name}. Talk to them for contracts. You can now fast travel here from your stash.`);
+  }
+}
+
 // ---------------------------------------------------------------- connection handling
 function handleJoin(ws, msg) {
   const name = String(msg.name || 'Agent').replace(/[^\w \-]/g, '').slice(0, 16) || 'Agent';
   let token = typeof msg.token === 'string' && /^[a-f0-9]{32}$/.test(msg.token) ? msg.token : null;
   for (const other of players.values()) {
     if (other.token !== token) continue;
-    persistCharacter(other);
-    players.delete(other.id);
-    other.ws.player = null;
-    other.ws.close(4000, 'Logged in elsewhere');
+    persistCharacter(other); players.delete(other.id); other.ws.player = null; other.ws.close(4000, 'Logged in elsewhere');
   }
   if (!token || !db.characters[token]) {
     token = token || crypto.randomBytes(16).toString('hex');
@@ -887,14 +1155,28 @@ function handleJoin(ws, msg) {
     crouch: false, aiming: false, speed: 0, lastShot: 0, reloadUntil: 0, lastMove: Date.now(), aliveMs: 0,
     openContainer: null, dirty: true, hack: null, camoOn: false, exposed: {},
   };
-  p.tech ??= 0; p.intel ??= 0;
-  p.houseId = claimHouse(token, name);
+  for (const r of RESOURCES) p[r] ??= 0;
+  p.comms ??= 0; p.field ??= []; p.discovered ??= []; p.contracts ??= [];
+  p.houseId = ownedHouse(token);
   if (p.houseId !== null) db.houses[p.houseId].ownerName = name;
-  const fixed = resolveCircle(p.x, p.z, PLAYER_RADIUS, solids());
-  p.x = fixed.x; p.z = fixed.z;
+  p.deploying = !!p.needsDeploy;
+  if (p.deploying) p.dead = true;
+  else if (!p.dead) { const fixed = resolveCircle(p.x, p.z, PLAYER_RADIUS, solidsNear(p.x, p.z, 3)); p.x = fixed.x; p.z = fixed.z; }
   players.set(p.id, p);
   ws.player = p;
-  send(ws, { t: 'welcome', id: p.id, token, map, houseId: p.houseId, x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, stashSize: STASH_SIZE, doorMax: DOOR_HP });
+  send(ws, {
+    t: 'welcome', id: p.id, token, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, houseId: p.houseId,
+    x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, doorBase: DOOR_HP,
+    deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
+  });
+  send(ws, { t: 'events', drops: dropList() });
+  // Contracts whose targets were finished while offline pay out now.
+  for (const ct of [...p.contracts]) {
+    if (ct.ready) completeContract(p, ct);
+    else if (ct.expires < Date.now()) { abandonContract(p, ct.id); toast(p, `Contract expired: ${CONTRACT_TYPES[ct.type].name}`); }
+    else if (!p.dead) instantiateContract(p, ct);
+  }
+  pushContracts(p);
   feed(`${name} entered the zone`);
 }
 
@@ -905,26 +1187,21 @@ function handleState(p, msg) {
   p.lastMove = now;
   const tx = Number(msg.x), tz = Number(msg.z);
   if (!Number.isFinite(tx) || !Number.isFinite(tz)) return;
-  // Clamp claimed movement to max speed (with slack for jitter), then sweep it through collision.
   let dx = tx - p.x, dz = tz - p.z;
   const maxStep = SPRINT_SPEED * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
-  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solids());
+  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2));
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
   p.x = np.x; p.z = np.z;
   p.yaw = Number(msg.yaw) || 0;
   p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
   p.crouch = !!msg.crouch;
   p.aiming = !!msg.aim;
-  if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z });
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
-  if (p.openContainer && !nearContainer(p, p.openContainer.kind, p.openContainer.id)) {
-    p.openContainer = null;
-    send(p.ws, { t: 'container', closed: true });
-  }
+  if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z });
+  if (p.openContainer && !nearContainer(p, p.openContainer.kind, p.openContainer.id)) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
 }
-
 function handleShoot(p, msg) {
   if (p.dead) return;
   const w = activeWeapon(p);
@@ -932,7 +1209,7 @@ function handleShoot(p, msg) {
   const s = stats(p);
   const now = Date.now();
   if (now < p.reloadUntil) return;
-  if (now - p.lastShot < (60_000 / s.rpm) * 0.85) return;   // rate-of-fire check with jitter slack
+  if (now - p.lastShot < (60_000 / s.rpm) * 0.85) return;
   const mag = p.mags[w.id] ?? 0;
   if (mag <= 0) return;
   if (!Array.isArray(msg.dir) || msg.dir.length !== 3 || !msg.dir.every(Number.isFinite)) return;
@@ -941,13 +1218,11 @@ function handleShoot(p, msg) {
   fire(p, msg.dir);
   dirty(p);
 }
-
 function handleReload(p) {
   const w = activeWeapon(p);
   if (!w || p.dead) return;
   const s = stats(p);
-  const cur = p.mags[w.id] ?? 0;
-  const need = s.mag - cur;
+  const need = s.mag - (p.mags[w.id] ?? 0);
   if (need <= 0 || p.ammo <= 0 || p.reloadUntil > Date.now()) return;
   p.reloadUntil = Date.now() + s.reloadMs;
   const take = Math.min(need, p.ammo);
@@ -959,7 +1234,6 @@ function handleReload(p) {
   }, s.reloadMs);
   dirty(p);
 }
-
 function leaderboard() {
   const live = new Map([...players.values()].map((p) => [p.token, p]));
   const rows = Object.entries(db.characters).map(([tok, c]) => {
@@ -970,20 +1244,10 @@ function leaderboard() {
   return { t: 'leaderboard', rows: rows.slice(0, 15) };
 }
 
-function handleRespawn(p) {
-  if (!p.dead) return;
-  const sp = map.playerSpawns[Math.floor(Math.random() * map.playerSpawns.length)];
-  Object.assign(p, { x: sp.x, z: sp.z, hp: 100, armor: 0, ...starterLoadout(), dead: false });
-  send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true });
-  dirty(p);
-}
-
 // ---------------------------------------------------------------- http + ws
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml' };
-// Phones need HTTPS for controller (Gamepad API) access. Set TLS_CERT and TLS_KEY to serve HTTPS directly,
-// or put the server behind any HTTPS host/tunnel.
-const TLS = process.env.TLS_CERT && process.env.TLS_KEY
-  ? { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) } : null;
+// Phones need HTTPS for controller (Gamepad API) access. Set TLS_CERT and TLS_KEY to serve HTTPS directly.
+const TLS = process.env.TLS_CERT && process.env.TLS_KEY ? { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) } : null;
 const STATIC = [
   ['/vendor/', path.join(ROOT, 'node_modules', 'three', 'build')],
   ['/shared/', path.join(ROOT, 'shared')],
@@ -1022,8 +1286,14 @@ wss.on('connection', (ws) => {
       case 'container': return !p.dead && containerAction(p, msg);
       case 'closeContainer': p.openContainer = null; return;
       case 'inv': return !p.dead && invAction(p, msg);
-      case 'respawn': return handleRespawn(p);
+      case 'deploy': return handleDeploy(p, msg);
+      case 'respawn': return handleDeploy(p, { kind: ownedHouse(p.token) !== null ? 'house' : 'lz', id: 0 });
+      case 'travel': return handleTravel(p, msg);
       case 'gunsmith': return gunsmithAction(p, msg);
+      case 'upgrade': return upgradeAction(p, msg);
+      case 'acceptContract': return !p.dead && acceptContract(p, msg);
+      case 'abandonContract': return abandonContract(p, msg.id);
+      case 'requisition': return !p.dead && requisition(p, msg);
       case 'squad': return squadAction(p, msg);
       case 'rally': return !p.dead && rally(p);
       case 'mark': return !p.dead && markTarget(p, msg);
@@ -1034,12 +1304,18 @@ wss.on('connection', (ws) => {
         if (!p.camoOn && p.tech <= 0) return toast(p, 'No tech to power camo');
         p.camoOn = !p.camoOn; dirty(p); return;
       case 'leaderboard': return send(p.ws, leaderboard());
+      case 'dev':
+        // Test-only helpers (teleport / die), never enabled unless the server is started with ALLOW_DEV=1.
+        if (process.env.ALLOW_DEV !== '1') return;
+        if (msg.kill) return !p.dead && killPlayer(p, null);
+        if (Number.isFinite(msg.x) && Number.isFinite(msg.z)) placeAt(p, msg.x, msg.z);
+        return;
     }
   });
   ws.on('close', () => {
     const p = ws.player;
     if (!p) return;
-    persistCharacter(p);   // character logs out where they stand; their stash house stays live
+    persistCharacter(p);
     leaveSquad(p);
     players.delete(p.id);
     feed(`${p.name} left the zone`);
@@ -1047,82 +1323,74 @@ wss.on('connection', (ws) => {
 });
 
 // ---------------------------------------------------------------- main loop
+function snapshotFor(r, views, now) {
+  const near = (o, d = INTEREST) => Math.abs(o.x - r.x) < d && Math.abs(o.z - r.z) < d;
+  const list = [];
+  for (const [p, v] of views) {
+    const squad = sameSquad(r, p);
+    if (!squad && !near(p)) continue;
+    if (p !== r && v.camo && !squad && !exposedTo(p, r) && Math.hypot(p.x - r.x, p.z - r.z) > CAMO_REVEAL_DIST) continue;
+    list.push(squad && p !== r ? { ...v, sq: 1 } : v);
+  }
+  return {
+    t: 'snap', players: list,
+    bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp })),
+    loot: [...loot.values()].filter((l) => near(l, 140)).map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, name: l.item.name, amount: l.item.amount || 0 })),
+    bags: db.bags.filter((b) => near(b, 200)).map((b) => ({ id: b.id, x: b.x, z: b.z, label: b.label })),
+    houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), max: doorMax(h.id), open: s.doorOpen, owner: s.ownerName, upg: s.upg }; }),
+    terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
+    objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
+  };
+}
+
 let tick = 0;
 const loop = setInterval(() => {
   const now = Date.now();
   const dt = 1 / TICK_HZ;
-  const sol = solids();
-  updateBots(dt, now, sol);
+  updateBots(dt, now);
   tickHacks(now);
   if (tick % 10 === 0) tickSensors(now);
   if (tick % TICK_HZ === 0) {
-    // Optical camo drains tech while it's actually cloaking you.
+    manageAmbientBots();
+    scheduleDrop(now);
+    for (const [id, d] of drops) if (d.expires < now) { drops.delete(id); broadcast({ t: 'events', drops: dropList() }); }
     for (const p of players.values()) {
       if (!camoActive(p)) continue;
-      p.camoDrain = (p.camoDrain || 0) + 0.5;
+      p.camoDrain = (p.camoDrain || 0) + (hasField(p, 'camoMk2') ? 0.25 : 0.5);
       if (p.camoDrain >= 1) { p.camoDrain -= 1; p.tech = Math.max(0, p.tech - 1); dirty(p); }
       if (p.tech <= 0) { p.camoOn = false; toast(p, 'Camo offline — out of tech'); }
     }
     for (const [tok, inv] of invites) if (inv.expires < now) invites.delete(tok);
     refillLoot(now);
     db.bags = db.bags.filter((b) => b.expires > now);
-    // Closed, intact doors slowly repair themselves after a minute without damage.
-    for (const h of Object.values(db.houses)) {
-      if (h.doorHp > 0 && h.doorHp < DOOR_HP && now - (h.lastDamaged || 0) > 60_000) h.doorHp = Math.min(DOOR_HP, h.doorHp + DOOR_HP * 0.02);
-    }
-    // Time in the zone earns XP, so you level up just by playing — not only by farming kills or drops.
+    tickHouses(now);
     for (const p of players.values()) {
       if (p.dead) continue;
+      discoverContacts(p);
       p.aliveMs += 1000;
       if (p.aliveMs >= 60_000) { p.aliveMs -= 60_000; award(p, XP.survivalPerMinute, 'Survived another minute'); }
+      if (now - (p.lastHit || 0) >= 6000 && p.armor < maxArmor(p)) { p.armor = Math.min(maxArmor(p), p.armor + 3); dirty(p); }
+      for (const c of [...p.contracts]) if (c.expires < now) { abandonContract(p, c.id); toast(p, `Contract expired: ${CONTRACT_TYPES[c.type].name}`); }
     }
-    // Armor regen out of combat.
-    for (const p of players.values()) {
-      if (p.dead || now - (p.lastHit || 0) < 6000) continue;
-      const regen = 3;
-      if (p.armor < maxArmor(p)) { p.armor = Math.min(maxArmor(p), p.armor + regen); dirty(p); }
-    }
+    if (tick % (TICK_HZ * 5) === 0) for (const s of squads.values()) pushSquadState(s);   // squadmate positions for the map
   }
   if (tick % SNAPSHOT_EVERY === 0 && players.size) {
-    const shared = {
-      bots: [...bots.values()].filter((b) => !b.dead).map((b) => ({ id: b.id, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp })),
-      loot: [...loot.values()].map((l) => ({ id: l.id, x: l.x, z: l.z, kind: l.item.kind, name: l.item.name, amount: l.item.amount || 0 })),
-      bags: db.bags.map((b) => ({ id: b.id, x: b.x, z: b.z, label: b.label })),
-      houses: map.houses.map((h) => { const s = db.houses[h.id]; return { id: h.id, hp: Math.round(s.doorHp), open: s.doorOpen, owner: s.ownerName }; }),
-      terminals: map.terminals.map((t) => (terminalReadyAt.get(t.id) || 0) <= now),
-    };
-    const views = new Map([...players.values()].map((p) => [p, {
+    const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, dead: p.dead, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
-      level: level(p), camo: camoActive(p), hacking: !!p.hack,
+      level: level(p), camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
     }]));
-    // Each player gets their own snapshot: cloaked enemies are simply not sent unless they're
-    // close or exposed by a tag/sensor, so camo can't be defeated by reading network traffic.
-    for (const r of players.values()) {
-      if (r.ws.readyState !== 1) continue;
-      const list = [];
-      for (const [p, v] of views) {
-        const squad = sameSquad(r, p);
-        if (p !== r && v.camo && !squad && !exposedTo(p, r) && Math.hypot(p.x - r.x, p.z - r.z) > CAMO_REVEAL_DIST) continue;
-        list.push(squad && p !== r ? { ...v, sq: 1 } : v);
-      }
-      r.ws.send(JSON.stringify({ t: 'snap', players: list, ...shared }));
-    }
+    for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(JSON.stringify(snapshotFor(r, views, now)));
   }
   for (const p of players.values()) if (p.dirty) { p.dirty = false; send(p.ws, privateState(p)); }
   tick++;
 }, 1000 / TICK_HZ);
 
 const saver = setInterval(saveDb, 10_000);
-
-function shutdown() {
-  clearInterval(loop); clearInterval(saver);
-  saveDb();
-  process.exit(0);
-}
+function shutdown() { clearInterval(loop); clearInterval(saver); saveDb(); process.exit(0); }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 refillLoot(Date.now());
-server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${map.houses.length} stash houses, ${BOT_COUNT} rogues)`));
+server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${WORLD_SIZE / 1000} km world, ${map.towns.length} towns, ${map.houses.length} stash houses, ${map.contacts.length} contacts)`));

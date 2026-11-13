@@ -23,6 +23,9 @@ export function levelFromXp(xp) {
 
 export const XP = {
   rogueKill: 100,
+  contract: 0,             // per-contract XP lives in CONTRACT_TYPES
+  supplyDrop: 200,
+  discoverContact: 50,
   hackTerminal: 60,
   hackDoor: 120,
   intelBanked: 40,         // per intel drive banked at your stash (carrying it is the risk)
@@ -105,6 +108,12 @@ export const PARTS = {
   stdTrigger:  { slot: 'trigger', name: 'Standard Trigger', level: 1,  fits: ALL, mods: {} },
   matchTrig:   { slot: 'trigger', name: 'Match Trigger',    level: 7,  fits: ALL, mods: { adsSpreadMul: 0.9, rpmMul: 0.95 } },
   hairTrig:    { slot: 'trigger', name: 'Hair Trigger',     level: 12, fits: ALL, mods: { rpmMul: 1.12, recoilMul: 1.12 } },
+  // Field gear: requisitioned from Contacts with commendations, which you only earn from contracts
+  // and world events. Earned by being active out in the map — never a random drop.
+  intSup:      { slot: 'muzzle', name: 'Integrated Suppressor', level: 4, field: 3, fits: ALL, mods: { suppressed: true, rangeMul: 0.97 } },
+  fieldOptic:  { slot: 'optic', name: 'Field Hybrid Sight',  level: 6,  field: 3, fits: LONG_GUNS, mods: { zoom: 0.8, adsSpreadMul: 0.8, handling: -4 } },
+  hardBarrel:  { slot: 'barrel', name: 'Hardened Barrel',    level: 8,  field: 4, fits: LONG_GUNS, mods: { damageMul: 1.06, rangeMul: 1.12, handling: -6 } },
+  fieldGrip:   { slot: 'underbarrel', name: 'Operator Grip', level: 5,  field: 3, fits: LONG_GUNS, mods: { recoilMul: 0.82, handling: 6 } },
 };
 
 export const DEFAULT_PARTS = { optic: 'iron', muzzle: 'noMuzzle', barrel: 'stdBarrel', underbarrel: 'noUnder', magazine: 'stdMag', stock: 'stdStock', trigger: 'stdTrigger' };
@@ -117,13 +126,77 @@ export const PAINTS = {
   arctic:   { name: 'Arctic White',  level: 12, color: '#d9dde0' },
   ember:    { name: 'Ember Orange',  level: 20, color: '#e0661c' },
   gold:     { name: 'Veteran Gold',  level: 30, color: '#d4af37' },
+  field:    { name: 'Field Commander', level: 3, field: 2, color: '#3a4f6b' },
 };
 
 export const ARMORS = {
   light:  { name: 'Light Vest',    level: 1,  cost: 20, armor: 60,  mobility: 0 },
   medium: { name: 'Plate Carrier', level: 6,  cost: 45, armor: 110, mobility: -0.04 },
   heavy:  { name: 'Heavy Plates',  level: 14, cost: 80, armor: 170, mobility: -0.10 },
+  field:  { name: 'Field Plate',   level: 8,  cost: 50, armor: 140, mobility: -0.02, field: 4 },
 };
+
+/** Field perks: permanent, bought with commendations at any Contact. */
+export const FIELD_PERKS = {
+  camoMk2:   { name: 'Camo battery Mk2', level: 6, field: 4, desc: 'Optical camo drains half as much tech.' },
+  sensorMk2: { name: 'Sensor Mk2',       level: 6, field: 4, desc: 'Sensor grenades cover 26 m instead of 18 m.' },
+  pouch:     { name: 'Secure pouch',     level: 4, field: 5, desc: 'Keep up to 3 intel when you die.' },
+};
+
+/** Is a level/field-gated definition unlocked for this character? */
+export function isUnlocked(def, id, char) {
+  const lvl = levelFromXp(char?.xp || 0);
+  if (lvl < (def.level || 1)) return false;
+  return !def.field || (char?.field || []).includes(id);
+}
+
+// ------------------------------------------------------------------ stash house upgrades
+// Paid with salvage (found out in the map) plus parts/tech, gated by level. Upgrades make your base
+// tougher, bigger and more useful — the main reason to go scavenging.
+export const UPGRADES = {
+  door: { name: 'Reinforced Door', desc: 'More door HP before it breaks.', tiers: [
+    { label: 'Wooden door', hp: 1 },
+    { label: 'Steel door', hp: 2, level: 3, cost: { salvage: 80, parts: 30 } },
+    { label: 'Blast door', hp: 3.5, level: 8, cost: { salvage: 200, parts: 80 } },
+    { label: 'Vault door', hp: 5.5, level: 15, cost: { salvage: 400, parts: 150, comms: 3 } },
+  ] },
+  storage: { name: 'Storage', desc: 'More stash slots.', tiers: [
+    { label: '30 slots', slots: 30 },
+    { label: '45 slots', slots: 45, level: 2, cost: { salvage: 60 } },
+    { label: '60 slots', slots: 60, level: 6, cost: { salvage: 150, parts: 50 } },
+    { label: '90 slots', slots: 90, level: 12, cost: { salvage: 300, parts: 100, comms: 2 } },
+  ] },
+  alarm: { name: 'Perimeter Alarm', desc: 'Alerts you (anywhere on the map) when an enemy gets near your house, and shows them.', tiers: [
+    { label: 'None', radius: 0 },
+    { label: '25 m alarm', radius: 25, level: 3, cost: { salvage: 50, tech: 30 } },
+    { label: '50 m alarm', radius: 50, level: 9, cost: { salvage: 120, tech: 60 } },
+  ] },
+  generator: { name: 'Generator', desc: 'Produces parts and tech into your stash every hour, even offline. (Raiders can take it.)', tiers: [
+    { label: 'None', rate: 0 },
+    { label: '12 / hour', rate: 12, level: 5, cost: { salvage: 100, parts: 60 } },
+    { label: '30 / hour', rate: 30, level: 11, cost: { salvage: 250, parts: 120, comms: 2 } },
+    { label: '60 / hour', rate: 60, level: 18, cost: { salvage: 500, parts: 200, comms: 4 } },
+  ] },
+  infirmary: { name: 'Infirmary', desc: 'Redeploying at your house gives full armor and 2 medkits.', tiers: [
+    { label: 'None' },
+    { label: 'Installed', level: 4, cost: { salvage: 80, tech: 20 } },
+  ] },
+  workbench: { name: 'Workbench', desc: 'Cheaper builds at your gunsmith.', tiers: [
+    { label: 'Basic', discount: 0 },
+    { label: '-25% build cost', discount: 0.25, level: 6, cost: { salvage: 120, parts: 60 } },
+    { label: '-50% build cost', discount: 0.5, level: 14, cost: { salvage: 300, parts: 120, comms: 2 } },
+  ] },
+};
+
+// ------------------------------------------------------------------ contracts (from NPC Contacts)
+// Fixed rewards per type: what you see on the board is exactly what you get.
+export const CONTRACT_TYPES = {
+  heist:    { name: 'Data Heist',          desc: 'Hack the marked terminal.', xp: 250, reward: { comms: 2, salvage: 30, tech: 25, intel: 2 } },
+  camp:     { name: 'Clear Rogue Camp',    desc: 'Wipe out the rogue camp at the marked location.', xp: 400, reward: { comms: 3, salvage: 50, parts: 50 } },
+  recovery: { name: 'Supply Recovery',     desc: 'Recover the marked crate and bring it to any Contact.', xp: 350, reward: { comms: 2, salvage: 80, parts: 30 } },
+  hvt:      { name: 'High-Value Target',   desc: 'Eliminate the rogue lieutenant near the marked location.', xp: 450, reward: { comms: 3, parts: 50, tech: 40 } },
+};
+export const SUPPLY_DROP_CONTENTS = { salvage: 120, parts: 80, tech: 40, ammo: 150, comms: 1 };
 
 // ------------------------------------------------------------------ items
 let idCounter = 0;
@@ -144,14 +217,23 @@ export function makeConsumable(kind) {
   return { id: newItemId(), kind, name: kind === 'medkit' ? 'Medkit' : 'Ammo Box' };
 }
 
-/** Fixed (non-random) world supplies: what you find is resources, not stat-rolled gear. */
-export function worldSupply(index) {
-  const k = index % 6;
-  if (k === 0 || k === 3) return { kind: 'parts', name: 'Parts Cache', amount: 15 };
-  if (k === 1) return { kind: 'ammo', name: 'Ammo Box', amount: 60 };
-  if (k === 2) return { kind: 'medkit', name: 'Medkit' };
-  if (k === 4) return { kind: 'tech', name: 'Electronics', amount: 8 };
-  return { kind: 'parts', name: 'Parts Cache', amount: 10 };
+/**
+ * Fixed (non-random) world supplies by zone: what you find is resources, not stat-rolled gear.
+ * Salvage (for stash upgrades) is mostly out in industrial zones, farms and forests — away from
+ * the safety of town centres.
+ */
+export function worldSupply(index, zone = 'town') {
+  const tables = {
+    town:       [['parts', 15], ['ammo', 60], ['medkit'], ['parts', 10], ['tech', 8], ['salvage', 10]],
+    industrial: [['salvage', 25], ['salvage', 20], ['parts', 20], ['salvage', 30], ['tech', 10]],
+    farm:       [['salvage', 15], ['ammo', 60], ['medkit'], ['salvage', 15], ['parts', 15]],
+    forest:     [['tech', 12], ['salvage', 15], ['medkit'], ['ammo', 60]],
+    road:       [['parts', 20], ['ammo', 60], ['salvage', 12], ['tech', 8]],
+  };
+  const t = tables[zone] || tables.town;
+  const [kind, amount] = t[index % t.length];
+  const names = { parts: 'Parts Cache', ammo: 'Ammo Box', medkit: 'Medkit', tech: 'Electronics', salvage: 'Salvage' };
+  return amount ? { kind, name: names[kind], amount } : { kind, name: names[kind] };
 }
 
 /** What a successful terminal hack pays out. */
@@ -198,10 +280,11 @@ export function armorStats(item) {
 export function unlocksAt(level) {
   const out = [];
   for (const [k, a] of Object.entries(ARCHETYPES)) if (a.level === level) out.push({ type: 'weapon', id: k, name: a.label });
-  for (const [k, p] of Object.entries(PARTS)) if (p.level === level && p.level > 1) out.push({ type: 'part', id: k, name: p.name });
-  for (const [k, p] of Object.entries(PAINTS)) if (p.level === level && p.level > 1) out.push({ type: 'paint', id: k, name: `${p.name} paint` });
-  for (const [k, a] of Object.entries(ARMORS)) if (a.level === level && a.level > 1) out.push({ type: 'armor', id: k, name: a.name });
+  for (const [k, p] of Object.entries(PARTS)) if (p.level === level && p.level > 1 && !p.field) out.push({ type: 'part', id: k, name: p.name });
+  for (const [k, p] of Object.entries(PAINTS)) if (p.level === level && p.level > 1 && !p.field) out.push({ type: 'paint', id: k, name: `${p.name} paint` });
+  for (const [k, a] of Object.entries(ARMORS)) if (a.level === level && a.level > 1 && !a.field) out.push({ type: 'armor', id: k, name: a.name });
   for (const [k, g] of Object.entries(GADGETS)) if (g.level === level && g.level > 1) out.push({ type: 'gadget', id: k, name: g.name });
+  for (const [k, u] of Object.entries(UPGRADES)) u.tiers.forEach((t, i) => { if (i && t.level === level) out.push({ type: 'upgrade', id: `${k}${i}`, name: `${u.name}: ${t.label}` }); });
   return out;
 }
 

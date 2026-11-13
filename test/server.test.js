@@ -20,22 +20,22 @@ const TOK_A = 'a'.repeat(32), TOK_B = 'b'.repeat(32);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function character(name, x, z, inv, extra = {}) {
-  return { name, x, z, yaw: 0, hp: 100, armor: 0, inv, ammo: 400, mags: {}, active: 'primary', dead: false, kills: 0, xp: 0, parts: 0, tech: 0, intel: 0, ...extra };
+  return { name, x, z, yaw: 0, hp: 100, armor: 0, inv, ammo: 400, mags: {}, active: 'primary', dead: false, kills: 0, xp: 0, parts: 0, tech: 0, intel: 0, salvage: 0, comms: 0, field: [], discovered: [], contracts: [], ...extra };
 }
 
 const relic = makeWeapon('carbine', { optic: 'holo' }, 'desert');
 const lmg = makeWeapon('lmg', { magazine: 'drum' });
 const seed = {
   seed: 1337,
-  version: 3,
+  version: 4, size: 8000,
   characters: {
     [TOK_A]: character('Alice', h.x + 3, h.crate.z + 2, { primary: null, secondary: makeWeapon('sidearm', 'scrap'), armor: null, pack: [] }, { active: 'secondary' }),
     [TOK_B]: character('Bob', h.x, h.door.maxZ + 3, { primary: lmg, secondary: null, armor: null, pack: [] }, { mags: { [lmg.id]: 80 } }),
   },
-  houses: Object.fromEntries(map.houses.map((x) => [x.id, { owner: null, ownerName: null, doorHp: 300, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0 }])),
+  houses: Object.fromEntries(map.houses.map((x) => [x.id, { owner: null, ownerName: null, doorHp: 300, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} }])),
   bags: [],
 };
-seed.houses[0] = { owner: TOK_A, ownerName: 'Alice', doorHp: 300, doorOpen: false, items: [relic], parts: 50, tech: 0, intel: 0 };
+seed.houses[0] = { owner: TOK_A, ownerName: 'Alice', doorHp: 300, doorOpen: false, items: [relic], parts: 50, tech: 0, intel: 0, salvage: 0, upg: {} };
 fs.writeFileSync(DATA_FILE, JSON.stringify(seed));
 
 function startServer() {
@@ -108,7 +108,7 @@ test('stash house breach, loot, PvP and persistence', async (t) => {
   // Bob shoots the door down.
   const bz = h.door.maxZ + 1;
   const doorZ = (h.door.minZ + h.door.maxZ) / 2;
-  const breached = () => bob.snap?.houses[0].hp === 0;
+  const breached = () => bob.snap?.houses.find((x) => x.id === 0)?.hp === 0;
   for (let i = 0; i < 120 && !breached(); i++) {
     bob.send({ t: 'shoot', dir: [0, 1.3 - 1.6, doorZ - bz] });
     await sleep(115);
@@ -167,14 +167,14 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   const TOK_C = 'c'.repeat(32), TOK_D = 'd'.repeat(32), TOK_E = 'e'.repeat(32), TOK_F = 'f'.repeat(32), TOK_G = '0'.repeat(32);
   const term = map.terminals[0];
   const tx = term.x, tz = term.z + 1.2;
-  const houses = Object.fromEntries(map.houses.map((x) => [x.id, { owner: null, ownerName: null, doorHp: 300, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0 }]));
-  houses[1] = { owner: TOK_E, ownerName: 'Eve', doorHp: 300, doorOpen: false, items: [makeWeapon('dmr')], parts: 0, tech: 0, intel: 0 };
+  const houses = Object.fromEntries(map.houses.map((x) => [x.id, { owner: null, ownerName: null, doorHp: 300, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} }]));
+  houses[1] = { owner: TOK_E, ownerName: 'Eve', doorHp: 300, doorOpen: false, items: [makeWeapon('dmr')], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} };
   const h1 = map.houses[1], h2 = map.houses[2];
-  houses[2] = { owner: TOK_G, ownerName: 'Grace', doorHp: 300, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0 };
+  houses[2] = { owner: TOK_G, ownerName: 'Grace', doorHp: 300, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} };
   const lvl10 = 4000;
   const frankKit = { primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] };
   const kit = () => ({ primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [] });
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 3, houses, bags: [], characters: {
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 4, size: 8000, houses, bags: [], characters: {
     [TOK_C]: character('Carol', tx, tz, kit(), { xp: lvl10, tech: 100 }),
     [TOK_D]: character('Dave', tx + 2, tz + 1, kit()),
     [TOK_E]: character('Eve', tx + 6, tz + 4, kit()),
@@ -231,7 +231,7 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   await carol.got((m) => m.t === 'hack' && (m.done || m.cancel), 9000);
   assert.ok(carol.msgs.find((m) => m.t === 'hack' && m.done), 'hack completed');
   await until(() => carol.you.intel === 3);
-  await until(() => carol.snap.terminals[term.id] === false);
+  await until(() => carol.snap.terminals.some(([id, ready]) => id === term.id && !ready));
 
   // Lock bypass: Frank (level 10) stands at Eve's locked door and hacks it open silently.
   const frank = await conn('Frank', TOK_F);
@@ -239,7 +239,7 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   frank.send({ t: 'interact' });
   await frank.got((m) => m.t === 'hack' && m.kind === 'door');
   await frank.got((m) => m.t === 'hack' && (m.done || m.cancel), 12000);
-  await until(() => frank.snap?.houses[1].open === true && frank.snap.houses[1].hp > 0);
+  await until(() => frank.snap?.houses.find((x) => x.id === 1)?.open === true);
   await eve.got((m) => m.t === 'toast' && /hacked open your stash/.test(m.text));
 
   // Optical camo: once Frank cloaks, Eve (far away, not a squadmate) stops receiving his position.

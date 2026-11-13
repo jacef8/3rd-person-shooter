@@ -1,6 +1,6 @@
 # Deadzone (working title)
 
-A prototype **third-person looter shooter** set in one **persistent, always-PvP city**.
+A prototype **third-person shooter** set in one **persistent, always-PvP 8 × 8 km open world** (PUBG-sized).
 
 - **Level-based progression, not random drops.** You earn XP by playing: time alive in the zone,
   kills (players are worth more, especially high-level ones), breaching stash houses, building gear.
@@ -25,6 +25,12 @@ A prototype **third-person looter shooter** set in one **persistent, always-PvP 
 - **What loot is for:** parts build guns and armor, tech powers gadgets, and intel is XP, but only
   once you get it home to your stash. See [docs/DESIGN.md](docs/DESIGN.md) for the full loop.
 - Combat: headshots, damage falloff, armor that regenerates out of combat, crouch behind cover.
+- **Open world:** about 40 towns joined by roads, with farms, forests and wrecks between them.
+  Contacts in every town hand out contracts, supply drops land every ~10 minutes, and salvage out in
+  the map pays for **stash house upgrades** (door, storage, alarm, generator, infirmary, workbench).
+  You deploy by picking your stash house on the map; after a death you redeploy at home, at a
+  discovered Contact, or at a landing zone. Fast travel only goes out from home. See
+  [docs/DESIGN.md](docs/DESIGN.md).
 - Open-world rules: no safe zones, no instancing. When you die, everything you carried drops in a bag
   anyone can loot. When you log off, your character stays where you stood.
 - **Stash houses are part of the live world.** Each player is given a walled stash house with a crate.
@@ -41,13 +47,14 @@ npm start            # http://localhost:8080
 ```
 
 Open the URL in several browser tabs (or on several machines on your network) to play against
-each other. Options are environment variables: `PORT`, `SEED` (map), `BOTS` (rogue count),
-`DATA_FILE` (where the world is saved; default `data/world.json`).
+each other. Options are environment variables: `PORT`, `SEED` (map), `WORLD_SIZE` (metres, default 8000),
+`BOTS` (roaming rogues kept around each player, default 5), `SUPPLY_EVERY_MS` (supply drop
+interval), `DATA_FILE` (where the world is saved; default `data/world.json`).
 
 **Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
 H medkit · Tab inventory · F tag · G sensor grenade · V optical camo · T rally (squad leader) ·
-B squad ping · P squad panel and leaderboard (controller layout below). Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
+B squad ping · P squad panel and leaderboard · M map (controller layout below). Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
 
 ## Playing on a phone with a Backbone One (or any controller)
 
@@ -69,7 +76,7 @@ smaller HUD for landscape.
 | RB / LB | Tag target / sensor grenade | |
 | R3 (click right stick) | Optical camo | |
 | D-pad ▲ ▼ ◀ ▶ | Medkit · squad ping · Rally (leader) · squad panel | Move highlight |
-| View (⧉) / Menu (☰) | Inventory / squad panel | |
+| View (⧉) / Menu (☰) | Inventory / map | Map: LT/RT zoom |
 
 On-screen prompts switch to controller buttons as soon as you use the controller.
 
