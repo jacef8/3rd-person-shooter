@@ -12,12 +12,18 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   kills (players are worth more, especially high-level ones), breaching stash houses, building gear.
   Levels 1–30 unlock weapon platforms, attachments, armor and paints on a fixed schedule. There are no
   random stat rolls anywhere.
-- **Gunsmith.** At the bench in your stash house you can swap optic, muzzle, barrel, underbarrel,
-  magazine, stock, trigger and paint on any gun you own. It has a live 3D preview with an exploded
-  view, and hovering an option shows how each stat bar would change. Parts are trade-offs, not
-  upgrades: a suppressor hides your tracers but costs damage and range; a drum mag doubles capacity
-  but slows reloads, handling and movement; a 4x scope zooms in but slows how fast you aim. Builds
-  change real gameplay: zoom, recoil, spread, ADS speed and movement speed.
+- **Gunsmith.** At the bench in your stash house you can change ten things on any gun you own: sight,
+  muzzle, barrel, forearm, underbarrel, magazine, ammunition, stock, trigger and skin. Every slot has
+  at least three real choices on every long gun, and each says who it is for. It has a live 3D preview
+  with an exploded view, and highlighting an option shows how each stat bar would change. Parts are
+  trade-offs, not upgrades: a suppressor hides your tracers but costs damage and range; a drum mag
+  doubles capacity but slows reloads, handling and movement.
+  - **13 sights**, from night sights to a 12x scope. Two flip between magnifications while you aim.
+    The **spotter scope** tags whoever you aim at for your crew and reads the range. The **thermal
+    sight** makes people and animals glow and sees through optical camo. The **12x** lens flashes
+    when you aim, so the target gets a warning.
+  - **Ammunition:** hollow points hit harder on Rogues and animals and poorly on armor;
+    armor-piercing cracks players' plates; subsonic with a suppressor gives nothing away.
 - **Parts** are the one resource. You find them as fixed caches in the world, take them from Rogues,
   or steal them from stashes. You spend them to build new guns and armor from the blueprints you've
   unlocked. Swapping attachments is free. Guns are physical items, so you can lose them, loot them
@@ -142,13 +148,26 @@ H medkit · Tab inventory · F tag · G throw grenade (Z switches sensor/stun) �
 B crew ping · P crew panel and leaderboards · M map · X build mode (1-5 piece, R rotate, click
 place, E upgrade, Q dismantle). Controller layout below. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
 
-## Playing on a phone with a Backbone One (or any controller)
+## Built for a controller (Backbone One or any gamepad)
 
-The game supports controllers through the browser's standard gamepad layout. That's how a
-Backbone One shows up on iPhone (Safari) and Android (Chrome). Every screen works from the
-controller: login, gameplay, inventory, stash, gunsmith (highlighting an attachment previews it),
-squad panel and the death screen. On phones the game also uses a lighter graphics setting and a
-smaller HUD for landscape.
+The controller is the main way to play; keyboard and mouse, and touch, also work. Controllers come
+through the browser's standard gamepad layout, which is how a Backbone One shows up on iPhone
+(Safari) and Android (Chrome). **Everything can be done from the controller alone:**
+
+- **Typing** (callsign, crew name, finding a friend): Ⓐ on a text box opens an on-screen keyboard.
+  Ⓧ deletes, Ⓨ is space, ☰ is done, Ⓑ cancels.
+- **Numbers and pick-lists** (stall prices, trade amounts): ◀ ▶ change them, hold LB or RB for tens.
+- **The map:** left stick or D-pad picks from the list, right stick slides the map, LT/RT zoom.
+- **Boats:** left stick is throttle and steering.
+- **Sights with two magnifications:** R3 while aiming flips between them.
+- **Invites and trade requests** (the bar at the top of the screen): hold ⧉ to say yes. It goes
+  away by itself if you ignore it.
+- **Look speed and inverted look:** in the crew panel (hold ☰), under Controller.
+- **Menus keep your place.** Every screen opens with its first choice highlighted, and the highlight
+  stays where you put it when a screen refreshes itself.
+- Prompts and hints name the controller's buttons once you press one.
+
+On phones the game also uses a lighter graphics setting and a smaller HUD for landscape.
 
 | Control | Gameplay | Menus |
 | --- | --- | --- |
@@ -160,9 +179,9 @@ smaller HUD for landscape.
 | B | Crouch | Back |
 | X / Y | Reload / swap weapon | Y: gunsmith exploded view |
 | RB / LB | Tag target / throw grenade (hold LB to switch sensor/stun) | |
-| R3 (click right stick) | Optical camo | |
+| R3 (click right stick) | Optical camo; while aiming, flip a two-range sight | |
 | D-pad ▲ ▼ ◀ ▶ | Medkit · squad ping · Rally (leader) · build mode | Move highlight |
-| View (⧉) / Menu (☰) | Inventory (squad panel button inside) / map | Map: LT/RT zoom |
+| View (⧉) / Menu (☰) | Inventory (a boat's hold when aboard); **hold ⧉** to accept an invite or trade request / map; **hold ☰** for the crew panel | Map: LT/RT zoom, right stick slides it; ☰ = done on the keyboard |
 
 In build mode: LB/RB pick a piece, X rotates, RT places, A upgrades, Y dismantles, ▶ exits.
 
@@ -195,6 +214,11 @@ tests that boot the server and check that the gunsmith enforces level and parts 
 works at your own stash. Another end-to-end test boots the server, has one player shoot down another player's stash
 house door, walk in, take an item, shoot the owner, then restarts the server and checks the stash,
 door state and loot all persisted.
+
+**Controller check.** `tools/controller-check.mjs` plays the game in a real browser with a simulated
+controller and nothing else: it types a callsign on the on-screen keyboard, searches for a friend,
+deploys, founds a crew, shops, and accepts a trade request. It needs Playwright with Chromium, which
+is not a dependency of the game; how to run it is at the top of the file.
 
 ## Architecture
 

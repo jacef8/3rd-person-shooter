@@ -469,7 +469,7 @@ function boatHud() {
   const v = boatVis.get(me.boat.id);
   if (!v) return '';
   const mph = Math.round(Math.abs((state.boat && me.boat.seat === 0 ? state.boat.speed : 0) || 0) * 2.237);
-  return `🚤 ${BOATS[v.data.type].name}${me.boat.seat === 0 ? ` · ${mph} mph` : ' · passenger'} · hull ${v.data.hp}/${v.data.max} <small>${me.boat.seat === 0 ? 'W/S throttle · A/D steer · ' : ''}${glyph('Tab')} hold · steer to the bank and E to get out</small>`;
+  return `🚤 ${BOATS[v.data.type].name}${me.boat.seat === 0 ? ` · ${mph} mph` : ' · passenger'} · hull ${v.data.hp}/${v.data.max} <small>${me.boat.seat === 0 ? (state.inputMode === 'pad' ? 'Left stick: throttle and steer · ' : 'W/S throttle · A/D steer · ') : ''}${glyph('Tab')} hold · steer to the bank and ${glyph('E')} to get out</small>`;
 }
 
 function makeCharacter(kind, name) {
@@ -850,7 +850,8 @@ function handle(m) {
       for (const [id, rec] of state.bots) if (!m.bots.some((b) => b.id === id)) { scene.remove(rec.mesh); state.bots.delete(id); }
       syncEntities(m.loot, state.loot, (e) => lootMesh(e.kind));
       syncEntities(m.bags, state.bags, () => lootMesh('bag'));
-      if (state.panelOpen && performance.now() - (state.panelDrawn || 0) > 1000) { state.panelDrawn = performance.now(); renderSquadPanel(); }
+      // The crew panel refreshes itself once a second, but never under someone's typing.
+      if (state.panelOpen && !typingIn($('squadpanel')) && performance.now() - (state.panelDrawn || 0) > 1000) { state.panelDrawn = performance.now(); renderSquadPanel(); }
       syncHouses(m.houses);
       syncTerminals(m.terminals || []);
       syncObjectives(m.objectives || []);
@@ -865,11 +866,11 @@ function handle(m) {
       if (!m.boat || m.boat.seat !== 0 || (state.boat && state.boat.id !== m.boat.id)) state.boat = null;
       state.me = m;
       if (m.houseId !== state.houseId) { state.houseId = m.houseId; state.view?.setOwnHouse(m.houseId); }
-      if (state.mapMode && state.mapOpen) renderMapScreen();
-      if (state.contactOpen) renderContact();
+      if (state.mapMode && state.mapOpen) redraw($('mapscreen'), renderMapScreen);
+      if (state.contactOpen) redraw($('contactpanel'), renderContact);
       updateHud();
-      if (state.invOpen) renderInventory();
-      if (state.gunsmithOpen) renderGunsmith();
+      if (state.invOpen) redraw($('inventory'), renderInventory);
+      if (state.gunsmithOpen) redraw($('gunsmith'), renderGunsmith);
       setCloak(selfMesh, m.camoActive ? 0.3 : 1);
       if (build.on) renderBuildBar();
       document.body.classList.toggle('cloaked', !!m.camoActive);
@@ -913,7 +914,7 @@ function handle(m) {
       break;
     case 'invite':
       state.invite = { fromId: m.fromId, fromName: m.fromName, crewName: m.crewName };
-      toast(`${m.fromName} invited you to ${m.crewName ? `the crew ${m.crewName}` : 'start a crew'} — press P to respond`);
+      toast(`${m.fromName} invited you to ${m.crewName ? `the crew ${m.crewName}` : 'start a crew'} — open the crew panel (${glyph('P')}) to answer`);
       if (state.panelOpen) renderSquadPanel();
       break;
     case 'leaderboard':
@@ -986,7 +987,7 @@ function handle(m) {
     case 'deployed':
       closeMapScreen();
       state.view.setOwnHouse(state.houseId);
-      toast(m.kind === 'claim' ? 'Stash house claimed. Open the crate (E) to reach your stash, gunsmith and upgrades.' : 'Deployed — 10 seconds of spawn protection.');
+      toast(m.kind === 'claim' ? `Stash house claimed. Open the crate (${glyph('E')}) to reach your stash, gunsmith and upgrades.` : 'Deployed — 10 seconds of spawn protection.');
       lockPointer();
       break;
     case 'events':
@@ -994,7 +995,7 @@ function handle(m) {
       state.extracts = m.extracts || [];
       syncDrops();
       syncExtracts(m.pickup);
-      if (m.announce) toast('📦 Supply drop inbound — salvage, parts, tech and a commendation. Check the map (M).');
+      if (m.announce) toast(`📦 Supply drop inbound — salvage, parts, tech and a commendation. Check the map (${glyph('M')}).`);
       break;
     case 'contracts':
       state.contracts = m.list;
@@ -1010,7 +1011,7 @@ function handle(m) {
     case 'worldEvents': {
       state.worldEvents = m.list;
       const e = m.announce && m.list.find((x) => x.id === m.announce);
-      if (e) toast(`📣 ${e.name} — ${e.desc} Marked on your map (M).`);
+      if (e) toast(`📣 ${e.name} — ${e.desc} Marked on your map (${glyph('M')}).`);
       if (state.contactOpen) renderContact();
       break;
     }
@@ -1371,8 +1372,11 @@ function renderDock(c, me, box) {
     r.append(b);
   }
 }
+const stallDraft = { res: '', qty: 1, price: 10 };   // the listing you're filling in
 function renderStall(c, me, box) {
   const S = c.stallData;
+  const hadFocus = ['stRes', 'stQty', 'stPrice'].includes(document.activeElement?.id) ? document.activeElement.id : null;
+  if (hadFocus) setTimeout(() => { const el = $(hadFocus); if (el) { if (state.inputMode === 'pad') padFocus(el); else el.focus(); } }, 0);
   box.innerHTML = '';
   if (S.mine) {
     box.innerHTML = `<p class="sub" style="text-align:left">Goods listed here sell while you're away; buyers' cash goes in the till. Listed on every trading post's market board.</p>`;
@@ -1381,10 +1385,14 @@ function renderStall(c, me, box) {
     const cb = btn('Collect', () => send({ t: 'stall', id: c.stall, action: 'collect' }), ''); cb.disabled = !S.till; till.append(cb); box.append(till);
     // New listing: pick something you carry, how many, and a price.
     const row = document.createElement('div'); row.className = 'item';
-    const sel = document.createElement('select');
+    const sel = Object.assign(document.createElement('select'), { id: 'stRes' });
     for (const r of RES_UI) if (r !== 'cash' && r !== 'intel' && me[r]) sel.append(Object.assign(document.createElement('option'), { value: r, textContent: resText(r, me[r]) }));
-    const qty = Object.assign(document.createElement('input'), { type: 'number', min: 1, value: 1, style: 'width:60px' });
-    const price = Object.assign(document.createElement('input'), { type: 'number', min: 1, value: 10, style: 'width:70px', title: 'Price each ($)' });
+    if ([...sel.options].some((o) => o.value === stallDraft.res)) sel.value = stallDraft.res;
+    const qty = Object.assign(document.createElement('input'), { id: 'stQty', type: 'number', min: 1, max: me[sel.value] || 1, value: Math.min(stallDraft.qty, me[sel.value] || 1), style: 'width:60px', title: 'How many' });
+    const price = Object.assign(document.createElement('input'), { id: 'stPrice', type: 'number', min: 1, max: 9999, value: stallDraft.price, style: 'width:70px', title: 'Price each ($)' });
+    sel.onchange = () => { stallDraft.res = sel.value; qty.max = me[sel.value] || 1; if (Number(qty.value) > Number(qty.max)) qty.value = qty.max; };
+    qty.oninput = () => { stallDraft.qty = Number(qty.value) || 1; };
+    price.oninput = () => { stallDraft.price = Number(price.value) || 1; };
     row.append(sel, qty, Object.assign(document.createElement('span'), { textContent: '× $' }), price, btn('List', () => send({ t: 'stall', id: c.stall, action: 'list', res: sel.value, qty: qty.value, price: price.value }), ''));
     if (sel.options.length) box.append(row); else box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Carry some goods to list them.' }));
   }
@@ -1872,7 +1880,9 @@ $('name').value = localStorage.getItem('dz_name') || '';
   if (!window.isSecureContext) {
     hint.innerHTML = '<b style="color:#ff8a2a">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
   } else {
-    hint.innerHTML = '🎮 <b>Controller:</b> press any button on your Backbone One / gamepad. D-pad + A to pick a world.';
+    hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<br />'
+      + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> swap weapon · <b>L3</b> sprint<br />'
+      + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build · <b>⧉</b> bag · <b>☰</b> map (hold: crew)';
   }
   if (MOBILE) document.body.classList.add('mobile');
 }
@@ -2048,14 +2058,14 @@ function nearestInteractable() {
     } else if (def.farm) {
       const crop = st.crop ? st.crop[0].toUpperCase() + st.crop.slice(1) : '';
       text = !st.crop ? (st.mine ? (me?.seeds ? '🌱 Plant seeds (uses 1 seed packet)' : 'Empty farm plot — needs a seed packet') : `${st.owner}'s empty plot`)
-        : st.rotten ? `${crop} rotted — clear it (E)` : st.grow >= 1 ? (st.mine ? `🌾 Harvest ${crop.toLowerCase()}` : `🌾 Steal ${st.owner}'s ${crop.toLowerCase()}`) : `${crop} — ${Math.round(st.grow * 100)}% grown`;
+        : st.rotten ? `${crop} rotted — clear it` : st.grow >= 1 ? (st.mine ? `🌾 Harvest ${crop.toLowerCase()}` : `🌾 Steal ${st.owner}'s ${crop.toLowerCase()}`) : `${crop} — ${Math.round(st.grow * 100)}% grown`;
     } else if (def.cook) {
       text = me && GOODS && ['fish', 'meat'].some((g) => me[g]) ? `🔥 Cook ${['fish', 'meat'].map((g) => me[g] ? resText(g, me[g]) : '').filter(Boolean).join(' + ')} (4s)` : 'Campfire — cook raw fish or meat here';
     } else if (st.mine) {
       if (build.on) text = next ? `Upgrade to ${next.name} (${Object.entries(next.cost).map(([k, v]) => `${v} ${k}`).join(', ')})${has('hammer') ? '' : ' — needs a hammer'}` : `${stage.name} — fully built`;
       else if (def.container) text = `Open ${stage.name.toLowerCase()}`;
       else if (def.door && stage.material !== 'frame') text = st.open ? `Close ${def.auto ? 'door' : 'gate'}` : `Open ${def.auto ? 'door' : 'gate'}`;
-      else text = `${stage.name}${next ? ' — press X for build mode to upgrade' : ''}`;
+      else text = `${stage.name}${next ? ` — ${glyph('X')} for build mode to upgrade` : ''}`;
     } else if (def.container) text = `Search ${st.owner}'s crate`;
     else if (stage.material === 'frame') text = `${st.owner}'s ${stage.name.toLowerCase()}`;
     else text = stage.material === 'stone' ? (has('pickaxe') ? `Break ${st.owner}'s ${stage.name.toLowerCase()} (pickaxe)` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a pickaxe or breach charge`) : (has('hatchet') || has('pickaxe') ? `Chop through ${st.owner}'s ${stage.name.toLowerCase()}` : `${st.owner}'s ${stage.name.toLowerCase()} — needs a hatchet`);
@@ -2150,7 +2160,7 @@ function drawMarkers() {
     for (const [id, r] of [...state.players, ...state.bots]) {
       const c = r.data;
       if (!c || c.sq || c.dead || !c.stun || Math.hypot(c.x - state.x, c.z - state.z) > 60) continue;
-      marker(`z${id}`, 'objective', '⚡ STUNNED — hack (E)', new THREE.Vector3(c.x, ground(c.x, c.z) + 2.4, c.z));
+      marker(`z${id}`, 'objective', `⚡ STUNNED — hack (${glyph('E')})`, new THREE.Vector3(c.x, ground(c.x, c.z) + 2.4, c.z));
     }
     for (const [id, r] of state.players) {
       if (!r.data.sq || r.data.dead) continue;
@@ -2232,6 +2242,7 @@ function openSquadPanel() {
   document.exitPointerLock?.();
   send({ t: 'leaderboard' });
   renderSquadPanel();
+  renderPadSettings();
 }
 function closeSquadPanel() {
   state.panelOpen = false;
@@ -2245,7 +2256,36 @@ function btn(label, fn, cls = 'ghost') {
   return b;
 }
 
-function renderSquadPanel() {
+/** Text boxes in panels that redraw themselves keep what you typed. */
+const drafts = new Map();
+function draftInput(props) {
+  const input = Object.assign(document.createElement('input'), props);
+  const key = props.id || props.placeholder;
+  input.value = drafts.get(key) || '';
+  input.addEventListener('input', () => drafts.set(key, input.value));
+  return input;
+}
+/** Is someone typing in a text box inside this panel (with a real keyboard, or the on-screen one)? */
+function typingIn(root) {
+  const el = document.activeElement;
+  return !!osk.input || (!!el && el.tagName === 'INPUT' && el.type !== 'number' && root.contains(el));
+}
+/** Redraw a panel without losing your place: the controller's highlight goes straight back on the
+ *  same control, and a text box someone is typing in keeps its cursor. */
+function redraw(root, draw) {
+  const el = document.activeElement;
+  const inside = !!el && el !== root && root.contains(el);
+  const typing = inside && el.tagName === 'INPUT' && el.type !== 'number' ? { sig: sigOf(el), a: el.selectionStart, b: el.selectionEnd } : null;
+  draw();
+  if (!inside || root.contains(document.activeElement)) return;
+  if (state.inputMode === 'pad') { if (topPanel() === root) regainFocus(root); return; }
+  const again = typing && [...root.querySelectorAll('input')].find((i) => sigOf(i) === typing.sig);
+  if (!again) return;
+  again.focus({ preventScroll: true });
+  try { again.setSelectionRange(typing.a, typing.b); } catch { /* not a text box */ }
+}
+function renderSquadPanel() { redraw($('squadpanel'), drawSquadPanel); }
+function drawSquadPanel() {
   const sq = state.squad;
   const rank = sq.myRank, leader = rank === 'leader', canInvite = !sq.id || rank !== 'member';
   $('sqTitle').textContent = sq.id ? `Crew: ${sq.name}` : 'Crew';
@@ -2263,7 +2303,7 @@ function renderSquadPanel() {
     mem.innerHTML = '<div class="empty">No crew. Found one, or invite someone below. Crews are permanent teams: they share a stash house, revive each other, hack faster together, split contract rewards and climb the crew board.</div>';
     const row = document.createElement('div');
     row.className = 'item';
-    const input = Object.assign(document.createElement('input'), { placeholder: 'Crew name', maxLength: 20, id: 'crewNameIn' });
+    const input = draftInput({ placeholder: 'Crew name', maxLength: 20, id: 'crewNameIn' });
     row.append(input, btn('Found crew', () => send({ t: 'squad', action: 'create', name: input.value }), ''));
     mem.append(row);
   } else {
@@ -2289,8 +2329,8 @@ function renderSquadPanel() {
   if (leader) {
     const row = document.createElement('div');
     row.className = 'item';
-    const input = Object.assign(document.createElement('input'), { placeholder: 'New crew name', maxLength: 20 });
-    row.append(input, btn('Rename', () => send({ t: 'squad', action: 'rename', name: input.value })));
+    const input = draftInput({ placeholder: 'New crew name', maxLength: 20 });
+    row.append(input, btn('Rename', () => { send({ t: 'squad', action: 'rename', name: input.value }); drafts.delete('New crew name'); }));
     mem.append(row);
   }
   const on = $('sqOnline'); on.innerHTML = '';
@@ -2328,14 +2368,87 @@ const PAD_ACTIONS = {
   [BTN.R3]: 'camo', [BTN.UP]: 'heal', [BTN.DOWN]: 'ping', [BTN.LEFT]: 'rally', [BTN.RIGHT]: 'build',
   [BTN.VIEW]: 'inventory', [BTN.MENU]: 'map',
 };
-const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: '☰', X: '▶', LMB: 'RT' };
+const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: 'hold ☰', M: '☰', X: '▶', LMB: 'RT', Tab: '⧉' };
 const pad = { prev: [], moveX: 0, moveY: 0, sprint: false, navAt: 0, settings: { lookSpeed: 2.6, invertY: false } };
+try { Object.assign(pad.settings, JSON.parse(localStorage.getItem('dz_pad') || '{}')); } catch { /* keep the defaults */ }
+/** Look speed and up/down direction for the controller's right stick (in the crew panel). */
+function renderPadSettings() {
+  const box = $('padSettings');
+  if (!box) return;
+  const keep = document.activeElement?.dataset?.pad;
+  const save = () => { try { localStorage.setItem('dz_pad', JSON.stringify(pad.settings)); } catch { /* private mode */ } renderPadSettings(); };
+  box.innerHTML = '';
+  const row = document.createElement('div'); row.className = 'item';
+  row.innerHTML = `<div class="meta"><div class="nm">Look speed: ${pad.settings.lookSpeed.toFixed(1)}</div><div class="st">How fast the right stick turns you.</div></div>`;
+  const slower = btn('Slower', () => { pad.settings.lookSpeed = Math.max(0.8, +(pad.settings.lookSpeed - 0.2).toFixed(1)); save(); });
+  const faster = btn('Faster', () => { pad.settings.lookSpeed = Math.min(6, +(pad.settings.lookSpeed + 0.2).toFixed(1)); save(); });
+  slower.dataset.pad = 'slower'; faster.dataset.pad = 'faster';
+  row.append(slower, faster);
+  const row2 = document.createElement('div'); row2.className = 'item';
+  row2.innerHTML = '<div class="meta"><div class="nm">Look up and down</div><div class="st">Inverted: pull the stick back to look up.</div></div>';
+  const inv = btn(pad.settings.invertY ? 'Inverted' : 'Normal', () => { pad.settings.invertY = !pad.settings.invertY; save(); });
+  inv.dataset.pad = 'invert';
+  row2.append(inv);
+  box.append(row, row2);
+  if (keep) { const el = box.querySelector(`[data-pad="${keep}"]`); if (el && state.inputMode === 'pad') padFocus(el); }
+}
+
+// ------------------------------------------------------------------ on-screen keyboard (so a controller can type a callsign or a crew name)
+const osk = { input: null, text: '' };
+const OSK_ROWS = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL-', 'ZXCVBNM_.'];
+function openOsk(input) {
+  osk.input = input; osk.sig = sigOf(input); osk.text = input.value || '';
+  $('oskLabel').textContent = input.placeholder || 'Type';
+  const keys = $('oskKeys'); keys.innerHTML = '';
+  for (const chars of OSK_ROWS) {
+    const r = document.createElement('div'); r.className = 'oskrow';
+    for (const ch of chars) r.append(btn(ch, () => oskType(ch), 'oskkey'));
+    keys.append(r);
+  }
+  const r = document.createElement('div'); r.className = 'oskrow';
+  r.append(btn('Space', () => oskType(' '), 'oskkey wide'), btn('Delete', () => oskType(null), 'oskkey wide'), btn('Done', () => closeOsk(true), 'oskkey wide done'), btn('Cancel', () => closeOsk(false), 'oskkey wide'));
+  keys.append(r);
+  $('osk').hidden = false;
+  oskType('');
+  if (state.inputMode === 'pad') padFocus(keys.querySelector('.oskrow:nth-child(2) .oskkey'));   // start on the letters
+}
+function oskType(ch) {
+  const max = osk.input.maxLength > 0 ? osk.input.maxLength : 24;
+  if (ch === null) osk.text = osk.text.slice(0, -1);
+  // Capital at the start of each word, small letters after: "Swamp Fox", not "SWAMP FOX".
+  else if (ch && osk.text.length < max) osk.text += osk.text.length && !/[ \-_.]$/.test(osk.text) ? ch.toLowerCase() : ch;
+  $('oskText').textContent = osk.text;
+  $('oskText').classList.toggle('empty', !osk.text);
+}
+function closeOsk(apply) {
+  let input = osk.input;
+  $('osk').hidden = true;
+  osk.input = null;
+  if (!input) return;
+  // If the panel behind the keyboard was redrawn meanwhile, write into the box that replaced this one.
+  if (!input.isConnected) input = [...document.querySelectorAll('input')].find((i) => sigOf(i) === osk.sig && i.offsetParent !== null);
+  if (!input) return;
+  if (apply) { input.value = osk.text.trim(); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); }
+  if (state.inputMode === 'pad') padFocus(input);
+}
+/** Left / right on a number box or a pick-list changes it (by `d`), instead of moving on. */
+function padAdjust(el, d) {
+  if (el.tagName === 'SELECT') el.selectedIndex = (el.selectedIndex + (d > 0 ? 1 : -1) + el.options.length) % el.options.length;
+  else {
+    const min = el.min !== '' ? Number(el.min) : -Infinity, max = el.max !== '' ? Number(el.max) : Infinity;
+    el.value = Math.max(min, Math.min(max, (Number(el.value) || 0) + d));
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
 function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : k; }
 
 function setInputMode(m) {
   if (state.inputMode === m) return;
   state.inputMode = m;
   document.body.classList.toggle('pad', m === 'pad');
+  // Back on touch or a real keyboard: text boxes may raise the phone's keyboard again.
+  if (m !== 'pad') for (const i of document.querySelectorAll('input[inputmode="none"]')) i.removeAttribute('inputmode');
   if (m === 'pad') document.exitPointerLock?.();
   updateGadgetBar();
 }
@@ -2351,16 +2464,23 @@ function readPad() {
 const deadzone = (v, d = 0.16) => (Math.abs(v) < d ? 0 : Math.sign(v) * (Math.abs(v) - d) / (1 - d));
 
 function topPanel() {
-  for (const id of ['tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
+  for (const id of ['osk', 'tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
   return null;
 }
 function focusables(root) {
-  return [...root.querySelectorAll('button:not([disabled]):not(.nopad), input')].filter((el) => el.offsetParent !== null);
+  return [...root.querySelectorAll('button:not([disabled]):not(.nopad), input, select')].filter((el) => el.offsetParent !== null);
 }
+/** What a control is, so it can be found again after its panel is redrawn. */
+function sigOf(el) { return el.id || el.dataset.pad || el.dataset.res || el.placeholder || el.textContent.trim().slice(0, 40); }
 function padFocus(el) {
   const prev = document.activeElement;
   if (prev && prev !== el) { prev.classList.remove('padfocus'); prev.dispatchEvent(new MouseEvent('mouseleave')); }
+  for (const stale of document.querySelectorAll('.padfocus')) if (stale !== el) stale.classList.remove('padfocus');
   el.classList.add('padfocus');
+  // The controller types on the game's own keyboard, so the phone's must stay down.
+  if (el.tagName === 'INPUT') el.setAttribute('inputmode', 'none');
+  const root = topPanel();
+  pad.mark = root && root.contains(el) ? { panel: root.id, idx: focusables(root).indexOf(el), sig: sigOf(el) } : null;
   el.focus({ preventScroll: true });
   el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   el.dispatchEvent(new MouseEvent('mouseenter'));   // drives gunsmith previews and map highlights
@@ -2389,7 +2509,21 @@ function moveFocus(root, dx, dy) {
   if (!best) best = list[(list.indexOf(cur) + (dx + dy > 0 ? 1 : -1) + list.length) % list.length];
   padFocus(best);
 }
+/** A redraw (or a newly opened screen) left nothing highlighted: find the same control again, or
+ *  start at the top. Says whether it had to start at the top. */
+function regainFocus(panel) {
+  const list = focusables(panel);
+  if (!list.length) return false;
+  const m = pad.mark && pad.mark.panel === panel.id ? pad.mark : null;
+  if (!m) { moveFocus(panel, 0, 1); return true; }
+  let best = null, gap = Infinity;
+  list.forEach((el, i) => { if (sigOf(el) === m.sig && Math.abs(i - m.idx) < gap) { gap = Math.abs(i - m.idx); best = el; } });
+  padFocus(best || list[Math.min(Math.max(m.idx, 0), list.length - 1)]);
+  return false;
+}
 function padBack() {
+  if (osk.input) return closeOsk(false);
+  if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.mapOpen) { if (state.mapMode === 'view' || state.mapMode === 'travel') closeMapScreen(); }
   else if (state.contactOpen) closeContact();
   else if (state.gunsmithOpen) closeGunsmith();
@@ -2407,21 +2541,54 @@ function pollPad(dt, now) {
   if (g.buttons.some((x) => x.pressed) || ax.some((v) => Math.abs(v) > 0.4)) setInputMode('pad');
   if (state.inputMode !== 'pad') { pad.prev = g.buttons.map((x) => x.pressed); return; }
 
+  // A question at the top of the screen (a friend's invite, a trade request): hold ⧉ to say yes.
+  // While one is showing, ⧉ does its usual job when you let go, so a hold can be told from a tap.
+  const asking = !$('invitebar').hidden;
+  if (just(BTN.VIEW)) { pad.viewAt = now; pad.viewAsk = asking; pad.viewHeld = false; }
+  if (pad.viewAsk && b(BTN.VIEW) && !pad.viewHeld && now - pad.viewAt > 500) { pad.viewHeld = true; if (asking) $('invitebar').querySelector('button')?.click(); }
+  const viewTap = pad.viewAsk ? !b(BTN.VIEW) && !!pad.prev[BTN.VIEW] && !pad.viewHeld : just(BTN.VIEW);
+
   const panel = topPanel();
+  if (!panel) { pad.panelId = null; pad.mark = null; }
   if (panel) {
     // Menu mode: D-pad / left stick to move focus, A to select, B to go back, right stick scrolls.
+    // A screen that has just come up starts on its first choice, and ignores Ⓐ for a moment so a
+    // button mashed as it opened doesn't pick something by accident.
+    // (The on-screen keyboard is exempt: you opened it yourself, and its first letter must not be lost.)
+    if (pad.panelId !== panel.id) { pad.panelId = panel.id; pad.armAt = panel.id === 'osk' ? 0 : now + 300; if (pad.mark && pad.mark.panel !== panel.id) pad.mark = null; }
     pad.moveX = pad.moveY = 0;
     state.mouseDown = false; state.aiming = false;
     const sx = deadzone(ax[0], 0.5), sy = deadzone(ax[1], 0.5);
     const dir = b(BTN.UP) || sy < 0 ? [0, -1] : b(BTN.DOWN) || sy > 0 ? [0, 1] : b(BTN.LEFT) || sx < 0 ? [-1, 0] : b(BTN.RIGHT) || sx > 0 ? [1, 0] : null;
     const navPressed = [BTN.UP, BTN.DOWN, BTN.LEFT, BTN.RIGHT].some(just);
-    if (dir && (navPressed || now > pad.navAt)) { moveFocus(panel, dir[0], dir[1]); pad.navAt = now + (navPressed ? 380 : 160); }
+    // Screens redraw when the server sends news, and that drops the highlight: put it back.
+    const fresh = (!document.activeElement || !panel.contains(document.activeElement) || document.activeElement === panel) && regainFocus(panel);
+    const cur = document.activeElement;
+    const dial = cur && panel.contains(cur) && (cur.tagName === 'SELECT' || (cur.tagName === 'INPUT' && cur.type === 'number'));
+    if (dir && fresh) pad.navAt = now + 380;   // the push that woke the highlight doesn't also move it
+    else if (dir && (navPressed || now > pad.navAt)) {
+      // On a number box or a pick-list, left and right change it (hold LB or RB for tens); up and down move on.
+      if (dial && dir[0]) { padAdjust(cur, dir[0] * (b(BTN.LB) || b(BTN.RB) ? 10 : 1)); pad.navAt = now + (navPressed ? 380 : 90); }
+      else { moveFocus(panel, dir[0], dir[1]); pad.navAt = now + (navPressed ? 380 : 160); }
+    }
     if (!dir) pad.navAt = 0;
-    const scroller = panel.id === 'gunsmith' ? panel.querySelector('.gsgrid aside:last-child') : panel;
-    if (scroller) scroller.scrollTop += deadzone(ax[3]) * 600 * dt;
-    if (just(BTN.A)) {
+    if (panel.id === 'mapscreen') {
+      // The right stick slides the map about.
+      const mx = deadzone(ax[2]), mz = deadzone(ax[3]);
+      if (mx || mz) { const span = state.map.size / mapView.zoom; mapView.cx += mx * span * dt * 0.9; mapView.cz += mz * span * dt * 0.9; drawMapCanvas(); }
+    } else {
+      const scroller = panel.id === 'gunsmith' ? panel.querySelector('.gsgrid aside:last-child') : panel;
+      if (scroller) scroller.scrollTop += deadzone(ax[3]) * 600 * dt;
+    }
+    if (panel.id === 'osk') {
+      if (just(BTN.X)) oskType(null);
+      if (just(BTN.Y)) oskType(' ');
+      if (just(BTN.MENU)) closeOsk(true);
+    }
+    if (just(BTN.A) && now > (pad.armAt || 0)) {
       const el = document.activeElement;
-      if (el && panel.contains(el) && el.tagName === 'BUTTON') {
+      if (el && panel.contains(el) && el.tagName === 'INPUT' && el.type !== 'number') openOsk(el);
+      else if (el && panel.contains(el) && el.tagName === 'BUTTON') {
         const idx = focusables(panel).indexOf(el);
         el.click();
         // Panels re-render after most actions; put focus back where it was.
@@ -2430,7 +2597,7 @@ function pollPad(dt, now) {
     }
     if (just(BTN.B)) padBack();
     if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
-    if (just(BTN.VIEW) && !['login', 'mapscreen'].includes(panel.id)) doAction('inventory');
+    if (viewTap && !['login', 'mapscreen', 'osk', 'tradepanel'].includes(panel.id)) doAction('inventory');
     if (just(BTN.MENU) && panel.id === 'mapscreen') doAction('map');
     if (panel.id === 'mapscreen') { mapView.zoom = Math.max(1, Math.min(60, mapView.zoom * (1 + (val(BTN.RT) - val(BTN.LT)) * dt * 2))); if (val(BTN.RT) + val(BTN.LT) > 0.05) drawMapCanvas(); }
   } else if (state.me && !state.me.dead) {
@@ -2452,7 +2619,13 @@ function pollPad(dt, now) {
     const firing = val(BTN.RT) > 0.35;
     if (firing && !state.mouseDown) state.firedThisPress = false;
     state.mouseDown = firing;
-    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (Number(i) !== BTN.LB && just(Number(i))) doAction(action);
+    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW].includes(Number(i)) && just(Number(i))) doAction(action);
+    if (viewTap) doAction('inventory');
+    // ☰: tap for the map, hold for the crew panel.
+    const menu = b(BTN.MENU);
+    if (menu && !pad.prev[BTN.MENU]) { pad.menuAt = performance.now(); pad.menuHeld = false; }
+    if (menu && !pad.menuHeld && performance.now() - pad.menuAt > 450) { pad.menuHeld = true; doAction('squadPanel'); }
+    if (!menu && pad.prev[BTN.MENU] && !pad.menuHeld) doAction('map');
     // LB: tap throws your grenade, hold to switch between sensor and stun.
     const lb = !!g.buttons[BTN.LB]?.pressed;
     if (lb && !pad.prev[BTN.LB]) { pad.lbAt = performance.now(); pad.lbSwitched = false; }
@@ -2659,7 +2832,7 @@ function toggleBuild() {
   build.on = !build.on;
   $('buildbar').hidden = !build.on;
   document.body.classList.toggle('building', build.on);
-  if (build.on) toast('Build mode: aim and place. Frames are cheap; upgrade them (E) to make them solid.');
+  if (build.on) toast(`Build mode: aim and place. Frames are cheap; upgrade them (${glyph('E')}) to make them solid.`);
   else if (build.ghost) { scene.remove(build.ghost); build.ghost = null; }
   renderBuildBar();
 }
@@ -3016,10 +3189,11 @@ function hubConnect() {
       }
       case 'state':
         lobby.state = m;
-        renderLobby();
-        if (state.panelOpen) renderFriends($('sqFriends'), true);
+        // This arrives every few seconds: never redraw a list under someone's typing.
+        if (!typingIn($('login'))) redraw($('login'), renderLobby);
+        if (state.panelOpen && !typingIn($('squadpanel'))) redraw($('squadpanel'), () => renderFriends($('sqFriends'), true));
         break;
-      case 'search': lobby.results = m.results; renderLobby(); if (state.panelOpen) renderFriends($('sqFriends'), true); break;
+      case 'search': lobby.results = m.results; redraw($('login'), renderLobby); if (state.panelOpen) renderSquadPanel(); break;
       case 'invite': showInvite(m); break;
       case 'note': toast(m.text); break;
       case 'error': toast(`⚠ ${m.text}`); break;
@@ -3061,9 +3235,9 @@ function renderFriends(el, inGame) {
   // Search.
   const srow = document.createElement('div');
   srow.className = 'item';
-  const input = Object.assign(document.createElement('input'), { placeholder: 'Find agents by callsign', maxLength: 16, value: lobby.lastQ || '' });
+  const input = draftInput({ placeholder: 'Find agents by callsign', maxLength: 16 });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-  const go = () => { lobby.lastQ = input.value; hubSend({ t: 'search', q: input.value }); };
+  const go = () => hubSend({ t: 'search', q: input.value });
   srow.append(input, btn('Search', go, ''));
   el.append(srow);
   for (const r of lobby.results || []) {
@@ -3093,20 +3267,24 @@ function renderFriends(el, inGame) {
   }
 }
 /** An invite pops up wherever you are: in the lobby or mid-game. */
+/** The bar at the top that asks a yes-or-no question (a friend's invite, a trade request). On a
+ *  controller, holding ⧉ says yes. It goes away by itself after `ms`. */
+function showAsk(html, yesText, onYes, noText, ms) {
+  const bar = $('invitebar');
+  const close = () => { bar.hidden = true; clearTimeout(showAsk.timer); };
+  bar.innerHTML = `<div>${html}</div>`;
+  const hint = Object.assign(document.createElement('small'), { className: 'padonly', textContent: `Hold ⧉ to ${yesText.toLowerCase()}` });
+  bar.append(btn(yesText, () => { close(); onYes(); }, ''), btn(noText, close), hint);
+  bar.hidden = false;
+  clearTimeout(showAsk.timer);
+  showAsk.timer = setTimeout(close, ms);
+}
 function showInvite(m) {
   lobby.invite = m;
-  const bar = $('invitebar');
-  bar.innerHTML = `<div><b>${m.from}</b> invited you to <b>${m.worldName}</b>${m.ticket ? ' and their crew' : ''}</div>`;
-  const yes = btn(state.worldId === m.world && state.ws ? 'Join crew' : 'Join', () => {
-    bar.hidden = true;
-    if (state.ws && state.worldId === m.world) { if (m.ticket) toast('You\'re already in this world — ask them for a crew invite (P)'); return; }
+  showAsk(`<b>${m.from}</b> invited you to <b>${m.worldName}</b>${m.ticket ? ' and their crew' : ''}`, state.worldId === m.world && state.ws ? 'Join crew' : 'Join', () => {
+    if (state.ws && state.worldId === m.world) { if (m.ticket) toast(`You're already in this world — ask them for a crew invite (crew panel: ${glyph('P')})`); return; }
     playWorld(m.world, m.ticket);
-  }, '');
-  const no = btn('Not now', () => { bar.hidden = true; });
-  bar.append(yes, no);
-  bar.hidden = false;
-  clearTimeout(lobby.inviteTimer);
-  lobby.inviteTimer = setTimeout(() => { bar.hidden = true; }, 60_000);
+  }, 'Not now', 60_000);
 }
 // Tell the hub who you've been playing alongside, for the "played with recently" list.
 setInterval(() => {
@@ -3124,10 +3302,8 @@ hubConnect();
 const ptrade = { open: false, offer: { res: {}, items: [] } };
 function handlePlayerTrade(m) {
   if (m.state === 'ask') {
-    const bar = $('invitebar');
-    bar.innerHTML = `<div><b>${m.from}</b> wants to trade</div>`;
-    bar.append(btn('Trade', () => { bar.hidden = true; send({ t: 'ptrade', action: 'accept' }); }, ''), btn('No', () => { bar.hidden = true; }));
-    bar.hidden = false;
+    // The request lapses on the server after 30 seconds, so the bar does too.
+    showAsk(`<b>${m.from}</b> wants to trade`, 'Trade', () => send({ t: 'ptrade', action: 'accept' }), 'No', 30_000);
     return;
   }
   if (m.state === 'closed') { ptrade.open = false; $('tradepanel').hidden = true; toast(m.why); lockPointer(); return; }
@@ -3141,12 +3317,15 @@ function renderPlayerTrade() {
   const m = ptrade.view, me = state.me;
   if (!m || !me) return;
   $('tpTitle').textContent = `Trading with ${m.with || '…'}`;
+  const keepRes = document.activeElement?.dataset?.res;
   const mine = $('tpMine'); mine.innerHTML = '';
   const offer = { res: { ...m.you.res }, items: m.you.items.map((i) => i.id) };
   for (const r of RES_UI.filter((x) => me[x] || offer.res[x])) {
     const row = document.createElement('div'); row.className = 'item';
-    const input = Object.assign(document.createElement('input'), { type: 'number', min: 0, max: me[r], value: offer.res[r] || 0, style: 'width:70px' });
+    const input = Object.assign(document.createElement('input'), { type: 'number', min: 0, max: me[r], value: offer.res[r] || 0, style: 'width:70px', title: `How much ${RES_LABEL[r] || r} to offer` });
+    input.dataset.res = r;
     input.onchange = () => { offer.res[r] = Number(input.value) || 0; send({ t: 'ptrade', action: 'offer', ...offer }); };
+    if (keepRes === r) setTimeout(() => { if (state.inputMode === 'pad') padFocus(input); else input.focus(); }, 0);
     row.innerHTML = `<div class="meta"><div class="nm">${resText(r, me[r])}</div></div>`;
     row.append(input);
     mine.append(row);

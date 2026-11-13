@@ -15,8 +15,11 @@ characters persist between sessions and redeploys. A change to the save format w
   - **Look:** drag anywhere on the right half.
   - **Act:** FIRE, AIM, USE (= E), RELOAD, CROUCH, SWAP, GRENADE, TAG and HEAL are on the right; MAP, BAG, CREW, CAMO, PING, grenade switch and BUILD are along the top.
   - **Close a screen:** use ✕ Close, top right.
-- **Phone + Backbone One:** same link. Press any controller button so the browser sees it; the
-  touch buttons then hide. The A button joins.
+- **Phone + Backbone One (the main way to play):** same link. Press any controller button so the
+  browser sees it; the touch buttons then hide. Everything works from the controller: Ⓐ on the
+  callsign box opens an on-screen keyboard, hold ☰ for the crew panel (look speed is in there), tap ☰
+  for the map, hold ⧉ to say yes to an invite or a trade request. Tell me about anything you could
+  not do without touching the screen.
 - Your character is tied to the browser you play in. Clearing its storage, or using another
   browser, makes a new character.
 
@@ -61,6 +64,11 @@ The real map:
 - Find the **Liberty County Courthouse** in Bristol and walk in. Any real building can be claimed.
 - Cross the river on the **SR 20 bridge**, then take a boat under it.
 - Tell me what looks wrong against the real place: a road, a building, a hill, the river.
+
+Guns:
+- At your stash, open the gunsmith. There are ten slots now, including **Forearm** and **Ammunition**.
+  Try a two-range sight (the 1-6x, level 13) and flip it with R3 while aiming.
+- Hollow points against Rogues and deer, armor-piercing against a friend in a vest.
 
 The river:
 - Go to **Bristol Landing**, on the river about 2 miles west of Bristol (⚓ on the map). E at the post:

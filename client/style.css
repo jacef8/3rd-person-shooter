@@ -35,6 +35,16 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 #minimap { position: absolute; top: 12px; right: 12px; border: 1px solid #ff7a1a66; border-radius: 50%; background: #0d1014; }
 /* Colours for new HUD pieces are tokens; text sits on solid panels with no glow or shadow. */
 :root { --hud-surface: #171a21; --hud-line: #2a2f3a; --hud-ink: #ffffff; --hud-ink-2: rgba(255, 255, 255, 0.84); --hud-accent: #ff7a1a; }
+/* On-screen keyboard for controllers: a solid panel, big keys, sharp text. */
+#osk { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 60; width: min(620px, 94vw); padding: 14px 16px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 14px; }
+#oskLabel { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--hud-ink-2); margin-bottom: 6px; }
+#oskText { min-height: 44px; box-sizing: border-box; padding: 9px 12px; margin-bottom: 10px; background: #0f1116; border: 1px solid var(--hud-line); border-radius: 10px; font-size: 20px; font-weight: 700; color: var(--hud-ink); white-space: pre; }
+#oskText::after { content: '▏'; color: var(--hud-accent); }
+.oskrow { display: flex; gap: 6px; justify-content: center; margin-bottom: 6px; }
+.oskkey { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0; background: #20242c; color: var(--hud-ink); border: 1px solid var(--hud-line); border-radius: 10px; font-size: 17px; font-weight: 700; }
+.oskkey.wide { flex: 2 1 0; font-size: 15px; }
+.oskkey.done { background: var(--hud-accent); color: #111; border-color: var(--hud-accent); }
+#osk .hint { margin-top: 4px; font-size: 14px; color: var(--hud-ink-2); text-align: center; }
 /* Rangefinder sights: the range to what you're aiming at, on a solid chip beside the crosshair. */
 #rangefinder { position: absolute; top: calc(50% + 26px); left: calc(50% + 28px); padding: 3px 9px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 10px; font-size: 14px; font-weight: 700; color: var(--hud-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Gunsmith options: the part's name, then who it's for. */
@@ -291,7 +301,10 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
 .lobby .item input, #sqFriends .item input, #sqMembers .item input { flex: 1; min-width: 0; padding: 6px 8px; background: #11151a; color: #eee; border: 1px solid #333; }
 #lbName input { margin-right: 6px; }
 @media (max-width: 700px) { .lbcols { grid-template-columns: 1fr; } }
-#invitebar { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; gap: 10px; align-items: center; padding: 10px 14px; background: rgba(20,24,30,0.95); border: 1px solid #7dff9a; border-radius: 6px; color: #eee; font-size: 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+/* The yes-or-no bar (a friend's invite, a trade request): a solid panel, sharp text, big buttons. */
+#invitebar { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; justify-content: center; box-sizing: border-box; max-width: calc(100vw - 24px); padding: 10px 14px; background: var(--hud-surface); border: 1px solid var(--hud-accent); border-radius: 12px; color: var(--hud-ink); font-size: 15px; font-weight: 600; }
+#invitebar button { min-height: 44px; min-width: 72px; font-size: 15px; font-weight: 700; }
+#invitebar small { font-size: 14px; font-weight: 700; color: var(--hud-ink-2); white-space: nowrap; }
 
 .foodfill { background: linear-gradient(90deg, #8a6a2a, #d8b04a); }
 .bar.food.low { animation: xblink 1s steps(2) infinite; }

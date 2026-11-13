@@ -37,7 +37,7 @@
     </div>
     <div id="padhint" class="controls"></div>
     <div class="controls kbonly">
-      <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
+      Keyboard and mouse work too: <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
       <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory · <b>P</b> squad &amp; leaderboard · <b>M</b> map<br />
       <b>F</b> tag · <b>G</b> sensor grenade · <b>V</b> optical camo · <b>T</b> rally (leader) · <b>B</b> squad ping · <b>X</b> build mode<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
     </div>
@@ -129,6 +129,8 @@
         <div id="sqOnline"></div>
         <h2>Friends</h2>
         <div id="sqFriends"></div>
+        <h2>Controller</h2>
+        <div id="padSettings"></div>
       </section>
       <section>
         <h2>Crew board</h2>
@@ -187,6 +189,14 @@
     </div>
     <p class="sub" id="tpStatus"></p>
     <div class="gsentry"><button id="tpConfirm">Confirm trade</button><button class="ghost" id="tpCancel">Cancel</button></div>
+  </div>
+
+  <!-- On-screen keyboard, so a controller can type a callsign or a crew name. -->
+  <div id="osk" class="panel" hidden>
+    <div id="oskLabel"></div>
+    <div id="oskText"></div>
+    <div id="oskKeys"></div>
+    <div class="hint">Ⓐ type · Ⓧ delete · Ⓨ space · ☰ done · Ⓑ cancel</div>
   </div>
 
   <script type="module" src="/main.js"></script>
