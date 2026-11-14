@@ -566,3 +566,39 @@ body.touchui #wslots span { padding: 0 9px; }
 #contactpanel.solo .cols { grid-template-columns: 1fr; }
 .pawncols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 @media (max-width: 700px) { .pawncols { grid-template-columns: 1fr; } }
+
+/* ==== Every screen in the lobby's look (bag, crew, map and deploy, gunsmith, Contacts and traders,
+   face-to-face trades): solid layered panels with an orange top edge, titles in the display face with
+   the lobby's short rule, quiet spaced-capital section labels, rows that lift when pointed at or
+   highlighted, and a short slide-in. The game behind dims (no blur) so the screen reads first. ==== */
+.panel { background: var(--surface-0); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 10px 14px rgba(0, 0, 0, 0.35); animation: panelIn 220ms ease-out both; }
+.panel::before { content: ''; position: absolute; left: 24px; right: 24px; top: -1px; height: 3px; border-radius: 0 0 3px 3px; background: var(--accent); pointer-events: none; }
+#osk.panel::before { display: none; }
+@keyframes panelIn { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
+/* The dimming is a spread shadow around the panel (no blur, nothing drawn over the 3D canvas each frame). */
+.panel:not(#osk) { box-shadow: 0 10px 14px rgba(0, 0, 0, 0.35), 0 0 0 100vmax rgba(5, 7, 10, 0.45); }
+/* Titles. */
+#ctTitle, #gsTitle, #tpTitle, #mapTitle, #sqTitle { font: 800 22px/1.15 var(--font-display); letter-spacing: 0.03em; text-transform: none; color: var(--ink); margin: 0 0 14px; }
+#ctTitle::after, #gsTitle::after, #tpTitle::after, #mapTitle::after, #sqTitle::after { content: ''; display: block; width: 56px; height: 2px; margin-top: 8px; background: var(--accent); }
+#contactpanel header, #gunsmith header, #tradepanel header { align-items: flex-start; }
+/* Section labels. */
+.invcol h2, #squadpanel h2:not(#sqTitle), #contactpanel h2:not(#ctTitle), #mapscreen aside h2:not(#mapTitle), #tradepanel section h2, #gunsmith h3, #ctTrade h3 {
+  font: 700 13px/1.2 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin: 18px 0 8px;
+}
+/* Rows and controls. */
+.item { background: var(--surface); border-radius: 10px; padding: 8px 12px; margin-bottom: 6px; transition: background 150ms ease-out; }
+.item:hover, .item:focus-within { background: var(--surface-3); }
+.panel button { border-radius: 10px; }
+.panel input, .panel select { border-radius: 10px; }
+.panel .hint { color: var(--ink-3); font-size: 13px; }
+.panel table th { color: var(--ink-3); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .panel { animation: none; } }
+/* (Specific enough to beat the older per-screen rules above.) */
+#contactpanel header #ctTitle, #gunsmith header #gsTitle, #tradepanel header #tpTitle, #mapscreen aside #mapTitle, #squadpanel section #sqTitle {
+  font: 800 22px/1.15 var(--font-display); letter-spacing: 0.03em; text-transform: none; color: var(--ink); margin: 0 0 14px;
+}
+#inventory .invcol h2, #squadpanel section h2:not(#sqTitle), #mapscreen aside h2:not(#mapTitle) { font: 700 13px/1.2 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin: 18px 0 8px; }
+/* The bag on its own (nothing open beside it) is one column, not half a panel of empty space. */
+#inventory:has(#containerCol[hidden]) { width: min(640px, 96vw); }
+#inventory:has(#containerCol[hidden]) .invcols { grid-template-columns: 1fr; }
+#squadpanel h3, #contactpanel h3:not(#ctTrade h3) { font: 700 13px/1.2 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin: 14px 0 8px; }
