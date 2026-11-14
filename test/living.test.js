@@ -29,7 +29,7 @@ function character(name, x, z, extra = {}) {
 async function server(name, characters, env = {}) {
   const port = portBase++;
   const file = path.join(dir, `${name}.json`);
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 10, size: 30000, houses: {}, bags: [], structures: [], characters }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 11, size: 30000, houses: {}, bags: [], structures: [], characters }));
   const proc = spawn(process.execPath, ['server/index.js'], {
     env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999', SAVE_EVERY_MS: '300', ...env },
     stdio: ['ignore', 'pipe', 'inherit'],

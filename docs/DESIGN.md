@@ -35,7 +35,7 @@ converted in `shared/geography.js`. Real distances hold: Bristol to Blountstown 
   `geography.js`. A bigger `WORLD_SIZE` would bring them in, but it would also need more of the real data.
 
 There are no real mountains or deserts here. The game's "hills" are the Torreya bluffs (exaggerated a little) and the sandy terrain is sandhill scrub.
-Not real yet: **elevation** is shaped by hand plus noise, not taken from a real elevation model (USGS 3DEP would be the next import).
+**Elevation** is real: USGS 3DEP 1 m lidar (2020), sampled to 10 m, with the broad lie of the land drawn 2.5x taller.
 
 ## Stash houses: claiming and home levels
 

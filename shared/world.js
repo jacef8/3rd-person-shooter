@@ -5,7 +5,7 @@
 // seed and size and the client rebuilds the identical world. Generation therefore only uses
 // + - * / and the seeded RNG (no Math.sin etc., which can differ between JS engines).
 
-import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, PAD_MARGIN } from './terrain.js';
+import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, PAD_MARGIN, RELIEF } from './terrain.js';
 import { polyDist, lakeDepth, segDist, project, REAL_SIZE } from './geography.js';
 import RIVER from './data/river.json' with { type: 'json' };
 export { WATER_LEVEL } from './terrain.js';
@@ -452,8 +452,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const minX = x - ex, minZ = z - ez, maxX = x + ex, maxZ = z + ez;
       const hs = [terrain.exact(minX, minZ), terrain.exact(maxX, minZ), terrain.exact(minX, maxZ), terrain.exact(maxX, maxZ), terrain.exact(x, z)];
       const lo = Math.min(...hs), hi = Math.max(...hs);
-      // Not in the water, and not on a slope too steep to cut a pad into.
-      realPads.push(minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30 && lo > 0.3 && hi - lo < 4
+      // Not in the water, and not on a slope too steep to cut a pad into (hills are drawn RELIEF x taller).
+      realPads.push(minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30 && lo > 0.3 && hi - lo < 4 * RELIEF + 0.15 * Math.max(w, d)
         ? { minX, minZ, maxX, maxZ, x, z, w, d, ang, rects: row[8] || null, elev: Math.round((hs.reduce((a, b) => a + b) / 5) * 100) / 100, margin: PAD_MARGIN, pad: 1 } : null);
     }
     terrain.setFlats([...townFlats, ...realPads.filter(Boolean)]);

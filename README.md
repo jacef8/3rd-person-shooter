@@ -115,11 +115,13 @@ interval), `EXTRACT_HOLD_MS` (how long to hold an extraction, default 90000), `D
 
 ## The real-world map
 
-The world is built from open data for the real place, in `data/real/` (about 1.8 MB, in the repo):
+The world is built from open data for the real place, in `data/real/` (about 3.7 MB, in the repo):
 
-- **Ground:** real elevation on a 30 m grid (USGS 3D Elevation Program data, via the open AWS Terrain
-  Tiles). Bristol sits on the high east bank about 130 ft above the river; Blountstown is down on the
-  floodplain; the Torreya bluffs rise about 150 ft straight off the water.
+- **Ground:** real lidar elevation on a 10 m grid (the USGS 3D Elevation Program's 1 m bare-earth
+  survey of 2020). Bristol sits on the high east bank about 130 ft above the river; Blountstown is
+  down on the floodplain; the Torreya bluffs and their ravines rise about 230 ft off the water. Hills
+  are drawn 2.5x taller than life (`RELIEF` in `shared/terrain.js`) so they read from the shoulder
+  camera, and no slope is left too steep to climb out of.
 - **Water:** the Apalachicola follows its real course, with its real width, islands and side channels,
   and 335 real lakes, ponds and reservoirs are cut in (OpenStreetMap, via Overture Maps).
 - **Roads:** every real road, 2,129 stretches of them. 1,234 carry a real name or route number

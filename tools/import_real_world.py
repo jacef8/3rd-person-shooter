@@ -7,7 +7,7 @@
   3. data/real/roads.json        every real road with its real name or route number
   4. data/real/elevation.bin.gz  real ground elevation, with the real rivers, lakes and ponds cut in
 
-    pip install pyarrow shapely numpy pillow
+    pip install pyarrow shapely numpy pillow tifffile imagecodecs pyproj
     python3 tools/import_real_world.py
     python3 tools/import_real_world.py --release 2026-10-21.0 --cache /tmp/overture-cache
 
@@ -18,15 +18,20 @@ Sources (see data/real/ATTRIBUTION.md, which this tool writes):
   Overture Maps Foundation (overturemaps.org): buildings (Microsoft ML Building Footprints and
     OpenStreetMap), roads and water (OpenStreetMap). Read straight from Overture's public S3 bucket
     with HTTPS range requests: only the Parquet row groups that overlap the map are downloaded.
-  AWS Terrain Tiles ("terrarium" elevation tiles; in the US built from USGS 3DEP 1/3 arc-second data).
+  USGS 3D Elevation Program lidar: the 1 m bare-earth DEM from the 2020 Hurricane Michael survey
+    (public domain), read from USGS's public S3 bucket as Cloud-Optimized GeoTIFFs; only their 4 m
+    overview level is downloaded. `--dem terrarium` uses AWS Terrain Tiles instead (USGS 3DEP 1/3
+    arc-second data), which is also the fallback for anywhere the lidar has no value.
 
 Elevation and water level. The game's water level is 0 everywhere, but the real river falls about
 4 m across the map. So heights are stored relative to the river's own water surface at the nearest
 point along it: the river sits at 0, the floodplain a metre or few above, the Torreya bluffs ~45 m.
 
-elevation.bin.gz (little-endian, gzipped): 'DZEL', uint16 version=1, uint16 n, float32 step metres,
-float32 origin x, float32 origin z (the map's north-west corner), then n*n int16 decimetres,
-index = j * n + i for x = origin + i*step (east), z = origin + j*step (south).
+elevation.bin.gz (little-endian, gzipped): 'DZEL', uint16 version=2, uint16 n, float32 step metres,
+float32 origin x, float32 origin z (the map's north-west corner), then the n*n heights in decimetres,
+index = j * n + i for x = origin + i*step (east), z = origin + j*step (south), each stored as its
+difference from left + up - up-left: n*n int8 (-128 = see the next escape), then the escapes as int16.
+(Version 1 stored the n*n int16 decimetres directly.)
 """
 import argparse, concurrent.futures, gzip, heapq, io, json, math, os, re, struct, subprocess, sys, urllib.request
 from collections import Counter, defaultdict
@@ -49,6 +54,7 @@ ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
 ap.add_argument('--release', default=None, help='Overture release, e.g. 2026-10-21.0 (default: the latest)')
 ap.add_argument('--size', type=float, default=30000, help='map size in metres (must match WORLD_SIZE)')
 ap.add_argument('--step', type=float, default=30, help='elevation grid spacing in metres')
+ap.add_argument('--dem', choices=['lidar', 'terrarium'], default='lidar', help='elevation source (see above)')
 ap.add_argument('--zoom', type=int, default=13, help='terrain tile zoom (13 is about 16 m per pixel here)')
 ap.add_argument('--out', default=os.path.join(ROOT, 'data', 'real'))
 ap.add_argument('--cache', default=None, help='keep downloads here so a re-run is quick')
@@ -525,6 +531,59 @@ def terrain_tiles(lon, lat):
     return at(gx0, gy0) * (1 - u) * (1 - v) + at(gx0 + 1, gy0) * u * (1 - v) + at(gx0, gy0 + 1) * (1 - u) * v + at(gx0 + 1, gy0 + 1) * u * v
 
 
+def remote_size(url):
+    with urllib.request.urlopen(urllib.request.Request(url, method='HEAD'), timeout=60) as r:
+        return int(r.headers['Content-Length'])
+
+
+LIDAR = ('https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/FL_HurricaneMichael_2020_D20/'
+         'TIFF/USGS_1M_16_x{x}y{y}_FL_HurricaneMichael_2020_D20.tif')
+LIDAR_LEVEL = 2   # overview level: 0 is 1 m, 1 is 2 m, 2 is 4 m
+
+
+def lidar_dem(lon, lat):
+    """Elevation in metres above sea level at each lon/lat from the USGS 1 m lidar DEM (UTM 16N tiles
+    10 km on a side, named by their west and north edges in units of 10 km). NaN where there's none."""
+    import tifffile
+    from pyproj import Transformer
+    E, N = Transformer.from_crs(4326, 26916, always_xy=True).transform(lon, lat)
+    out = np.full(E.shape, np.nan)
+    tiles = [(x, y) for x in range(int(E.min() // 10000), int(E.max() // 10000) + 1)
+             for y in range(int(N.min() // 10000) + 1, int(N.max() // 10000) + 2)]
+
+    def load(xy):
+        x, y = xy
+        cached = args.cache and os.path.join(args.cache, f'lidar-{x}-{y}-L{LIDAR_LEVEL}.npz')
+        if cached and os.path.exists(cached):
+            z = np.load(cached)
+            return xy, z['a'], tuple(z['geo'])
+        url = LIDAR.format(x=x, y=y)
+        with tifffile.TiffFile(RangeFile(url, remote_size(url))) as t:
+            p0, p = t.pages[0], t.pages[LIDAR_LEVEL]
+            sx = p0.tags[33550].value[0] * p0.shape[1] / p.shape[1]
+            tp = p0.tags[33922].value
+            a = p.asarray().astype(np.float32)
+        geo = (tp[3], tp[4], sx)
+        if cached:
+            os.makedirs(args.cache, exist_ok=True)
+            np.savez(cached, a=a, geo=np.array(geo))
+        return xy, a, geo
+
+    with concurrent.futures.ThreadPoolExecutor(4) as pool:
+        for (x, y), a, (ox, oy, px) in pool.map(load, tiles):
+            a[a < -1000] = np.nan
+            # A 3 x 3 mean (12 m) so each sample is the ground around it, not one 4 m pixel.
+            p = np.pad(a, 1, mode='edge')
+            a = sum(p[1 + dj:1 + dj + a.shape[0], 1 + di:1 + di + a.shape[1]] for dj in (-1, 0, 1) for di in (-1, 0, 1)) / 9
+            fx, fy = (E - ox) / px - 0.5, (oy - N) / px - 0.5
+            mk = (fx >= 0) & (fy >= 0) & (fx < a.shape[1] - 1) & (fy < a.shape[0] - 1) & np.isnan(out)
+            i, j = fx[mk].astype(int), fy[mk].astype(int)
+            u, v = fx[mk] - i, fy[mk] - j
+            out[mk] = (a[j, i] * (1 - u) * (1 - v) + a[j, i + 1] * u * (1 - v) + a[j + 1, i] * (1 - u) * v + a[j + 1, i + 1] * u * v)
+            print(f'  lidar tile x{x}y{y}: {int(mk.sum())} samples')
+    return out
+
+
 def box_blur(a, r):
     """Mean over a (2r+1) square, edges repeated."""
     p = np.pad(a, r, mode='edge')
@@ -540,7 +599,14 @@ def write_elevation(water, segs):
     xs = -HALF + np.arange(n) * step
     X, Zg = np.meshgrid(xs, xs)   # [j, i]: x east, z south
     lon, lat = to_lonlat(X, Zg)
-    dem = terrain_tiles(lon, lat)
+    if args.dem == 'lidar':
+        dem = lidar_dem(lon, lat)
+        gaps = np.isnan(dem)
+        print(f'elevation: USGS lidar, {100 * (1 - gaps.mean()):.2f}% of the map covered')
+        if gaps.any():
+            dem[gaps] = terrain_tiles(lon[gaps], lat[gaps])
+    else:
+        dem = terrain_tiles(lon, lat)
     print(f'  ground {dem.min():.1f} .. {dem.max():.1f} m above sea level')
 
     # The river's water surface along its course (lidar elevation data is flat over water).
@@ -577,8 +643,8 @@ def write_elevation(water, segs):
     rel = dem - datum
     print(f'  river surface {surf.max():.1f} m (north) to {surf.min():.1f} m (south) above sea level')
 
-    # Real water: rivers, lakes, ponds and reservoirs cut in below the water line, 3x oversampled.
-    S = 3
+    # Real water: rivers, lakes, ponds and reservoirs cut in below the water line, oversampled.
+    S = 3 if step >= 20 else 2
     img = Image.new('L', (n * S, n * S), 0)
     draw = ImageDraw.Draw(img)
     px = lambda g: [((x + HALF) / step * S + S / 2, (z + HALF) / step * S + S / 2) for x, z in g.coords]
@@ -608,7 +674,7 @@ def write_elevation(water, segs):
                     td.polygon(px(hole), fill=0)
                 img = Image.fromarray(np.maximum(np.asarray(img), np.asarray(tmp)))
                 draw = ImageDraw.Draw(img)
-    full = np.asarray(img, dtype=np.float64)
+    full = np.asarray(img, dtype=np.float32)
     cover = full.reshape(n, S, n, S).mean(axis=(1, 3))
     river_mask = (full - small).clip(0, 1).reshape(n, S, n, S).mean(axis=(1, 3)) >= 0.45
     wet = cover >= 0.45
@@ -623,13 +689,24 @@ def write_elevation(water, segs):
     for s in segs:
         if s['cls'] in ('track', 'service'):
             continue
-        rd.line([((x + HALF) / step, (z + HALF) / step) for x, z in s['line'].coords], fill=1, width=2)
+        rd.line([((x + HALF) / step, (z + HALF) / step) for x, z in s['line'].coords], fill=1, width=max(2, round(30 / step)))
     on_road = np.asarray(rimg, dtype=bool)
     raised = on_road & (rel < 1.0)
     rel = np.where(raised, 1.0, rel)
     print(f'  ground {rel.min():.1f} .. {rel.max():.1f} m above the river; {int(raised.sum())} road cells raised onto causeways')
 
-    raw = struct.pack('<4sHHfff', b'DZEL', 1, n, step, -HALF, -HALF) + np.clip(np.round(rel * 10), -32000, 32000).astype('<i2').tobytes()
+    # Version 2 packs the grid small: each value is stored as its difference from a guess made from
+    # its neighbours (left + up - up-left), one byte each; the few that don't fit in a byte are -128
+    # there and follow in order as int16 after all n*n bytes.
+    a = np.clip(np.round(rel * 10), -32000, 32000).astype(np.int32)
+    r = a.copy()
+    r[1:, 1:] = a[1:, 1:] - a[1:, :-1] - a[:-1, 1:] + a[:-1, :-1]
+    r[0, 1:] = a[0, 1:] - a[0, :-1]
+    r[1:, 0] = a[1:, 0] - a[:-1, 0]
+    r = r.ravel()
+    big = np.abs(r) > 127
+    raw = (struct.pack('<4sHHfff', b'DZEL', 2, n, step, -HALF, -HALF) + np.where(big, -128, r).astype(np.int8).tobytes()
+           + r[big].astype('<i2').tobytes())
     os.makedirs(args.out, exist_ok=True)
     p = os.path.join(args.out, 'elevation.bin.gz')
     with gzip.GzipFile(p, 'wb', compresslevel=9, mtime=0) as fh:
@@ -654,13 +731,13 @@ Made by `tools/import_real_world.py` from open data. Keep this file with the dat
 |---|---|---|
 | `structures.json` | Building footprints, heights and landmark names | Overture Maps Foundation, release {release}. Footprints from **Microsoft ML Building Footprints** (CDLA Permissive 2.0) and **OpenStreetMap** contributors (ODbL 1.0). |
 | `roads.json` | Roads, their names and route numbers | Overture Maps Foundation, release {release}; road data **© OpenStreetMap contributors** (ODbL 1.0). |
-| `elevation.bin.gz` | Ground elevation, with rivers, lakes and ponds cut in | **AWS Terrain Tiles** (Mapzen terrarium tiles); in the US from **USGS 3D Elevation Program** data (public domain). Water outlines **© OpenStreetMap contributors** (ODbL 1.0) via Overture. |
+| `elevation.bin.gz` | Ground elevation, with rivers, lakes and ponds cut in | **USGS 3D Elevation Program** 1 m lidar DEM, FL Hurricane Michael 2020 survey (public domain); **AWS Terrain Tiles** (USGS 3DEP 1/3 arc-second) where the lidar has no value. Water outlines **© OpenStreetMap contributors** (ODbL 1.0) via Overture. |
 
 The river's course and the highway lines in `shared/data/map-bristol.json` also come from
 OpenStreetMap via Overture.
 
 OpenStreetMap data is open under the Open Database Licence: https://www.openstreetmap.org/copyright
-Overture Maps: https://overturemaps.org · Terrain tiles: https://registry.opendata.aws/terrain-tiles/
+Overture Maps: https://overturemaps.org · USGS 3DEP: https://www.usgs.gov/3d-elevation-program · Terrain tiles: https://registry.opendata.aws/terrain-tiles/
 
 Shop and brand names are left out of the building names on purpose. Everything the game does with
 these places is fiction.

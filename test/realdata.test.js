@@ -108,7 +108,7 @@ test('the server runs on the real map and hands the same data to clients', async
   const res = await fetch(`http://localhost:${port}/data/real/elevation.bin`);
   assert.equal(res.status, 200);
   const grid = parseElevation(new Uint8Array(await res.arrayBuffer()));
-  assert.ok(grid && grid.n === 1001 && grid.step === 30);
+  assert.ok(grid && grid.n === 3001 && grid.step === 10, 'the 10 m lidar grid');
   assert.ok((await (await fetch(`http://localhost:${port}/data/real/roads.json`)).json()).rows.length > 2000);
   // A player joins, builds the same world from the same files, deploys and walks.
   const ws = new WebSocket(`ws://localhost:${port}`);

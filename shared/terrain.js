@@ -56,9 +56,19 @@ export function parseElevation(bytes) {
   if (!bytes || bytes.byteLength < 20) return null;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== 'DZEL') return null;
-  const n = dv.getUint16(6, true), step = dv.getFloat32(8, true), ox = dv.getFloat32(12, true), oz = dv.getFloat32(16, true);
+  const version = dv.getUint16(4, true), n = dv.getUint16(6, true), step = dv.getFloat32(8, true), ox = dv.getFloat32(12, true), oz = dv.getFloat32(16, true);
   const data = new Int16Array(n * n);
-  for (let k = 0; k < n * n; k++) data[k] = dv.getInt16(20 + k * 2, true);
+  if (version === 1) { for (let k = 0; k < n * n; k++) data[k] = dv.getInt16(20 + k * 2, true); return { n, step, ox, oz, data }; }
+  // Version 2: each value is its difference from left + up - up-left; -128 means "the next escape".
+  const res = new Int8Array(bytes.buffer, bytes.byteOffset + 20, n * n);
+  let e = 20 + n * n;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const k = j * n + i;
+    let r = res[k];
+    if (r === -128) { r = dv.getInt16(e, true); e += 2; }
+    const guess = j === 0 ? (i === 0 ? 0 : data[k - 1]) : i === 0 ? data[k - n] : data[k - 1] + data[k - n] - data[k - n - 1];
+    data[k] = guess + r;
+  }
   return { n, step, ox, oz, data };
 }
 
@@ -186,39 +196,47 @@ export function createTerrain(seed, size, elevation = null) {
   }
   const biome = (x, z) => biomeW(x, z);
 
-  /** Real ground, bilinear between the 30 m elevation samples. */
+  /** Real ground, bilinear between the elevation samples (10 m apart from the lidar). */
   const dem = elevation;
   // The ground as the game draws it, worked out once from the real elevation:
   // 1. Only the broad lie of the land (the elevation blurred over a few hundred metres) is made
   //    taller (RELIEF), so hills and valleys stand out without every small bump turning into a spike.
-  // 2. Then no 30 m cell may rise more than MAX_RISE over its neighbour, so the banks of ponds and the
+  // 2. Then no ground may be steeper than MAX_SLOPE between grid points, so the banks of ponds and the
   //    walls of ravines stay steep but climbable: nobody gets trapped at the bottom of one.
   // Plain + - * / and Math.min/max only, so the server and every browser get the same numbers.
-  const MAX_RISE = 16;
+  const MAX_SLOPE = 0.53;   // steepest real ground kept: about 28 degrees (rise per metre)
   let ground = null;
   if (dem) {
-    const N = dem.n, R = 6, a = new Float32Array(N * N), b = new Float32Array(N * N);
-    for (let k = 0; k < N * N; k++) a[k] = Math.max(0, dem.data[k] / 10);
+    const N = dem.n;
+    // The broad shape on a coarse grid (about 30 m), blurred over about 180 m each way, twice.
+    const f = Math.max(1, Math.round(30 / dem.step)), M = Math.ceil(N / f), R = 6;
+    const a = new Float32Array(M * M), b = new Float32Array(M * M);
+    for (let J = 0; J < M; J++) for (let I = 0; I < M; I++) a[J * M + I] = Math.max(0, dem.data[Math.min(N - 1, J * f) * N + Math.min(N - 1, I * f)] / 10);
     for (let pass = 0; pass < 2; pass++) {
-      for (let j = 0; j < N; j++) { let sum = 0; const row = j * N; for (let i = -R; i <= R; i++) sum += a[row + Math.min(N - 1, Math.max(0, i))];
-        for (let i = 0; i < N; i++) { b[row + i] = sum / (2 * R + 1); sum += a[row + Math.min(N - 1, i + R + 1)] - a[row + Math.max(0, i - R)]; } }
-      for (let i = 0; i < N; i++) { let sum = 0; for (let j = -R; j <= R; j++) sum += b[Math.min(N - 1, Math.max(0, j)) * N + i];
-        for (let j = 0; j < N; j++) { a[j * N + i] = sum / (2 * R + 1); sum += b[Math.min(N - 1, j + R + 1) * N + i] - b[Math.max(0, j - R) * N + i]; } }
+      for (let j = 0; j < M; j++) { let sum = 0; const row = j * M; for (let i = -R; i <= R; i++) sum += a[row + Math.min(M - 1, Math.max(0, i))];
+        for (let i = 0; i < M; i++) { b[row + i] = sum / (2 * R + 1); sum += a[row + Math.min(M - 1, i + R + 1)] - a[row + Math.max(0, i - R)]; } }
+      for (let i = 0; i < M; i++) { let sum = 0; for (let j = -R; j <= R; j++) sum += b[Math.min(M - 1, Math.max(0, j)) * M + i];
+        for (let j = 0; j < M; j++) { a[j * M + i] = sum / (2 * R + 1); sum += b[Math.min(M - 1, j + R + 1) * M + i] - b[Math.max(0, j - R) * M + i]; } }
     }
+    const broadAt = (i, j) => {   // bilinear on the coarse grid, at fine cell (i, j)
+      const fx = Math.min(M - 1.001, i / f), fz = Math.min(M - 1.001, j / f), I = Math.floor(fx), J = Math.floor(fz), u = fx - I, v = fz - J;
+      const p = a[J * M + I], q = a[J * M + I + 1], r = a[(J + 1) * M + I], t = a[(J + 1) * M + I + 1];
+      return p + (q - p) * u + (r - p) * v + (p - q - r + t) * u * v;
+    };
     const g = new Float32Array(N * N);
-    for (let k = 0; k < N * N; k++) { const e = dem.data[k] / 10; g[k] = e > 0 ? e + (RELIEF - 1) * Math.min(e, a[k]) : e; }
-    const D = MAX_RISE * 1.4142;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const k = j * N + i, e = dem.data[k] / 10; g[k] = e > 0 ? e + (RELIEF - 1) * Math.min(e, broadAt(i, j)) : e; }
+    const RISE = MAX_SLOPE * dem.step, D = RISE * 1.4142;
     for (let rep = 0; rep < 2; rep++) {
       for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
         const k = j * N + i; let v = g[k];
-        if (i > 0) v = Math.min(v, g[k - 1] + MAX_RISE);
-        if (j > 0) { v = Math.min(v, g[k - N] + MAX_RISE); if (i > 0) v = Math.min(v, g[k - N - 1] + D); if (i < N - 1) v = Math.min(v, g[k - N + 1] + D); }
+        if (i > 0) v = Math.min(v, g[k - 1] + RISE);
+        if (j > 0) { v = Math.min(v, g[k - N] + RISE); if (i > 0) v = Math.min(v, g[k - N - 1] + D); if (i < N - 1) v = Math.min(v, g[k - N + 1] + D); }
         g[k] = v;
       }
       for (let j = N - 1; j >= 0; j--) for (let i = N - 1; i >= 0; i--) {
         const k = j * N + i; let v = g[k];
-        if (i < N - 1) v = Math.min(v, g[k + 1] + MAX_RISE);
-        if (j < N - 1) { v = Math.min(v, g[k + N] + MAX_RISE); if (i < N - 1) v = Math.min(v, g[k + N + 1] + D); if (i > 0) v = Math.min(v, g[k + N - 1] + D); }
+        if (i < N - 1) v = Math.min(v, g[k + 1] + RISE);
+        if (j < N - 1) { v = Math.min(v, g[k + N] + RISE); if (i < N - 1) v = Math.min(v, g[k + N + 1] + D); if (i > 0) v = Math.min(v, g[k + N - 1] + D); }
         g[k] = v;
       }
     }

@@ -27,7 +27,7 @@ const home = map.houses[5];
 const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} }]));
 houses[home.id] = { ...houses[home.id], owner: TOK_Q, ownerName: 'Quinn', hxp: 300 };
 const w = makeWeapon('carbine');
-fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 10, size: 30000, houses, bags: [], characters: {
+fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 11, size: 30000, houses, bags: [], characters: {
   [TOK_Q]: { name: 'Quinn', x: home.crate.x, z: home.crate.z + 1.2, yaw: 0, hp: 100, armor: 0, inv: { primary: w, secondary: null, armor: null, pack: [] },
     ammo: 300, mags: { [w.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), parts: 100, tech: 50, intel: 0, salvage: 0, comms: 0,
     field: [], discovered: [], contracts: [] },

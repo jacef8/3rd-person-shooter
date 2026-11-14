@@ -51,7 +51,7 @@ test('malformed and hostile messages are shrugged off; stalls, trades and camp s
   const A = hex('a9'), B = hex('b9');
   const spot = map.campSites.find((c) => !placementProblem(world, 'stall', c.x, c.z, 0, { x: c.x, z: c.z + 3 }));
   const port = 28300 + Math.floor(Math.random() * 500), file = path.join(dir, 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 10, size: 30000, houses: {}, bags: [], structures: [], characters: { [A]: character('Keeper', spot.x, spot.z + 3), [B]: character('Prowler', spot.x + 2, spot.z + 3) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 11, size: 30000, houses: {}, bags: [], structures: [], characters: { [A]: character('Keeper', spot.x, spot.z + 3), [B]: character('Prowler', spot.x + 2, spot.z + 3) } }));
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => proc.kill('SIGKILL'));
   let exited = false, errors = '';
