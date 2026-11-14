@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, INTERACT_RANGE,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED,
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED,
 } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
+import * as sfx from '/sound.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, placementProblem } from '/shared/building.js';
@@ -536,7 +537,7 @@ function updateCharacterMesh(g, c, dt) {
   g.visible = !c.dead;
   // Downed: lying on the ground.
   g.rotation.order = 'YXZ';
-  g.rotation.x += ((c.downed ? 1.35 : 0) - g.rotation.x) * k;
+  g.rotation.x += ((c.downed || c.prone ? 1.35 : 0) - g.rotation.x) * k;
   if (g.userData.label) {
     const near = camera.position.distanceTo(g.position) < 4;
     g.userData.label.visible = !near;
@@ -686,6 +687,7 @@ function drawMinimap() {
   for (const [id, e] of state.exposed) { if (e.until < performance.now()) continue; const c = state.players.get(id)?.data; if (c && !c.dead && !c.sq) edge(c.x, c.z, '#ff4d4d', 6); }
   const hp0 = homePos();
   if (hp0) edge(hp0.x, hp0.z, '#4fbf6a', 7);
+  if (state.waypoint) edge(state.waypoint.x, state.waypoint.z, '#ff7a1a', 9);
   g.translate(R, R);
   g.rotate(-state.yaw + Math.PI);
   g.fillStyle = '#5aa8ff';
@@ -798,6 +800,7 @@ const send = (m) => state.ws?.readyState === 1 && state.ws.send(JSON.stringify(m
 function handle(m) {
   switch (m.t) {
     case 'welcome':
+      state.worldId = m.world; loadWaypoint();
       localStorage.setItem('dz_token', m.token);
       state.myName = lobby.account?.name || $('name').value.trim() || 'Agent';
       Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, doorBase: m.doorBase });
@@ -862,6 +865,11 @@ function handle(m) {
     }
     case 'you': {
       const wasDead = state.me?.dead;
+      if (state.me && !m.dead && !wasDead) {
+        if (m.hp < state.me.hp - 1) sfx.hurt();
+        const haul = (x) => x.inv.pack.length + RES_UI.reduce((a, r) => a + (r === 'ammo' ? 0 : x[r] || 0), 0);
+        if (haul(m) > haul(state.me) && m.inv.pack.length >= state.me.inv.pack.length) sfx.pickup();
+      }
       if (m.boat && !state.me?.boat) state.crouch = false;
       if (!m.boat || m.boat.seat !== 0 || (state.boat && state.boat.id !== m.boat.id)) state.boat = null;
       state.me = m;
@@ -890,6 +898,8 @@ function handle(m) {
       if (m.force) { state.tp = m.tp || 0; selfMesh.position.set(m.x, ground(m.x, m.z), m.z); state.view?.update(m.x, m.z); }
       break;
     case 'shot': {
+      // Your own shots are heard the moment you fire (see tryFire); everyone else's from where they are.
+      if (m.from !== state.id) sfx.shot(m.o[0], m.o[1], m.o[2], state.players.get(m.from)?.data?.gun?.a || 'carbine', m.sup);
       // Suppressed fire from other players only shows up close.
       const near = Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < (m.sup === 2 ? 8 : 25);
       if (m.sup && m.from !== state.id && !near) break;
@@ -900,9 +910,11 @@ function handle(m) {
       xpPopup(m.amount, m.reason);
       break;
     case 'levelup':
+      sfx.levelUp();
       levelBanner(m.level, m.unlocks);
       break;
     case 'hitmark':
+      sfx.hit(m.crit);
       damageNumber(m.dmg, m.crit, [m.x, m.y, m.z]);
       break;
     case 'feed': feedLine(m.text); break;
@@ -960,10 +972,12 @@ function handle(m) {
       break;
     }
     case 'ping':
+      sfx.ping(false);
       if (m.objective) state.pings = state.pings.filter((p) => !p.objective);
       state.pings.push({ x: m.x, z: m.z, from: m.from, objective: m.objective, until: performance.now() + (m.objective ? 120_000 : 8000) });
       break;
     case 'alert':
+      sfx.ping(true);
       state.alerts.push({ x: m.x, z: m.z, until: performance.now() + 6000 });
       toast(`⚠ ${m.text} nearby`);
       break;
@@ -1022,7 +1036,7 @@ function handle(m) {
       break;
     }
     case 'ptrade': handlePlayerTrade(m); break;
-    case 'boom': boomFx(m.x, m.y, m.z); break;
+    case 'boom': boomFx(m.x, m.y, m.z); sfx.boom(m.x, m.y, m.z); break;
     case 'homexp': if (m.amount >= 5) xpPopup(m.amount, `Home: ${m.reason}`); break;
     case 'homeLevel': levelBanner(m.level, [{ name: HOME_LEVEL_TEXT[m.level - 1] }], 'STASH HOUSE LEVEL'); break;
     case 'claimed': toast('This is now your stash house. Open its stash for the gunsmith, upgrades and home level.'); break;
@@ -1043,6 +1057,18 @@ function handle(m) {
 }
 
 // ------------------------------------------------------------------ HUD + inventory
+const STANCE_TEXT = { stand: 'Standing', crouch: 'Crouched', prone: 'Prone', sprint: 'Sprinting' };
+/** The stance chip above the gadget bar: what you are, and which button changes it. */
+function stanceNote() {
+  const el = $('stance');
+  if (!el || !state.me) return;
+  const st = state.sprint ? 'sprint' : state.prone ? 'prone' : state.crouch ? 'crouch' : 'stand';
+  const pad = state.inputMode === 'pad';
+  const hint = pad ? 'Ⓑ crouch · hold Ⓑ prone · L3 sprint' : MOBILE && !pad ? 'CROUCH · PRONE · SPRINT buttons' : 'C crouch · hold C prone · Shift sprint';
+  el.innerHTML = `<b>${STANCE_TEXT[st]}</b><span>${hint}</span>`;
+  el.hidden = !!state.me.dead || !!state.me.boat;
+}
+setInterval(stanceNote, 250);
 function updateHud() {
   const me = state.me;
   if (!me) return;
@@ -1061,8 +1087,10 @@ function updateHud() {
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
   $('housestatus').textContent = (me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}${me.claim.ruined ? ' · RUIN: rebuild it at the stash' : ''}` : 'No stash house — plant a claim marker')
     + (me.shield ? ` · 🛡 New-player shield until level ${me.shieldLevel}` : '');
-  const goodsHud = ['seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals'].filter((g) => me[g]).map((g) => `<span title="${GOODS[g].name}">${GOODS[g].icon} ${me[g]}</span>`).join('');
-  $('resources').innerHTML = `<span title="Cash: trade at any Contact's trading post">$${me.cash || 0}</span>${goodsHud}<span title="Build guns and armor">⚙ ${me.parts}</span><span title="Powers gadgets">⌁ ${me.tech}</span><span title="Stash upgrades, building">⛭ ${me.salvage} salvage</span><span title="Building: chop trees with a hatchet">🪵 ${me.wood}</span><span title="Building: mine rocks with a pickaxe">⛰ ${me.stone}</span><span title="Bank at your stash for XP — lost if you die">▣ ${me.intel} intel</span><span title="Field gear at Contacts (never lost)">★ ${me.comms}</span>`;
+  const goodsHud = ['seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals', 'honey', 'shine', 'hide'].filter((g) => me[g] && GOODS[g]).map((g) => `<span><b>${me[g]}</b> ${GOODS[g].name.toLowerCase()}</span>`).join('');
+  // What you carry, in words. Zeros are left out to keep it short; cash always shows.
+  const carried = [[`$${me.cash || 0}`, 'cash'], [me.parts, 'parts'], [me.tech, 'tech'], [me.salvage, 'salvage'], [me.wood, 'wood'], [me.stone, 'stone'], [me.intel, 'intel'], [me.comms, '★ medals']];
+  $('resources').innerHTML = carried.filter(([n], i) => i === 0 || n).map(([n, w]) => `<span><b>${n}</b> ${w}</span>`).join('') + goodsHud;
   const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
   $('level').textContent = `LEVEL ${me.level}`;
   $('xpbar').style.width = me.level >= MAX_LEVEL ? '100%' : `${((me.xp - lo) / (hi - lo)) * 100}%`;
@@ -1194,6 +1222,17 @@ function renderInventory() {
         dep.append(b);
       }
       if (dep.children.length) box.append(dep);
+    }
+    if (c.kind === 'bag' || c.raid) {
+      const anything = RES_UI.some((r) => c[r]) || c.items.length;
+      if (anything && !c.raid?.sealed) {
+        const bar = document.createElement('div'); bar.className = 'gsentry';
+        bar.append(btn('Take everything', () => {
+          for (const r of RES_UI) if (c[r]) send({ t: 'container', action: 'take', res: r });
+          for (const it of c.items) send({ t: 'container', action: 'take', itemId: it.id });
+        }, ''));
+        box.append(bar);
+      }
     }
     for (const r of RES_UI) {
       if (!c[r]) continue;
@@ -1525,6 +1564,19 @@ setInterval(() => { if (state.map) renderTracker(); }, 1000);
 
 // ------------------------------------------------------------------ map screen (M), deploy + fast travel
 const mapView = { cx: 0, cz: 0, zoom: 1 };
+// Your waypoint: a personal marker you set on the map. Pings go to your crew.
+const wpKey = () => `dz_wp_${state.worldId || 1}`;
+function loadWaypoint() { try { state.waypoint = JSON.parse(localStorage.getItem(wpKey()) || 'null'); } catch { state.waypoint = null; } }
+function setWaypoint(x, z) {
+  state.waypoint = x == null ? null : { x: Math.round(x), z: Math.round(z) };
+  try { if (state.waypoint) localStorage.setItem(wpKey(), JSON.stringify(state.waypoint)); else localStorage.removeItem(wpKey()); } catch { /* private mode */ }
+  if (state.waypoint) toast(`Waypoint set · ${distText(Math.hypot(x - state.x, z - state.z))} away`);
+  if (state.mapOpen) renderMapScreen();
+}
+function mapPing(x, z) {
+  send({ t: 'squad', action: 'ping', x, z });
+  toast(state.squad?.id ? 'Pinged for your crew' : 'Pinged (in a crew, they would see it too)');
+}
 function openMapScreen(mode, opts = null) {
   state.mapOpen = true;
   state.mapMode = mode;
@@ -1595,6 +1647,14 @@ function renderMapScreen() {
     b.onmouseenter = () => { state.mapHover = o; drawMapCanvas(); };
     list.append(b);
   }
+  if (state.mapMode === 'view') {
+    const pad = state.inputMode === 'pad';
+    list.append(Object.assign(document.createElement('div'), { className: 'mapnote', textContent: pad ? 'The cross in the middle is your pointer: slide the map with the right stick, zoom with LT / RT.' : 'Click the map to set a waypoint, right-click to ping your crew. Drag to move, wheel to zoom.' }));
+    const wb = btn(`Set waypoint here${pad ? ' (Ⓧ)' : ''}`, () => setWaypoint(mapView.cx, mapView.cz), 'gsweapon');
+    const pb = btn(`Ping crew here${pad ? ' (Ⓨ)' : ''}`, () => mapPing(mapView.cx, mapView.cz), 'gsweapon');
+    list.append(wb, pb);
+    if (state.waypoint) list.append(btn('Clear waypoint', () => setWaypoint(null), 'gsweapon'), btn('Show waypoint', () => { mapView.cx = state.waypoint.x; mapView.cz = state.waypoint.z; drawMapCanvas(); }, 'gsweapon'));
+  }
   if (state.mapMode === 'view' || state.mapMode === 'travel') list.append(btn('Close', closeMapScreen));
   drawMapCanvas();
 }
@@ -1629,8 +1689,15 @@ function drawMapCanvas() {
   const hpos = homePos();
   if (hpos) markers.push({ x: hpos.x, z: hpos.z, color: '#4fbf6a', size: 7, label: `Home (Lv${state.me.claim.level})` });
   for (const o of mapOptions()) { const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
+  if (state.waypoint) markers.push({ x: state.waypoint.x, z: state.waypoint.z, kind: 'diamond', color: '#ff7a1a', size: 8, label: `Waypoint · ${distText(Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z))}` });
   if (state.me && !state.me.dead) markers.push({ x: state.x, z: state.z, kind: 'player', yaw: state.yaw, color: '#5aa8ff', size: 7 });
   state.mapProj = drawMap(cv, map, state.mapBase, mapView, markers);
+  if (state.mapMode === 'view') {
+    // The pointer for the controller: waypoints and pings go where the cross is.
+    const g = cv.getContext('2d'), cx = cv.width / 2, cy = cv.height / 2;
+    g.strokeStyle = '#000'; g.lineWidth = 4; g.beginPath(); g.moveTo(cx - 12, cy); g.lineTo(cx + 12, cy); g.moveTo(cx, cy - 12); g.lineTo(cx, cy + 12); g.stroke();
+    g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath(); g.moveTo(cx - 11, cy); g.lineTo(cx + 11, cy); g.moveTo(cx, cy - 11); g.lineTo(cx, cy + 11); g.stroke();
+  }
 }
 $('mapcanvas').addEventListener('click', (e) => {
   if (!state.mapProj) return;
@@ -1639,6 +1706,7 @@ $('mapcanvas').addEventListener('click', (e) => {
   // Pick the nearest option within ~20 px.
   let best = null, bd = 20 / state.mapProj.k;
   for (const o of mapOptions()) { const d = Math.hypot(o.x - w.x, o.z - w.z); if (d < bd) { bd = d; best = o; } }
+  if (state.mapMode === 'view') { if (!mapDragMoved) setWaypoint(w.x, w.z); return; }
   if (best) send(best.msg);
   else if (state.mapMode === 'first') {
     // Clicking a specific free house on the map claims that one.
@@ -1648,11 +1716,18 @@ $('mapcanvas').addEventListener('click', (e) => {
   }
 });
 $('mapcanvas').addEventListener('wheel', (e) => { e.preventDefault(); mapView.zoom = Math.max(1, Math.min(60, mapView.zoom * (e.deltaY < 0 ? 1.25 : 0.8))); drawMapCanvas(); }, { passive: false });
-let mapDrag = null;
-$('mapcanvas').addEventListener('pointerdown', (e) => { mapDrag = { x: e.clientX, y: e.clientY, cx: mapView.cx, cz: mapView.cz }; });
+let mapDrag = null, mapDragMoved = false;
+$('mapcanvas').addEventListener('pointerdown', (e) => { mapDrag = { x: e.clientX, y: e.clientY, cx: mapView.cx, cz: mapView.cz }; mapDragMoved = false; });
+$('mapcanvas').addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (state.mapMode !== 'view' || !state.mapProj) return;
+  const r = e.target.getBoundingClientRect(), w = state.mapProj.toWorld(e.clientX - r.left, e.clientY - r.top);
+  mapPing(w.x, w.z);
+});
 addEventListener('pointerup', () => { mapDrag = null; });
 addEventListener('pointermove', (e) => {
   if (!mapDrag || !state.mapProj) return;
+  if (Math.hypot(e.clientX - mapDrag.x, e.clientY - mapDrag.y) > 6) mapDragMoved = true;
   mapView.cx = mapDrag.cx - (e.clientX - mapDrag.x) / state.mapProj.k;
   mapView.cz = mapDrag.cz - (e.clientY - mapDrag.y) / state.mapProj.k;
   drawMapCanvas();
@@ -1903,10 +1978,12 @@ function doAction(a) {
       break;
     case 'rally': send({ t: 'rally' }); break;
     case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
-    case 'reload': send({ t: 'reload' }); break;
+    case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && state.me.ammo > 0) sfx.reload(); send({ t: 'reload' }); break;
     case 'swap': send({ t: 'swap' }); break;
     case 'heal': send({ t: 'inv', action: 'use' }); break;
-    case 'crouch': state.crouch = !state.crouch; break;
+    case 'crouch': if (state.prone) { state.prone = false; state.crouch = true; } else state.crouch = !state.crouch; stanceNote(); break;
+    case 'prone': state.prone = !state.prone; if (state.prone) state.crouch = false; stanceNote(); break;
+    case 'sprint': touch.sprintOn = !touch.sprintOn; if (touch.sprintOn) { state.prone = false; state.crouch = false; } break;
   }
 }
 $('name').value = localStorage.getItem('dz_name') || '';
@@ -1951,7 +2028,7 @@ addEventListener('keydown', (e) => {
 addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
-  KeyQ: 'swap', Digit1: 'swap', Digit2: 'swap', KeyH: 'heal', KeyC: 'crouch', ControlLeft: 'crouch',
+  KeyQ: 'swap', Digit1: 'swap', Digit2: 'swap', KeyH: 'heal', ControlLeft: 'crouch',
 };
 addEventListener('keydown', (e) => {
   if (document.activeElement?.tagName === 'INPUT') return;
@@ -1966,9 +2043,17 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && state.invOpen) { closeInventory(); return; }
   state.keys.add(e.code);
   if (e.repeat) return;
+  if (e.code === 'KeyC') { kbC.at = performance.now(); kbC.held = false; }
   if (KEY_ACTIONS[e.code]) doAction(KEY_ACTIONS[e.code]);
 });
-addEventListener('keyup', (e) => state.keys.delete(e.code));
+addEventListener('keyup', (e) => {
+  state.keys.delete(e.code);
+  if (e.code === 'KeyC' && kbC.at && !kbC.held) doAction('crouch');
+  if (e.code === 'KeyC') kbC.at = 0;
+});
+// C: tap to crouch, hold to go prone.
+const kbC = { at: 0, held: false };
+setInterval(() => { if (kbC.at && !kbC.held && performance.now() - kbC.at > 400) { kbC.held = true; doAction('prone'); } }, 50);
 addEventListener('blur', () => { state.keys.clear(); state.mouseDown = false; state.aiming = false; });
 
 // ------------------------------------------------------------------ simulation helpers
@@ -1986,28 +2071,35 @@ function solidsAlongRay(ox, oz, dx, dz, dist) {
   return out.concat(state.doorSolids);
 }
 
+function distToSeg(x, z, r) {
+  const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
+  const t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2));
+  return Math.hypot(r.x1 + dx * t - x, r.z1 + dz * t - z);
+}
 function lookDir() {
   return new THREE.Vector3(Math.sin(state.yaw) * Math.cos(state.pitch), Math.sin(state.pitch), Math.cos(state.yaw) * Math.cos(state.pitch));
 }
 
-function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : ground(state.x, state.z) + (state.crouch ? CROUCH_EYE : STAND_EYE); }
+function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : ground(state.x, state.z) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
 
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
   const o = camera.position, d = lookDir();
-  let best = rayAgainstBoxes(o.x, o.y, o.z, d.x, d.y, d.z, solidsAlongRay(o.x, o.z, d.x, d.z, 400), 400).t;
-  best = Math.min(best, state.map.terrain.ray(o.x, o.y, o.z, d.x, d.y, d.z, Math.min(best, 400)));
-  const minT = o.distanceTo(new THREE.Vector3(state.x, eyeHeight(), state.z));
+  // Only what's in front of you counts: a tree or wall between the camera and your shoulder is ignored.
+  const minT = Math.max(0, new THREE.Vector3(state.x, eyeHeight(), state.z).sub(o).dot(d));
+  const s0 = o.clone().addScaledVector(d, minT);
+  let best = minT + rayAgainstBoxes(s0.x, s0.y, s0.z, d.x, d.y, d.z, solidsAlongRay(s0.x, s0.z, d.x, d.z, 400), 400).t;
+  best = Math.min(best, minT + state.map.terrain.ray(s0.x, s0.y, s0.z, d.x, d.y, d.z, Math.min(best - minT, 400)));
   state.aimTargetId = null;
   const test = (c) => {
     if (!c || c.dead) return;
-    const b = characterBounds(c.x, c.z, c.crouch, ground(c.x, c.z));
+    const b = characterBounds(c.x, c.z, c.crouch, ground(c.x, c.z), c.prone);
     const t = rayBox(o.x, o.y, o.z, d.x, d.y, d.z, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
     if (t > minT && t < best) { best = t; state.aimTargetId = c.sq ? null : c.id; }
   };
   for (const [, r] of state.players) test(r.data);
   for (const [, r] of state.bots) test(r.data);
-  if (best >= 400) best = 400;
+  if (best >= 400 + minT) best = 400 + minT;
   state.aimDist = best - minT;   // from you, not from the camera behind you
   return o.clone().addScaledVector(d, best);
 }
@@ -2022,18 +2114,24 @@ function tryFire(now) {
   if (semi && state.firedThisPress) return;
   if (now - state.lastShot < 60000 / s.rpm) return;
   if (me.reloading) return;
-  if (me.mag <= 0) { if (me.ammo > 0 && !state.autoReloadSent) { send({ t: 'reload' }); state.autoReloadSent = now; } return; }
+  if (me.mag <= 0) {
+    if (!state.firedThisPress) { sfx.empty(); state.firedThisPress = true; }
+    if (me.ammo > 0 && !state.autoReloadSent) { send({ t: 'reload' }); sfx.reload(); state.autoReloadSent = now; }
+    return;
+  }
   state.autoReloadSent = 0;
   const target = aimPoint();
   const eye = new THREE.Vector3(state.x, eyeHeight(), state.z);
-  const dir = target.sub(eye).normalize();
-  send({ t: 'shoot', dir: [dir.x, dir.y, dir.z] });
+  const dir = target.clone().sub(eye).normalize();
+  // The server aims from its copy of you at the same point, and checks the target you saw.
+  send({ t: 'shoot', dir: [dir.x, dir.y, dir.z], at: [+target.x.toFixed(2), +target.y.toFixed(2), +target.z.toFixed(2)], tid: state.aimTargetId || undefined });
+  sfx.shot(0, 0, 0, w.archetype, s.suppressed ? (s.subsonic ? 2 : 1) : 0, true);
   state.lastShot = now;
   state.firedThisPress = true;
   me.mag -= 1;                          // predicted; server confirms via 'you'
   $('mag').textContent = me.mag;
   // Recoil comes from the gunsmith build: stocks, grips, muzzles and bipods all change it.
-  state.recoil += s.recoil * (state.crouch ? s.crouchRecoil : 1) * (state.aiming ? 0.85 : 1) * (0.8 + Math.random() * 0.4);
+  state.recoil += s.recoil * (state.prone ? 0.6 : state.crouch ? s.crouchRecoil : 1) * (state.aiming ? 0.85 : 1) * (0.8 + Math.random() * 0.4);
 }
 
 /** "· 🔒 sealed until 7 pm" on other people's bases while everyone who lives there is offline. */
@@ -2224,6 +2322,11 @@ function drawMarkers() {
     for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${distText(Math.hypot(d.x - state.x, d.z - state.z))}`, new THREE.Vector3(d.x, ground(d.x, d.z) + 3, d.z));
     for (const e of state.worldEvents || []) if (e.type !== 'swing') marker(`w${e.id}`, 'objective', `📣 ${e.name} · ${distText(Math.hypot(e.x - state.x, e.z - state.z))}`, new THREE.Vector3(e.x, ground(e.x, e.z) + 6, e.z));
     for (const e of state.extracts) marker(`e${e.id}`, 'alert', `🚁 ${distText(Math.hypot(e.x - state.x, e.z - state.z))}`, new THREE.Vector3(e.x, ground(e.x, e.z) + 4, e.z));
+    if (state.waypoint) {
+      const dw = Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z);
+      if (dw < 12) { setWaypoint(null); toast('Waypoint reached'); }
+      else marker('wp', 'waypoint', `◆ Waypoint · ${distText(dw)}`, new THREE.Vector3(state.waypoint.x, ground(state.waypoint.x, state.waypoint.z) + 3, state.waypoint.z));
+    }
     const hh = homePos();
     if (hh) {
       const dh = Math.hypot(hh.x - state.x, hh.z - state.z);
@@ -2440,7 +2543,18 @@ function renderPadSettings() {
   const inv = btn(pad.settings.invertY ? 'Inverted' : 'Normal', () => { pad.settings.invertY = !pad.settings.invertY; save(); });
   inv.dataset.pad = 'invert';
   row2.append(inv);
-  box.append(row, row2);
+  const row3 = document.createElement('div'); row3.className = 'item';
+  row3.innerHTML = '<div class="meta"><div class="nm">Sprint</div><div class="st">Click the left stick (L3) to sprint. With auto-sprint on, pushing the stick all the way forward sprints too.</div></div>';
+  const as = btn(pad.settings.autoSprint ? 'Auto-sprint on' : 'Auto-sprint off', () => { pad.settings.autoSprint = !pad.settings.autoSprint; save(); });
+  as.dataset.pad = 'autosprint';
+  row3.append(as);
+  const row4 = document.createElement('div'); row4.className = 'item';
+  row4.innerHTML = `<div class="meta"><div class="nm">Sound: ${Math.round(sfx.getVolume() * 100)}%</div><div class="st">Gunshots, footsteps, hits, reloads and alerts.</div></div>`;
+  const quieter = btn('Quieter', () => { sfx.setVolume(+(sfx.getVolume() - 0.1).toFixed(1)); sfx.click(true); save(); });
+  const louder = btn('Louder', () => { sfx.setVolume(+(sfx.getVolume() + 0.1).toFixed(1)); sfx.click(true); save(); });
+  quieter.dataset.pad = 'quieter'; louder.dataset.pad = 'louder';
+  row4.append(quieter, louder);
+  box.append(row, row2, row3, row4);
   if (keep) { const el = box.querySelector(`[data-pad="${keep}"]`); if (el && state.inputMode === 'pad') padFocus(el); }
 }
 
@@ -2495,6 +2609,7 @@ function padAdjust(el, d) {
 }
 function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : k; }
 
+for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, () => sfx.unlock(), { passive: true });
 function setInputMode(m) {
   if (state.inputMode === m) return;
   state.inputMode = m;
@@ -2541,6 +2656,7 @@ function padFocus(el) {
 function moveFocus(root, dx, dy) {
   const list = focusables(root);
   if (!list.length) return;
+  sfx.click();
   const cur = document.activeElement;
   // Start on the first button rather than a text box, so the phone keyboard doesn't pop up.
   if (!list.includes(cur)) return padFocus(list.find((el) => el.tagName === 'BUTTON') || list[0]);
@@ -2590,7 +2706,7 @@ function pollPad(dt, now) {
   const val = (i) => g.buttons[i]?.value ?? 0;
   const just = (i) => b(i) && !pad.prev[i];
   const ax = g.axes.map((v) => v ?? 0);
-  if (g.buttons.some((x) => x.pressed) || ax.some((v) => Math.abs(v) > 0.4)) setInputMode('pad');
+  if (g.buttons.some((x) => x.pressed) || ax.some((v) => Math.abs(v) > 0.4)) { setInputMode('pad'); if (!pad.audioTried) { pad.audioTried = true; sfx.unlock(); } }
   if (state.inputMode !== 'pad') { pad.prev = g.buttons.map((x) => x.pressed); return; }
 
   // A question at the top of the screen (a friend's invite, a trade request): hold ⧉ to say yes.
@@ -2638,6 +2754,7 @@ function pollPad(dt, now) {
       if (just(BTN.MENU)) closeOsk(true);
     }
     if (just(BTN.A) && now > (pad.armAt || 0)) {
+      sfx.click(true);
       const el = document.activeElement;
       if (el && panel.contains(el) && el.tagName === 'INPUT' && el.type !== 'number') openOsk(el);
       else if (el && panel.contains(el) && el.tagName === 'BUTTON') {
@@ -2651,6 +2768,10 @@ function pollPad(dt, now) {
     if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
     if (viewTap && !['login', 'mapscreen', 'osk', 'tradepanel'].includes(panel.id)) doAction('inventory');
     if (just(BTN.MENU) && panel.id === 'mapscreen') doAction('map');
+    if (panel.id === 'mapscreen' && state.mapMode === 'view') {
+      if (just(BTN.X)) setWaypoint(mapView.cx, mapView.cz);
+      if (just(BTN.Y)) mapPing(mapView.cx, mapView.cz);
+    }
     if (panel.id === 'mapscreen') { mapView.zoom = Math.max(1, Math.min(60, mapView.zoom * (1 + (val(BTN.RT) - val(BTN.LT)) * dt * 2))); if (val(BTN.RT) + val(BTN.LT) > 0.05) drawMapCanvas(); }
   } else if (state.me && !state.me.dead) {
     // Gameplay.
@@ -2671,7 +2792,12 @@ function pollPad(dt, now) {
     const firing = val(BTN.RT) > 0.35;
     if (firing && !state.mouseDown) state.firedThisPress = false;
     state.mouseDown = firing;
-    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW].includes(Number(i)) && just(Number(i))) doAction(action);
+    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B].includes(Number(i)) && just(Number(i))) doAction(action);
+    // Ⓑ: tap to crouch, hold to go prone (while downed, Ⓑ does nothing).
+    const bb = b(BTN.B);
+    if (bb && !pad.prev[BTN.B]) { pad.bAt = now; pad.bHeld = false; }
+    if (bb && !pad.bHeld && now - pad.bAt > 400) { pad.bHeld = true; doAction('prone'); }
+    if (!bb && pad.prev[BTN.B] && !pad.bHeld) doAction('crouch');
     if (viewTap) doAction('inventory');
     // ☰: tap for the map, hold for the crew panel.
     const menu = b(BTN.MENU);
@@ -3008,7 +3134,7 @@ function frame(now) {
     }
     const seat = boatSeat(me);
     if (seat) { state.x = seat.x; state.z = seat.z; }
-    state.sprint = false; state.crouch = false;
+    state.sprint = false; state.crouch = false; state.prone = false;
     if (state.mouseDown && free && !build.on) tryFire(now); else if (!state.mouseDown) state.firedThisPress = false;
   }
   // Local movement (client-side prediction; server re-validates every step).
@@ -3017,18 +3143,30 @@ function frame(now) {
     const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
     const pf = f + pad.moveY + touch.moveY, pr = r + pad.moveX + touch.moveX;
-    state.sprint = (k.has('ShiftLeft') || pad.sprint || touch.sprint) && pf > 0.3 && !state.aiming;
-    if (state.sprint) state.crouch = false;
+    const autoSprint = pad.settings.autoSprint && pad.moveY > 0.92;   // controller setting: stick all the way forward
+    state.sprint = (k.has('ShiftLeft') || pad.sprint || autoSprint || touch.sprint || touch.sprintOn) && pf > 0.3 && !state.aiming;
+    if (state.sprint) { state.crouch = false; state.prone = false; }
     // Mobility comes from the active weapon build and the armor you wear.
     const ws = weaponStats(me.inv[me.active]);
     const mobility = (ws ? ws.mobility : 1.05) + armorStats(me.inv.armor).mobility;
     if (me.downed || (me.food ?? 100) < HOMESTEAD.hunger.noSprintBelow) state.sprint = false;
     const stunnedNow = performance.now() < (state.stunnedUntil || 0);
-    const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
+    const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : state.prone ? PRONE_SPEED : (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
     const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
     const rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
     let mx = fx * pf + rx * pr, mz = fz * pf + rz * pr;
     const len = Math.hypot(mx, mz);
+    if (len > 0.05 && !stunnedNow && !state.prone && !me.downed) {
+      // Footsteps: one every stride, quieter crouched, splashing in water, sharper on a road.
+      state.stepAcc = (state.stepAcc || 0) + Math.min(len, 1) * speed * dt;
+      const stride = state.sprint ? 2.3 : state.crouch ? 1.2 : 1.7;
+      if (state.stepAcc > stride) {
+        state.stepAcc = 0;
+        const gh = ground(state.x, state.z);
+        const onRoad = state.map.roadsNear(state.x, state.z, 8).some((r) => !r.dirt && distToSeg(state.x, state.z, r) < (r.width || 12) / 2);
+        sfx.step(gh < 0.2 ? 'water' : onRoad ? 'road' : 'grass', state.crouch);
+      }
+    }
     if (len > 0.05 && !stunnedNow) {
       if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
       const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain);
@@ -3039,7 +3177,7 @@ function frame(now) {
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: state.yaw, pitch: state.pitch, crouch: state.crouch, aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
+    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: state.yaw, pitch: state.pitch, crouch: state.crouch, prone: state.prone, aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
   }
 
   // Recoil recovers smoothly.
@@ -3050,7 +3188,7 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat }, 1);
+  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat }, 1);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);
   for (const [, r] of state.bots) {
@@ -3081,6 +3219,7 @@ function frame(now) {
   const camGround = Math.max(ground(camera.position.x, camera.position.z), 0);
   if (camera.position.y < camGround + 0.4) camera.position.y = camGround + 0.4;
   camera.lookAt(camera.position.clone().add(d));
+  sfx.setListener(camera.position.x, camera.position.y, camera.position.z, state.yaw);
   // Optic zoom sets ADS field of view; handling sets how fast you get there.
   const ws = me && weaponStats(me.inv[me.active]);
   const fov = aim && ws ? 70 / (ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : 70;
@@ -3088,6 +3227,13 @@ function frame(now) {
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
   $('crosshair').classList.toggle('aim', aim);
+  // The crosshair opens up to show how far shots can stray (hip fire, moving, crouched, prone).
+  if (ws) {
+    const moving = Math.hypot(pad.moveX, pad.moveY) > 0.2 || Math.hypot(touch.moveX, touch.moveY) > 0.2 || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => state.keys.has(k));
+    const spread = (aim ? ws.adsSpread : ws.hipSpread) * (moving ? 1.6 : 1) * (state.prone ? 0.6 : state.crouch ? 0.8 * ws.crouchSpread : 1);
+    const gap = Math.max(2, Math.min(80, Math.tan(spread) / Math.tan(camera.fov * Math.PI / 360) * innerHeight / 2));
+    $('crosshair').style.setProperty('--gap', `${gap.toFixed(1)}px`);
+  }
 
   // Hide stash labels you're standing right under.
   for (const [id, v] of houseVis) { const h = state.map.houses[id]; v.label.visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; }
@@ -3132,7 +3278,7 @@ const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null };
 const TOUCH_BTNS = [
   // [label, action, class]   'fire' is held; 'aim' toggles
   ['FIRE', 'fire', 'big fire'], ['AIM', 'aim', 'mid aim'], ['USE', 'interact', 'mid use'], ['RELOAD', 'reload', 'sm r1'],
-  ['CROUCH', 'crouch', 'sm r2'], ['SWAP', 'swap', 'sm r3'], ['GRENADE', 'sensor', 'sm r4'], ['TAG', 'tag', 'sm r5'], ['HEAL', 'heal', 'sm r6'],
+  ['CROUCH', 'crouch', 'sm r2'], ['PRONE', 'prone', 'sm r7'], ['SPRINT', 'sprint', 'sm r8'], ['SWAP', 'swap', 'sm r3'], ['GRENADE', 'sensor', 'sm r4'], ['TAG', 'tag', 'sm r5'], ['HEAL', 'heal', 'sm r6'],
 ];
 const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ NADE', 'switchGrenade'], ['BUILD', 'build']];
 function buildTouchUI() {
@@ -3182,7 +3328,7 @@ function buildTouchUI() {
     }
   });
   const end = (e) => {
-    if (touch.stick?.id === e.pointerId) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; base.style.display = 'none'; }
+    if (touch.stick?.id === e.pointerId) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; touch.sprintOn = false; base.style.display = 'none'; }
     if (touch.look?.id === e.pointerId) touch.look = null;
   };
   ui.addEventListener('pointerup', end);

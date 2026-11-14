@@ -45,7 +45,7 @@ side; marked ≡).
 | L3 (press the left stick) | Sprint | |
 | LT / RT | Aim / fire | Zoom the map out / in |
 | Ⓐ | Use: loot, doors, talk, hack, revive | Pick |
-| Ⓑ | Crouch | Back |
+| Ⓑ | Crouch (tap) · prone (hold) | Back |
 | Ⓧ / Ⓨ | Reload / swap weapon | |
 | LB | Grenade (hold: switch type) | Hold with ◀ ▶ to change a number by tens |
 | RB | Tag the enemy you're aiming at | |
@@ -115,6 +115,20 @@ The real map:
 - Find the **Liberty County Courthouse** in Bristol and walk in. Any real building can be claimed.
 - Cross the river on the **SR 20 bridge**, then take a boat under it.
 - Tell me what looks wrong against the real place: a road, a building, a hill, the river.
+
+Moving, shooting and the map:
+- Ⓑ crouches, **hold Ⓑ to go prone** (lower, slower, steadier aim), L3 sprints. On the crew panel
+  (hold ☰), turn on **auto-sprint** to sprint by pushing the stick all the way forward.
+- The crosshair now opens up to show how far shots can stray: wide when firing from the hip on the
+  move, tight when aiming down sights, crouched or prone. Shots land on what was under it.
+- On the map (☰): every road has its name; state routes are amber with blue tags. Slide the map so
+  the cross is on a spot, then **Ⓧ sets a waypoint** and **Ⓨ pings your crew**. The waypoint shows
+  in the world and on the minimap, and clears when you get there.
+- Rogues now drop the gun they carried; Lieutenants also drop a plate carrier. Bags and bodies have
+  a **Take everything** button.
+- Sound: gunshots (placed and muffled by distance), footsteps, hits, reloads, pings, blasts. Volume
+  is in the crew panel. On a TV or phone with only a controller, tap the screen once if it's silent:
+  some browsers only start sound after a touch or click.
 
 Fair raids (you need a friend, or two browsers):
 - At your stash, find **Raid window** and pick when your base can be raided while you're offline.

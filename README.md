@@ -153,7 +153,7 @@ Sources and licences are in `data/real/ATTRIBUTION.md` (OpenStreetMap is ODbL: k
 Set `REAL_DATA=0` to run on the old generated stand-in world (the automated tests do).
 The save file is tied to the map, so new data starts a fresh world.
 
-**Controls:** WASD move · Shift sprint · C crouch (makes low walls and cars real cover) · mouse aim ·
+**Controls:** WASD move · Shift sprint · C crouch, hold C to go prone (makes low walls and cars real cover) · mouse aim ·
 LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
 H medkit · Tab inventory · F tag · G throw grenade (Z switches sensor/stun) · V optical camo · T rally (squad leader) ·
 B crew ping · P crew panel and leaderboards · M map · X build mode (1-5 piece, R rotate, click
@@ -187,7 +187,7 @@ On phones the game also uses a lighter graphics setting and a smaller HUD for la
 | L3 (click left stick) | Sprint (toggle) | |
 | RT / LT | Fire / aim down sights | |
 | A | Interact: loot, doors, stash, hack terminals | Select |
-| B | Crouch | Back |
+| B | Crouch (tap) · prone (hold) | Back |
 | X / Y | Reload / swap weapon | Y: gunsmith exploded view |
 | RB / LB | Tag target / throw grenade (hold LB to switch sensor/stun) | |
 | R3 (click right stick) | Optical camo; while aiming, flip a two-range sight | |

@@ -235,6 +235,80 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
     for (let i = 0; i < 3; i++) c[i] += GROUND.swamp[i] * b.sea;
     return c;
   }
+  // Roads are their own surface laid on the ground, so they stay crisp (the ground mesh has a point
+  // only every 8 m, which smeared a 6 m road into the grass). Asphalt with a yellow centre line on
+  // main roads, a double line on state routes, brown on dirt tracks.
+  const ROAD_COL = { asphalt: [0.27, 0.28, 0.3], route: [0.25, 0.26, 0.28], dirt: [0.55, 0.45, 0.31], line: [0.92, 0.74, 0.2], edge: [0.85, 0.85, 0.82] };
+  const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  /** Height of the drawn ground mesh itself (the same 8 m triangles), so a road never sinks into it. */
+  function meshHeight(x, z) {
+    const S = 8, i = Math.floor(x / S), j = Math.floor(z / S), fx = x / S - i, fz = z / S - j;
+    const h = (a, b) => terrain.drawn(a * S, b * S);
+    if (fx + fz <= 1) { const ha = h(i, j); return ha + (h(i + 1, j) - ha) * fx + (h(i, j + 1) - ha) * fz; }
+    const hd = h(i + 1, j + 1); return hd + (h(i, j + 1) - hd) * (1 - fx) + (h(i + 1, j) - hd) * (1 - fz);
+  }
+  function buildRoads(x0, z0) {
+    const pos = [], col = [], idx = [];
+    const strip = (pts, half, c, lift) => {
+      // pts: [[x, z], ...] along the road; a band `half` metres either side of it.
+      for (let k = 0; k < pts.length - 1; k++) {
+        const [ax, az] = pts[k], [bx, bz] = pts[k + 1];
+        const dx = bx - ax, dz = bz - az, l = Math.hypot(dx, dz) || 1, nx = -dz / l * half, nz = dx / l * half;
+        const base = pos.length / 3;
+        for (const [x, z] of [[ax + nx, az + nz], [ax - nx, az - nz], [bx + nx, bz + nz], [bx - nx, bz - nz]]) {
+          const hg = meshHeight(x, z);
+          pos.push(x, Math.max(hg, terrain.drawn(x, z)) + lift, z);
+          col.push(c[0], c[1], c[2]);
+        }
+        idx.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      }
+    };
+    for (const r of map.roadGrid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK, [], true)) {
+      const len = Math.hypot(r.x2 - r.x1, r.z2 - r.z1);
+      if (len < 0.5) continue;
+      const w = r.width || 12, n = Math.max(1, Math.ceil(len / 4));
+      const pt = (t) => [r.x1 + (r.x2 - r.x1) * t, r.z1 + (r.z2 - r.z1) * t];
+      // Only the pieces whose middle lies in this chunk (each piece is drawn once), and none over water
+      // (bridges have their own deck). The road runs a little past each end so joints don't gap.
+      const ext = Math.min(0.5, (w / 2) / len);
+      let run = [];
+      const flush = () => { if (run.length > 1) runs.push(run); run = []; };
+      const runs = [];
+      for (let k = 0; k < n; k++) {
+        const t0 = k / n - (k === 0 ? ext : 0), t1 = (k + 1) / n + (k === n - 1 ? ext : 0), [mx, mz] = pt((t0 + t1) / 2);
+        const inside = mx >= x0 && mx < x0 + CHUNK && mz >= z0 && mz < z0 + CHUNK && terrain.drawn(mx, mz) > 0.15;
+        if (!inside) { flush(); continue; }
+        if (!run.length) run.push(pt(t0));
+        run.push(pt(t1));
+      }
+      flush();
+      const surface = r.dirt ? ROAD_COL.dirt : r.hw ? ROAD_COL.route : ROAD_COL.asphalt;
+      for (const pts of runs) {
+        strip(pts, w / 2, surface, 0.06);
+        if (r.dirt || w < 8) continue;
+        if (r.hw) {
+          // State route: white edge lines and a double yellow line down the middle.
+          const ux = (r.x2 - r.x1) / len, uz = (r.z2 - r.z1) / len, off = (d) => pts.map(([x, z]) => [x - uz * d, z + ux * d]);
+          for (const d of [w / 2 - 0.5, -(w / 2 - 0.5)]) strip(off(d), 0.12, ROAD_COL.edge, 0.08);
+          for (const d of [0.18, -0.18]) strip(off(d), 0.08, ROAD_COL.line, 0.08);
+        }
+        else {
+          // A dashed centre line: 3 m painted, 3 m gap.
+          for (let k = 0; k < pts.length - 1; k += 2) strip([pts[k], [(pts[k][0] + pts[k + 1][0]) / 2, (pts[k][1] + pts[k + 1][1]) / 2]], 0.13, ROAD_COL.line, 0.08);
+        }
+      }
+    }
+    if (!idx.length) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    g.computeBoundingSphere();
+    const m = new THREE.Mesh(g, roadMat);
+    m.receiveShadow = true;
+    return m;
+  }
   /** One chunk's ground; `wet` comes back true if any of it is under water. */
   function buildTerrain(x0, z0) {
     const STEP = 8, N = CHUNK / STEP;
@@ -337,6 +411,8 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
     const group = new THREE.Group();
     const ground = buildTerrain(x0, z0);
     group.add(ground.mesh);
+    const roads = map.roadGrid && buildRoads(x0, z0);
+    if (roads) group.add(roads);
     if (ground.wet) { const w = new THREE.Mesh(waterGeo, waterMat); w.position.set(x0 + CHUNK / 2, 0, z0 + CHUNK / 2); group.add(w); }
     for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [plain, plainMat], [roof, roofMat]]) {
       if (!buf.idx.length) continue;

@@ -1,9 +1,11 @@
 // Full-map rendering for the map screen (M), the deploy/redeploy screen and fast travel.
-const COL = { grass: '#3f4d31', town: '#4b4f55', building: '#7b7f86', road: '#2c2f33', dirt: '#77694a', tree: '#24391f', house: '#a8774c', farm: '#8a6d4c', home: '#9a9186', civic: '#a65f4b' };
+const COL = { grass: '#3f4d31', town: '#4b4f55', building: '#7b7f86', road: '#e4ddcc', street: '#c9c2b0', route: '#f0b54a', dirt: '#b08d58', tree: '#24391f', house: '#a8774c', farm: '#8a6d4c', home: '#9a9186', civic: '#a65f4b' };
+/** Map colours: state routes amber, main roads light, streets a shade darker, dirt tracks brown. */
+const roadColor = (r) => (r.dirt ? COL.dirt : r.hw ? COL.route : (r.width || 12) >= 8 ? COL.road : COL.street);
 const HIDDEN = new Set(['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail']);
 const boxColor = (b) => (b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : b.type === 'home' ? COL.home : b.type === 'civic' ? COL.civic : COL.building);
 // Label chips: solid panels with sharp text (no outlines or glows).
-const CHIP = { bg: '#171a21', line: '#2a2f3a', ink: '#ffffff', road: '#ffd27a', place: '#9fe39f' };
+const CHIP = { bg: '#171a21', line: '#2a2f3a', ink: '#ffffff', road: '#ffd27a', place: '#9fe39f', routeBg: '#1d3f73', routeLine: '#5d8fd6' };
 
 const GC = { plains: [104, 124, 68], forest: [58, 86, 44], desert: [214, 206, 170], mountain: [128, 104, 66], swamp: [52, 68, 40], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
 /** Ground colour (0-255 RGB) of dry land at a point: the biome blend, with sand along the water's edge. */
@@ -71,7 +73,7 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   g.drawImage(tc, -cell / 2, -cell / 2, px + cell, px + cell);
   g.strokeStyle = COL.road; g.lineCap = 'round';
   // Minor roads first, highways on top.
-  for (const r of [...map.roads].sort((a, b) => (a.width || 12) - (b.width || 12))) { g.strokeStyle = r.dirt ? COL.dirt : COL.road; g.lineWidth = Math.max((r.width || 12) >= 10 ? 2 : r.dirt ? 0.5 : 0.8, (r.width || 12) * k); g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke(); }
+  for (const r of [...map.roads].sort((a, b) => (a.hw ? 1 : 0) - (b.hw ? 1 : 0) || (a.width || 12) - (b.width || 12))) { g.strokeStyle = roadColor(r); g.lineWidth = Math.max(r.hw ? 3 : (r.width || 12) >= 8 ? 1.6 : r.dirt ? 0.8 : 1, (r.width || 12) * k); g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke(); }
   for (const t of map.towns) { g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {
     if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
@@ -92,38 +94,48 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   return c;
 }
 
-/** Road names and landmark buildings, as solid chips, once the map is zoomed in enough to read them. */
+/**
+ * Road names and landmark buildings, as solid chips, at every zoom level. State routes (SR 20 and
+ * friends) are always named, repeated along the road; main roads appear as you zoom in, then every
+ * named street. Labels never overlap: the more important one wins.
+ */
 function drawNames(g, map, roads, v) {
   const taken = [];
-  const chip = (text, x, y, color) => {
-    g.font = '700 12px Segoe UI, system-ui, sans-serif';
-    const w = Math.ceil(g.measureText(text).width) + 12, h = 20, x0 = Math.round(x - w / 2), y0 = Math.round(y - h / 2);
+  const chip = (text, x, y, color, route = false) => {
+    g.font = `700 ${route ? 13 : 12}px Segoe UI, system-ui, sans-serif`;
+    const w = Math.ceil(g.measureText(text).width) + 14, h = route ? 22 : 20, x0 = Math.round(x - w / 2), y0 = Math.round(y - h / 2);
     if (x0 < 4 || y0 < 4 || x0 + w > v.W - 4 || y0 + h > v.H - 4) return false;
     if (taken.some((t) => x0 < t[0] + t[2] + 6 && x0 + w + 6 > t[0] && y0 < t[1] + t[3] + 4 && y0 + h + 4 > t[1])) return false;
     taken.push([x0, y0, w, h]);
-    g.fillStyle = CHIP.bg; g.strokeStyle = CHIP.line; g.lineWidth = 1;
-    g.beginPath(); g.roundRect(x0 + 0.5, y0 + 0.5, w, h, 6); g.fill(); g.stroke();
+    g.fillStyle = route ? CHIP.routeBg : CHIP.bg; g.strokeStyle = route ? CHIP.routeLine : CHIP.line; g.lineWidth = route ? 1.5 : 1;
+    g.beginPath(); g.roundRect(x0 + 0.5, y0 + 0.5, w, h, route ? 4 : 6); g.fill(); g.stroke();
     g.fillStyle = color; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(text, x0 + w / 2, y0 + h / 2 + 1);
     g.textBaseline = 'alphabetic';
     return true;
   };
-  // Landmarks first (there are few), then roads: highways before side streets, longest stretch in view first.
-  if (v.k > 0.12) for (const b of map.buildings) if (b.name && b.maxX > v.minX && b.minX < v.maxX && b.maxZ > v.minZ && b.minZ < v.maxZ) chip(b.name, v.sx((b.minX + b.maxX) / 2), v.sz(b.minZ) - 12, CHIP.place);
-  const byName = new Map();
+  // Tier 0: state routes. 1: main roads (zoomed in a little). 2: every named street (zoomed in close).
+  const tierOf = (r) => (r.hw || /^(SR|US|CR|I)[ -]\d/.test(r.name) ? 0 : (r.width || 0) >= 8 ? 1 : 2);
+  const minK = [0, 0.05, 0.3];
+  const cell = [260, 300, 340];   // one label per this many pixels of road
+  const best = new Map();
   for (const r of roads) {
-    if (!r.name || r.hw) continue;
-    const major = (r.width || 0) >= 8;
-    if (!major && v.k < 0.35) continue;   // side streets only when you're in close
-    const len = Math.hypot(r.x2 - r.x1, r.z2 - r.z1);
-    const e = byName.get(r.name) || { len: 0, best: 0, major };
-    e.len += len;
-    if (len > e.best) { e.best = len; e.x = (r.x1 + r.x2) / 2; e.z = (r.z1 + r.z2) / 2; }
-    byName.set(r.name, e);
+    if (!r.name) continue;
+    const tier = tierOf(r);
+    if (v.k < minK[tier]) continue;
+    const x1 = v.sx(r.x1), y1 = v.sz(r.z1), x2 = v.sx(r.x2), y2 = v.sz(r.z2);
+    const len = Math.hypot(x2 - x1, y2 - y1), mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    if (mx < 0 || my < 0 || mx > v.W || my > v.H) continue;
+    if (len < (tier === 0 ? 4 : 24)) continue;
+    const key = `${r.name}|${Math.floor(mx / cell[tier])}|${Math.floor(my / cell[tier])}`;
+    const e = best.get(key);
+    if (!e || len > e.len) best.set(key, { name: r.name, tier, len, x: mx, y: my });
   }
-  const list = [...byName.entries()].sort((a, b) => (b[1].major - a[1].major) || b[1].len - a[1].len).slice(0, 60);
-  let n = 0;
-  for (const [name, e] of list) { if (n >= 22) break; if (chip(name, v.sx(e.x), v.sz(e.z), e.major ? CHIP.road : CHIP.ink)) n++; }
+  const list = [...best.values()].sort((a, b) => a.tier - b.tier || b.len - a.len);
+  let placed = 0;
+  for (const e of list) { if (placed >= 70) break; if (chip(e.name, e.x, e.y, e.tier === 0 ? '#ffffff' : e.tier === 1 ? CHIP.road : CHIP.ink, e.tier === 0)) placed++; }
+  // Landmarks once you're in close enough to find them.
+  if (v.k > 0.12) for (const b of map.buildings) if (b.name && b.maxX > v.minX && b.minX < v.maxX && b.maxZ > v.minZ && b.minZ < v.maxZ) chip(b.name, v.sx((b.minX + b.maxX) / 2), v.sz(b.minZ) - 12, CHIP.place);
 }
 
 /**
@@ -145,9 +157,12 @@ export function drawMap(canvas, map, base, view, markers) {
   const bk = base.width / map.size;
   const srcX = (view.cx - W / 2 / k + map.half) * bk, srcZ = (view.cz - H / 2 / k + map.half) * bk;
   g.drawImage(base, srcX, srcZ, W / k * bk, H / k * bk, 0, 0, W, H);
+  const minX = view.cx - W / 2 / k, maxX = view.cx + W / 2 / k, minZ = view.cz - H / 2 / k, maxZ = view.cz + H / 2 / k;
+  // Roads on screen (zoomed out, a straight pass over the list beats thousands of grid cells).
+  const wide = (maxX - minX) * (maxZ - minZ) > 4e6;
+  const inView = wide ? map.roads.filter((r) => r.maxX >= minX && r.minX <= maxX && r.maxZ >= minZ && r.minZ <= maxZ) : map.roadGrid ? map.roadGrid.rect(minX, minZ, maxX, maxZ) : [];
   // Zoomed in past the base image's detail (the map is 30 km across): draw roads and buildings live.
   if (k > base.width / map.size * 1.5) {
-    const minX = view.cx - W / 2 / k, maxX = view.cx + W / 2 / k, minZ = view.cz - H / 2 / k, maxZ = view.cz + H / 2 / k;
     // Sharper terrain for just the area on screen (cached until the view changes).
     const key = `${Math.round(view.cx)},${Math.round(view.cz)},${k.toFixed(4)},${W},${H}`;
     if (detail.key !== key) {
@@ -166,15 +181,14 @@ export function drawMap(canvas, map, base, view, markers) {
     g.imageSmoothingEnabled = true;
     g.drawImage(detail.canvas, 0, 0, W, H);
     g.strokeStyle = COL.road; g.lineCap = 'round';
-    const inView = map.roadGrid ? map.roadGrid.rect(minX, minZ, maxX, maxZ) : [];
-    for (const r of inView) { g.strokeStyle = r.dirt ? COL.dirt : COL.road; g.lineWidth = Math.max(1, (r.width || 12) * k); g.beginPath(); g.moveTo(sx(r.x1), sz(r.z1)); g.lineTo(sx(r.x2), sz(r.z2)); g.stroke(); }
+    for (const r of [...inView].sort((a, b) => (a.hw ? 1 : 0) - (b.hw ? 1 : 0))) { g.strokeStyle = roadColor(r); g.lineWidth = Math.max(r.hw ? 3 : 1.5, (r.width || 12) * k); g.beginPath(); g.moveTo(sx(r.x1), sz(r.z1)); g.lineTo(sx(r.x2), sz(r.z2)); g.stroke(); }
     for (const b of map.grid.rect(minX, minZ, maxX, maxZ, [], true)) {
       if (b.nature || HIDDEN.has(b.type)) continue;
       g.fillStyle = boxColor(b);
       g.fillRect(sx(b.minX), sz(b.minZ), Math.max(1, (b.maxX - b.minX) * k), Math.max(1, (b.maxZ - b.minZ) * k));
     }
-    drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H });
   }
+  drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H });
   g.textAlign = 'center';
   for (const m of markers) {
     const x = sx(m.x), y = sz(m.z);

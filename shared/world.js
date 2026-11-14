@@ -17,6 +17,9 @@ export const STAND_HEIGHT = 1.8;
 export const CROUCH_HEIGHT = 1.2;
 export const STAND_EYE = 1.6;
 export const CROUCH_EYE = 1.05;
+export const PRONE_EYE = 0.45;
+export const PRONE_HEIGHT = 0.6;
+export const PRONE_SPEED = 1.3;
 export const WALK_SPEED = 4.5;
 export const SPRINT_SPEED = 7.0;
 export const CROUCH_SPEED = 2.4;
@@ -971,7 +974,7 @@ export function rayAgainstBoxes(ox, oy, oz, dx, dy, dz, list, maxDist = Infinity
 }
 
 /** Character hit volume as a box. */
-export function characterBounds(x, z, crouch, y = 0) {
-  const r = 0.4;
-  return { minX: x - r, minZ: z - r, maxX: x + r, maxZ: z + r, minY: y, maxY: y + (crouch ? CROUCH_HEIGHT : STAND_HEIGHT) };
+export function characterBounds(x, z, crouch, y = 0, prone = false) {
+  const r = prone ? 0.7 : 0.4;   // lying down: lower and longer
+  return { minX: x - r, minZ: z - r, maxX: x + r, maxZ: z + r, minY: y, maxY: y + (prone ? PRONE_HEIGHT : crouch ? CROUCH_HEIGHT : STAND_HEIGHT) };
 }

@@ -18,13 +18,15 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
 #crosshair { position: absolute; top: 50%; left: 50%; width: 0; height: 0; }
 #crosshair i { position: absolute; background: #fff; box-shadow: 0 0 2px #000; transition: all 60ms; }
-#crosshair i:nth-child(1) { width: 2px; height: 7px; left: -1px; top: -13px; }
-#crosshair i:nth-child(2) { width: 2px; height: 7px; left: -1px; top: 6px; }
-#crosshair i:nth-child(3) { width: 7px; height: 2px; left: -13px; top: -1px; }
-#crosshair i:nth-child(4) { width: 7px; height: 2px; left: 6px; top: -1px; }
+/* The arms sit at the real spread of your shots (--gap is set every frame). */
+#crosshair { --gap: 6px; }
+#crosshair i:nth-child(1) { width: 2px; height: 7px; left: -1px; top: calc(-7px - var(--gap)); }
+#crosshair i:nth-child(2) { width: 2px; height: 7px; left: -1px; top: var(--gap); }
+#crosshair i:nth-child(3) { width: 7px; height: 2px; left: calc(-7px - var(--gap)); top: -1px; }
+#crosshair i:nth-child(4) { width: 7px; height: 2px; left: var(--gap); top: -1px; }
+#crosshair::after { content: ''; position: absolute; left: -1px; top: -1px; width: 2px; height: 2px; background: #fff; }
 #crosshair.hit i { background: #ff3b3b; }
-#crosshair.aim i:nth-child(1) { top: -9px; } #crosshair.aim i:nth-child(2) { top: 2px; }
-#crosshair.aim i:nth-child(3) { left: -9px; } #crosshair.aim i:nth-child(4) { left: 2px; }
+
 
 #prompt { position: absolute; top: calc(50% + 40px); left: 50%; transform: translateX(-50%); font-size: 14px; text-shadow: 0 0 4px #000; white-space: nowrap; }
 #prompt kbd { background: #ff7a1a; color: #111; padding: 1px 6px; border-radius: 3px; font-weight: 700; margin-right: 6px; }
@@ -160,7 +162,15 @@ button.ghost { background: transparent; color: #ddd; border-color: #555; font-we
 .gadget.locked, .gadget.notleader { opacity: 0.35; }
 .gadget.cooldown, .gadget.notech { opacity: 0.55; border-color: #552; }
 .gadget.on { border-color: #16c2ff; color: #16c2ff; }
-#resources { position: absolute; bottom: 92px; right: 24px; font-size: 12px; display: flex; gap: 12px; text-shadow: 0 0 3px #000; color: #ddd; }
+/* What you carry: each number with its word, on a solid strip. */
+#resources { position: absolute; bottom: 92px; right: 24px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; max-width: 520px; padding: 5px 10px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 10px; font-size: 13px; color: var(--hud-ink-2); font-variant-numeric: tabular-nums; }
+#resources b { color: var(--hud-ink); font-weight: 700; }
+/* Stance: what you are now and the buttons that change it. */
+#stance { position: absolute; bottom: 86px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: baseline; padding: 4px 10px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-radius: 10px; white-space: nowrap; }
+#stance b { font-size: 14px; color: var(--hud-ink); }
+#stance span { font-size: 12px; color: var(--hud-ink-2); }
+body.touchui #stance { bottom: auto; top: 54px; }
+.marker.waypoint { color: var(--hud-accent); font-size: 13px; font-weight: 700; }
 body.cloaked #hud::after { content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(22, 194, 255, 0.35); pointer-events: none; }
 #squadpanel { top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(980px, 96vw); max-height: 88vh; overflow: auto; }
 #squadpanel .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
@@ -190,7 +200,7 @@ input { -webkit-user-select: text; user-select: text; }
   .bar { height: 10px; } .bar span { font-size: 8px; line-height: 10px; }
   #weapon { bottom: 10px; right: calc(10px + env(safe-area-inset-right)); }
   #wname { font-size: 12px; } #wammo { font-size: 26px; } #wammo small { font-size: 13px; } #wextra { font-size: 10px; }
-  #resources { bottom: 64px; right: calc(10px + env(safe-area-inset-right)); font-size: 10px; gap: 8px; }
+  #resources { bottom: 64px; right: calc(10px + env(safe-area-inset-right)); font-size: 12px; gap: 2px 8px; max-width: 46vw; }
   #gadgets { bottom: 8px; gap: 3px; } .gadget { min-width: 42px; font-size: 9px; padding: 2px 4px; }
   #xpfeed { bottom: 70px; font-size: 10px; left: calc(10px + env(safe-area-inset-left)); }
   #prompt { font-size: 12px; } #toasts div { font-size: 12px; padding: 4px 10px; }
@@ -277,6 +287,8 @@ body:has(#downbar:not([hidden])) #game { filter: saturate(0.3) brightness(0.8); 
 .tbtn.r4 { right: calc(120px + env(safe-area-inset-right)); bottom: 200px; }
 .tbtn.r5 { right: calc(40px + env(safe-area-inset-right)); bottom: 240px; }
 .tbtn.r6 { right: calc(250px + env(safe-area-inset-right)); bottom: 40px; }
+.tbtn.r7 { right: calc(196px + env(safe-area-inset-right)); bottom: 170px; }
+.tbtn.r8 { right: calc(250px + env(safe-area-inset-right)); bottom: 110px; }
 .ttop { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
 .tbtn.tiny { position: static; border-radius: 6px; width: auto; height: 30px; padding: 0 10px; font-size: 10px; }
 #tclose { position: fixed; top: 10px; right: 10px; z-index: 50; padding: 10px 16px; font-size: 15px; background: rgba(20,24,30,0.9); color: #fff; border: 1px solid #ff8a2a; border-radius: 6px; }
@@ -304,6 +316,8 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
   .tbtn.r3 { right: calc(152px + env(safe-area-inset-right)); bottom: 66px; }   /* swap */
   .tbtn.r2 { right: calc(162px + env(safe-area-inset-right)); bottom: 12px; }   /* crouch */
   .tbtn.r6 { right: calc(214px + env(safe-area-inset-right)); bottom: 40px; }   /* heal */
+  .tbtn.r7 { right: calc(152px + env(safe-area-inset-right)); bottom: 120px; }  /* prone */
+  .tbtn.r8 { right: calc(214px + env(safe-area-inset-right)); bottom: 94px; }   /* sprint */
 }
 
 /* ---- lobby ---- */
@@ -333,3 +347,6 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
 .raidnote { margin: 6px 0 10px; padding: 10px 12px; background: var(--hud-surface); border: 1px solid var(--hud-line); border-left: 4px solid var(--hud-accent); border-radius: 12px; color: var(--hud-ink); font-size: 15px; line-height: 1.4; }
 .raidnote b { display: block; margin-bottom: 2px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--hud-ink-2); }
 .gsentry .note { flex: 1 1 260px; font-size: 15px; color: var(--hud-ink); }
+
+/* Map screen: the note on how to place waypoints and pings. */
+.mapnote { margin: 4px 0 8px; font-size: 14px; line-height: 1.35; color: var(--hud-ink-2); }

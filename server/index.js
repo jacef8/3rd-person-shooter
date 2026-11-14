@@ -19,7 +19,7 @@ import { serveStatic } from './static.js';
 import { BOATS, floats, seatPos } from '../shared/boats.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, armorStats, worldSupply, partFits, isUnlocked,
@@ -2325,7 +2325,9 @@ function killBot(b, attacker, headshotKill) {
     return;
   }
   const res = b.kind === 'hvt' ? { ammo: 60, parts: 40, tech: 20, salvage: 30, intel: 2 } : { ammo: 30, parts: 15, tech: 5, salvage: 8, intel: b.serial % 2 };
-  dropBag(b.x, b.z, b.serial % 3 === 0 ? [makeConsumable('medkit')] : [], res, b.kind === 'hvt' ? 'Lieutenant\'s cache' : 'Rogue cache');
+  // What they carried is yours to take: their gun, and a Lieutenant's plate carrier.
+  const gear = [makeWeapon(b.arche || 'carbine'), ...(b.kind === 'hvt' ? [makeArmor('medium')] : []), ...(b.serial % 3 === 0 ? [makeConsumable('medkit')] : [])];
+  dropBag(b.x, b.z, gear, res, b.kind === 'hvt' ? 'Lieutenant\'s body' : 'Rogue\'s body');
   markAssist(b, attacker);
   if (attacker && !attacker.isBot) {
     attacker.kills++;
@@ -2370,7 +2372,7 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
   }
   const check = (c, k) => {
     if (c.dead || c.id === shooterId || Math.abs(c.x - ox) > best + 1 || Math.abs(c.z - oz) > best + 1) return;
-    const b = characterBounds(c.x, c.z, c.crouch, gy(c));
+    const b = characterBounds(c.x, c.z, c.crouch, gy(c), c.prone);
     const t = rayBox(ox, oy, oz, dx, dy, dz, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
     if (t < best) { best = t; target = c; kind = k; headshot = oy + dy * t > b.maxY - 0.3; }
   };
@@ -2379,22 +2381,38 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
   return { t: best, target, kind, headshot };
 }
 
-function fire(shooter, dir, isBot = false, botAccuracy = 1) {
+const REWIND_MS = 300;   // favour the shooter: a hit on what their screen showed up to this long ago counts
+function fire(shooter, dir, isBot = false, botAccuracy = 1, opts = {}) {
   const s = isBot ? shooter.weapon : stats(shooter);
-  const eye = shooter.crouch ? CROUCH_EYE : STAND_EYE;
+  const eye = shooter.prone ? PRONE_EYE : shooter.crouch ? CROUCH_EYE : STAND_EYE;
   const ox = shooter.x, oy = gy(shooter) + eye, oz = shooter.z;
+  // The shot goes from your eye to the point under your crosshair, so it lands where you aimed even
+  // if the server's copy of you is a step behind where your screen has you.
+  if (opts.at) { const ax = opts.at[0] - ox, ay = opts.at[1] - oy, az = opts.at[2] - oz, al = Math.hypot(ax, ay, az); if (al > 0.5 && al < 2000) dir = [ax, ay, az]; }
   const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
   const base = [dir[0] / len, dir[1] / len, dir[2] / len];
   const moving = !isBot && shooter.speed > 0.5;
   const baseSpread = isBot ? s.hipSpread * 0.6 : shooter.aiming ? s.adsSpread : s.hipSpread;
-  const spreadMul = (moving ? 1.6 : 1) * (shooter.crouch ? 0.8 * s.crouchSpread : 1) / botAccuracy;
+  const spreadMul = (moving ? 1.6 : 1) * (shooter.prone ? 0.6 : shooter.crouch ? 0.8 * s.crouchSpread : 1) / botAccuracy;
+  const seen = !isBot && opts.tid ? (players.get(opts.tid) || bots.get(opts.tid)) : null;   // who was under their crosshair
   const tracers = [];
   for (let i = 0; i < s.pellets; i++) {
     const sp = baseSpread * spreadMul;
     let dx = base[0] + (Math.random() - 0.5) * 2 * sp, dy = base[1] + (Math.random() - 0.5) * 2 * sp, dz = base[2] + (Math.random() - 0.5) * 2 * sp;
     const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
     const maxRange = s.range * 2.2;
-    const hit = traceShot(ox, oy, oz, dx, dy, dz, maxRange, shooter.id);
+    let hit = traceShot(ox, oy, oz, dx, dy, dz, maxRange, shooter.id);
+    // Lag: the target the shooter saw may have moved on since. If the shot went through where it
+    // was a moment ago (and nothing nearer was in the way), it's a hit.
+    if (seen && hit.target !== seen && !seen.dead && seen !== shooter) {
+      const nowT = Date.now();
+      for (const h of seen.hist || []) {
+        if (nowT - h.t > REWIND_MS) continue;
+        const b = characterBounds(h.x, h.z, h.crouch, h.y, h.prone);
+        const tt = rayBox(ox, oy, oz, dx, dy, dz, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
+        if (tt > 0 && tt < hit.t && tt < maxRange) { hit = { t: tt, target: seen, kind: players.has(seen.id) ? 'player' : 'bot', headshot: oy + dy * tt > b.maxY - 0.3 }; break; }
+      }
+    }
     const t = Math.min(hit.t, maxRange);
     tracers.push([+(ox + dx * t).toFixed(2), +(oy + dy * t).toFixed(2), +(oz + dz * t).toFixed(2), hit.kind ? 1 : 0]);
     if (!hit.kind || hit.kind === 'world') continue;
@@ -2434,7 +2452,7 @@ function spawnBot(x, z, kind = 'ambient', extra = {}) {
   const b = {
     id: uid('b'), name: def.name, isBot: true, kind, serial: botSerial++,
     x: p.x, z: p.z, homeX: p.x, homeZ: p.z, yaw: 0, hp, maxHp: hp, dead: false,
-    weapon: { ...w, damage: w.damage * def.damageMul },
+    weapon: { ...w, damage: w.damage * def.damageMul }, arche,
     nextShot: 0, wander: null, crouch: false, burst: 0, ...extra,
   };
   bots.set(b.id, b);
@@ -3579,7 +3597,8 @@ function handleState(p, msg) {
   if (p.boat) return boatState(p, msg);
   let dx = tx - p.x, dz = tz - p.z;
   const hungry = (p.food ?? 100) < HUNGER.noSprintBelow;
-  const maxStep = isStunned(p, now) ? 0.05 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
+  p.prone = !!msg.prone && !p.downed;
+  const maxStep = isStunned(p, now) ? 0.05 : p.prone ? PRONE_SPEED * dt * 1.5 + 0.15 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
   const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain);
@@ -3588,7 +3607,7 @@ function handleState(p, msg) {
   p.x = np.x; p.z = np.z;
   p.yaw = Number(msg.yaw) || 0;
   p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
-  p.crouch = !!msg.crouch || !!p.downed;
+  p.crouch = (!!msg.crouch && !p.prone) || !!p.downed;
   p.aiming = !!msg.aim;
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
   if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z });
@@ -3607,7 +3626,8 @@ function handleShoot(p, msg) {
   if (!Array.isArray(msg.dir) || msg.dir.length !== 3 || !msg.dir.every(Number.isFinite)) return;
   p.lastShot = now;
   p.mags[w.id] = mag - 1;
-  fire(p, msg.dir);
+  const at = Array.isArray(msg.at) && msg.at.length === 3 && msg.at.every(Number.isFinite) ? msg.at : null;
+  fire(p, msg.dir, false, 1, { at, tid: typeof msg.tid === 'string' ? msg.tid : null });
   dirty(p);
 }
 function handleReload(p) {
@@ -3810,6 +3830,9 @@ const tickMs = [];   // how long each tick took (for /status and load tests)
 const loop = setInterval(() => {
   const t0 = performance.now();
   const now = Date.now();
+  // Where everyone stood over the last few ticks (shots are checked against what the shooter saw).
+  for (const c of players.values()) if (!c.dead) { (c.hist ??= []).push({ t: now, x: c.x, z: c.z, y: gy(c), crouch: c.crouch, prone: !!c.prone }); if (c.hist.length > 8) c.hist.shift(); }
+  for (const c of bots.values()) if (!c.dead) { (c.hist ??= []).push({ t: now, x: c.x, z: c.z, y: gy(c), crouch: c.crouch }); if (c.hist.length > 8) c.hist.shift(); }
   const dt = 1 / TICK_HZ;
   updateBots(dt, now);
   tickHacks(now);
@@ -3852,7 +3875,7 @@ const loop = setInterval(() => {
   if (tick % SNAPSHOT_EVERY === 0 && players.size) {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
-      crouch: p.crouch, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
+      crouch: p.crouch, prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
