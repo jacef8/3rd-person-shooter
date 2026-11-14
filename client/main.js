@@ -939,6 +939,7 @@ function connect(name, world = 1, ticket = null) {
   state.worldId = world;
   ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, token: localStorage.getItem('dz_token'), ticket }));
   ws.onclose = (e) => {
+    joinStatus(null);
     toast(e.reason || 'Disconnected from the world');
     // Back to the lobby (a fresh page load keeps things simple after a session).
     setTimeout(() => location.replace('/'), 1500);
@@ -949,16 +950,22 @@ function connect(name, world = 1, ticket = null) {
     if (state.loadingWorld) return state.loadingWorld.push(m);
     if (m.t === 'welcome' && !state.map && m.real) {
       state.loadingWorld = [];
-      toast('Downloading real-world map data…');
+      joinStatus('Downloading the county…', 'Real roads, buildings, woods and terrain: about 4 MB. Only slow the first time.');
       loadRealData(m.real).then((real) => {
-        const queued = state.loadingWorld;
-        state.loadingWorld = null;
-        handle({ ...m, realData: real });
-        for (const q of queued) handle(q);
+        joinStatus('Building the world…', 'Laying out Liberty County. A few seconds.');
+        // Let that show before the heavy build starts.
+        setTimeout(() => {
+          const queued = state.loadingWorld;
+          state.loadingWorld = null;
+          handle({ ...m, realData: real });
+          for (const q of queued) handle(q);
+          joinStatus(null);
+        }, 60);
       });
       return;
     }
     handle(m);
+    if (m.t === 'welcome') joinStatus(null);
   };
 }
 const send = (m) => state.ws?.readyState === 1 && state.ws.send(JSON.stringify(m));
@@ -3006,6 +3013,8 @@ function pollPad(dt, now) {
   const asking = !$('invitebar').hidden;
   if (just(BTN.VIEW)) { pad.viewAt = now; pad.viewAsk = asking; pad.viewHeld = false; }
   if (pad.viewAsk && b(BTN.VIEW) && !pad.viewHeld && now - pad.viewAt > 500) { pad.viewHeld = true; if (asking) $('invitebar').querySelector('button')?.click(); }
+  // Let go after a long hold that no frame caught (a slow frame): still a yes, not a tap.
+  if (pad.viewAsk && !b(BTN.VIEW) && pad.prev[BTN.VIEW] && !pad.viewHeld && now - pad.viewAt > 500) { pad.viewHeld = true; if (asking) $('invitebar').querySelector('button')?.click(); }
   const viewTap = pad.viewAsk ? !b(BTN.VIEW) && !!pad.prev[BTN.VIEW] && !pad.viewHeld : just(BTN.VIEW);
 
   const panel = topPanel();
@@ -3089,18 +3098,18 @@ function pollPad(dt, now) {
     const bb = b(BTN.B);
     if (bb && !pad.prev[BTN.B]) { pad.bAt = now; pad.bHeld = false; }
     if (bb && !pad.bHeld && now - pad.bAt > 400) { pad.bHeld = true; doAction('prone'); }
-    if (!bb && pad.prev[BTN.B] && !pad.bHeld) doAction('crouch');
+    if (!bb && pad.prev[BTN.B] && !pad.bHeld) doAction(now - pad.bAt > 400 ? 'prone' : 'crouch');   // judged by how long it was down, even on a slow frame
     if (viewTap) doAction('inventory');
     // ☰: tap for the map, hold for the crew panel.
     const menu = b(BTN.MENU);
     if (menu && !pad.prev[BTN.MENU]) { pad.menuAt = performance.now(); pad.menuHeld = false; }
     if (menu && !pad.menuHeld && performance.now() - pad.menuAt > 450) { pad.menuHeld = true; doAction('squadPanel'); }
-    if (!menu && pad.prev[BTN.MENU] && !pad.menuHeld) doAction('map');
+    if (!menu && pad.prev[BTN.MENU] && !pad.menuHeld) doAction(performance.now() - pad.menuAt > 450 ? 'squadPanel' : 'map');
     // LB: tap throws your grenade, hold to switch between sensor and stun.
     const lb = !!g.buttons[BTN.LB]?.pressed;
     if (lb && !pad.prev[BTN.LB]) { pad.lbAt = performance.now(); pad.lbSwitched = false; }
     if (lb && !pad.lbSwitched && performance.now() - pad.lbAt > 400) { pad.lbSwitched = true; doAction('switchGrenade'); }
-    if (!lb && pad.prev[BTN.LB] && !pad.lbSwitched) doAction('sensor');
+    if (!lb && pad.prev[BTN.LB] && !pad.lbSwitched) doAction(performance.now() - pad.lbAt > 400 ? 'switchGrenade' : 'sensor');
   }
   pad.prev = g.buttons.map((x) => x.pressed);
 }
@@ -3707,8 +3716,18 @@ $('register').onclick = () => hubSend({ t: 'register', name: $('name').value, to
 // Your callsign on this device too: callsign + the code from the device you already play on.
 $('linkGo').onclick = () => hubSend({ t: 'link', name: $('linkName').value, code: $('linkCode').value });
 $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('register').click(); });
+/** The joining card: what's happening between pressing Play and the deploy screen. */
+function joinStatus(step, sub = '') {
+  $('joining').hidden = !step;
+  if (!step) return;
+  $('joinStep').textContent = step;
+  $('joinSub').textContent = sub;
+}
 function playWorld(id, ticket = null) {
   if (!lobby.account) return;
+  // Answer the press at once: the button, then the card.
+  for (const b of document.querySelectorAll('.lb-play')) { b.disabled = true; b.textContent = 'Joining…'; }
+  if (!state.ws) joinStatus('Joining Liberty County…', 'Connecting to the server.');
   if (state.ws && state.worldId !== id) { location.href = `/?world=${id}${ticket ? `&ticket=${ticket}` : ''}`; return; }
   if (state.ws) return;
   connect(lobby.account.name, id, ticket);

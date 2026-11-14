@@ -542,6 +542,15 @@ body.touchui #minimap { width: 100px; height: 100px; top: 6px; }
 body.touchui #weapon { bottom: 6px; padding: 3px 6px; gap: 6px; }
 body.touchui #wslots span { padding: 0 9px; }
 /* Held upright in the game: ask to turn it sideways. */
+/* Joining the world: shown the moment Play is pressed, step by step, until the deploy screen. */
+#joining { position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; background: rgba(7, 9, 13, 0.82); }
+#joining[hidden] { display: none; }
+.jcard { display: grid; justify-items: center; gap: 10px; min-width: min(380px, 90vw); padding: 26px 30px; background: var(--surface-0); border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: 16px; text-align: center; }
+.jcard b { font: 800 22px/1.2 var(--font-display); color: var(--ink); }
+.jcard span { font-size: 15px; color: var(--ink-2); max-width: 340px; }
+.jspin { width: 34px; height: 34px; border-radius: 50%; border: 4px solid var(--surface-3); border-top-color: var(--accent); animation: jspin 0.9s linear infinite; }
+@keyframes jspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .jspin { animation: none; border-top-color: var(--accent); } }
 #rotate { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(10, 13, 18, 0.94); text-align: center; padding: 24px; }
 #rotate[hidden] { display: none; }
 #rotate b { display: block; font: 800 24px/1.2 var(--font-display); color: var(--ink); }

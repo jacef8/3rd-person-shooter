@@ -60,7 +60,7 @@ ap.add_argument('--release', default=None, help='Overture release, e.g. 2026-10-
 ap.add_argument('--size', type=float, default=30000, help='map size in metres (must match WORLD_SIZE)')
 ap.add_argument('--step', type=float, default=30, help='elevation grid spacing in metres')
 ap.add_argument('--dem', choices=['lidar', 'terrarium'], default='lidar', help='elevation source (see above)')
-ap.add_argument('--cover-step', type=float, default=20, help='land cover grid spacing in metres')
+ap.add_argument('--cover-step', type=float, default=10, help='land cover grid spacing in metres')
 ap.add_argument('--zoom', type=int, default=13, help='terrain tile zoom (13 is about 16 m per pixel here)')
 ap.add_argument('--out', default=os.path.join(ROOT, 'data', 'real'))
 ap.add_argument('--cache', default=None, help='keep downloads here so a re-run is quick')

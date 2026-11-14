@@ -359,7 +359,7 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
   }
 
   return {
-    seed, size, half, geo, bridges, cover, hasCover: !!lc,
+    seed, size, half, geo, bridges, cover, hasCover: !!lc, coverStep: lc ? lc.step : 0,
     biome, raw, height, exact: flattened, channel, bridgeAt,
     /** The ground as it's drawn: under a bridge deck that's the river and its banks, not the deck you walk on. */
     drawn(x, z) { return bridgeAt(x, z, BRIDGE_HALF_WIDTH + 17) ? flattened(x, z, true) : height(x, z); },
