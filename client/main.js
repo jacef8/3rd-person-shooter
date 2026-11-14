@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, INTERACT_RANGE,
+  generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED,
 } from '/shared/world.js';
 import {
@@ -10,8 +10,8 @@ import {
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
-import { buildMapBase, drawMap, mapGroundColor, sampleLand } from '/mapview.js';
-import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, placementProblem } from '/shared/building.js';
+import { buildMapBase, drawMap, mapGroundColor, sampleLand, fillBox } from '/mapview.js';
+import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, placementProblem } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS, hourLabel, windowText } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
@@ -662,7 +662,7 @@ function drawMinimap() {
   g.drawImage(mmTerrain.canvas, X(mmTerrain.x - mmTerrain.span / 2), Z(mmTerrain.z - mmTerrain.span / 2), mmTerrain.span * k, mmTerrain.span * k);
   for (const b of state.map.grid.near(state.x, state.z, view * 1.42)) {
     g.fillStyle = b.type === 'housewall' && b.houseId === state.houseId ? '#4fbf6a' : MM_COLORS[b.type] || '#3a3f44';
-    g.fillRect(X(b.minX), Z(b.minZ), Math.max(1.5, (b.maxX - b.minX) * k), Math.max(1.5, (b.maxZ - b.minZ) * k));
+    fillBox(g, b, X, Z, 1.5);
   }
   const dot = (x, z, color, size = 4) => { g.fillStyle = color; g.fillRect(X(x) - size / 2, Z(z) - size / 2, size, size); };
   for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; dot(t.x, t.z, ready ? '#16c2ff' : '#553333', 3); }
@@ -2058,7 +2058,7 @@ addEventListener('blur', () => { state.keys.clear(); state.mouseDown = false; st
 
 // ------------------------------------------------------------------ simulation helpers
 function structSolid(sv) { const st = sv.data; const mat = PIECES[st.type].stages[st.stage].material; return mat !== 'frame' && !PIECES[st.type].explosive && !(PIECES[st.type].door && st.open); }
-function structBoxOf(st) { return { ...pieceBox(st.type, st.x, st.z, st.rot, st.y0), type: 'struct', structId: st.id }; }
+function structBoxOf(st) { return structureBox(st, { type: 'struct', structId: st.id }); }
 function solidsNear(x, z, r) {
   const out = state.map.grid.near(x, z, r);
   for (const sv of structVis.values()) if (structSolid(sv) && Math.abs(sv.data.x - x) < r + 3 && Math.abs(sv.data.z - z) < r + 3) out.push(structBoxOf(sv.data));
@@ -2244,7 +2244,7 @@ function nearestInteractable() {
       consider(d, has(tool) ? (wood ? 'Chop tree for wood (3s)' : 'Mine rock for stone (3s)') : `${wood ? 'Tree' : 'Rock'} — needs a ${tool}`);
     }
   }
-  if (!best && me && !state.map.buildings.some((q) => state.x > q.minX && state.x < q.maxX && state.z > q.minZ && state.z < q.maxZ)) {
+  if (!best && me && !state.map.buildings.some((q) => state.x > q.minX && state.x < q.maxX && state.z > q.minZ && state.z < q.maxZ && insideBuilding(q, state.x, state.z, 0))) {
     // At the water's edge: fish.
     const R = HOMESTEAD.fishing.waterWithin, T = state.map.terrain;
     let wet = false;
@@ -2253,7 +2253,7 @@ function nearestInteractable() {
   }
   if (!best && me) {
     // Inside an enterable building nobody holds: it can become your stash house.
-    const b = state.map.buildings.find((q) => state.x > q.minX + 0.3 && state.x < q.maxX - 0.3 && state.z > q.minZ + 0.3 && state.z < q.maxZ - 0.3);
+    const b = state.map.buildings.find((q) => state.x > q.minX && state.x < q.maxX && state.z > q.minZ && state.z < q.maxZ && insideBuilding(q, state.x, state.z, 0.3));
     if (b) {
       const held = [...structVis.values()].find((sv) => PIECES[sv.data.type].claim && sv.data.x > b.minX && sv.data.x < b.maxX && sv.data.z > b.minZ && sv.data.z < b.maxZ);
       const what = b.name || ({ building: 'building', home: 'house', civic: 'hall' }[b.type] || b.type);
@@ -2835,7 +2835,7 @@ const STRUCT_MATS = {
 };
 function structMesh(st) {
   const def = PIECES[st.type], stage = def.stages[st.stage];
-  const b = pieceBox(st.type, st.x, st.z, st.rot, st.y0);
+  const b = pieceBox(st.type, st.x, st.z, st.ang !== undefined ? 0 : st.rot, st.y0);   // turned ones are built square, then turned
   const w = b.maxX - b.minX, d = b.maxZ - b.minZ, h = b.h + 0.15;
   const g = new THREE.Group();
   const mat = STRUCT_MATS[stage.material] || STRUCT_MATS.wood;
@@ -2936,6 +2936,7 @@ function structMesh(st) {
   }
   g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   g.position.set(st.x, b.y0, st.z);
+  if (st.ang !== undefined) g.rotation.y = -st.ang;
   scene.add(g);
   return g;
 }

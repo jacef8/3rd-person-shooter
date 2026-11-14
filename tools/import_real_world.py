@@ -32,6 +32,7 @@ import argparse, concurrent.futures, gzip, heapq, io, json, math, os, re, struct
 from collections import Counter, defaultdict
 
 import numpy as np
+import shapely
 import pyarrow as pa
 import pyarrow.parquet as pq
 from PIL import Image, ImageDraw
@@ -55,6 +56,86 @@ ap.add_argument('--only', default=','.join(STEPS), help=f'comma-separated steps 
 args = ap.parse_args()
 ONLY = set(args.only.split(','))
 HALF = args.size / 2
+
+
+# ------------------------------------------------------------------ building footprints
+def footprint(g, lon0, lat0, m_lon, m_lat, res=0.5):
+    """A building's footprint in its own frame: (angle in degrees, width, depth, pieces or None).
+
+    The angle comes from the smallest rectangle around the real outline, turned so it stays within
+    45 degrees of east (so nearly-square buildings keep a small angle). The outline is then covered
+    with up to six rectangles (an L is two, a T three); pieces is None when one rectangle does."""
+    poly = g if g.geom_type == 'Polygon' else max(getattr(g, 'geoms', [g]), key=lambda q: q.area)
+    if poly.geom_type != 'Polygon' or poly.area <= 0:
+        return None
+    # Game metres: x east, z south.
+    ext = [((x - lon0) * m_lon, -(y - lat0) * m_lat) for x, y in poly.exterior.coords]
+    from shapely.geometry import Polygon
+    P = Polygon(ext).buffer(0)
+    if P.is_empty or P.area < 6:
+        return None
+    if P.geom_type != 'Polygon':
+        P = max(P.geoms, key=lambda q: q.area)
+    r = P.minimum_rotated_rectangle
+    pts = list(r.exterior.coords)
+    ex, ez = pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]
+    ang = math.degrees(math.atan2(ez, ex))
+    while ang > 45:
+        ang -= 90
+    while ang <= -45:
+        ang += 90
+    ca, sa = math.cos(math.radians(ang)), math.sin(math.radians(ang))
+    loc = Polygon([(x * ca + z * sa, -x * sa + z * ca) for x, z in P.exterior.coords])
+    x0, z0, x1, z1 = loc.bounds
+    w, d = x1 - x0, z1 - z0
+    if w < 2.5 or d < 2.5:
+        return None
+    full = [round(x0, 1), round(z0, 1), round(x1, 1), round(z1, 1)]
+    if loc.area >= 0.9 * w * d or w * d < 40:
+        return ang, w, d, None
+    # Fill a 0.5 m grid with the outline and take the biggest rectangles until it's covered.
+    nx, nz = max(1, int(math.ceil(w / res))), max(1, int(math.ceil(d / res)))
+    xs = x0 + (np.arange(nx) + 0.5) * res
+    zs = z0 + (np.arange(nz) + 0.5) * res
+    gx, gz = np.meshgrid(xs, zs)
+    grid = shapely.contains_xy(loc, gx, gz)
+    total = grid.sum()
+    rects, covered = [], 0
+    while len(rects) < 6 and covered < 0.92 * total:
+        best = max_rect(grid)
+        if not best:
+            break
+        area, (i0, j0, i1, j1) = best
+        if area * res * res < max(6, 0.04 * total * res * res):
+            break
+        grid[i0:i1, j0:j1] = False
+        covered += area
+        rects.append([round(x0 + j0 * res, 1), round(z0 + i0 * res, 1), round(x0 + j1 * res, 1), round(z0 + i1 * res, 1)])
+    rects = [q for q in rects if q[2] - q[0] >= 2.5 and q[3] - q[1] >= 2.5]
+    if len(rects) <= 1:
+        return ang, w, d, None
+    return ang, w, d, rects
+
+
+def max_rect(m):
+    """Largest all-True rectangle in a boolean grid: (cells, (row0, col0, row1, col1)) or None."""
+    rows, cols = m.shape
+    h = np.zeros(cols, dtype=int)
+    best = None
+    for i in range(rows):
+        h = np.where(m[i], h + 1, 0)
+        stack = []
+        for j in range(cols + 1):
+            cur = h[j] if j < cols else 0
+            start = j
+            while stack and stack[-1][1] >= cur:
+                s0, hh = stack.pop()
+                area = hh * (j - s0)
+                if hh and (not best or area > best[0]):
+                    best = (area, (i - hh + 1, s0, i + 1, j))
+                start = s0
+            stack.append((start, cur))
+    return best
 
 
 # ------------------------------------------------------------------ the game's own projection
@@ -379,23 +460,10 @@ def write_buildings():
         if g.is_empty:
             continue
         c = g.centroid
-        # The footprint as a rectangle, measured in metres.
-        r = g.minimum_rotated_rectangle
-        if r.geom_type != 'Polygon':
+        shape = footprint(g, c.x, c.y, m_lon, m_lat)
+        if not shape:
             continue
-        pts = list(r.exterior.coords)
-        e1 = ((pts[1][0] - pts[0][0]) * m_lon, (pts[1][1] - pts[0][1]) * m_lat)
-        e2 = ((pts[2][0] - pts[1][0]) * m_lon, (pts[2][1] - pts[1][1]) * m_lat)
-        l1, l2 = math.hypot(*e1), math.hypot(*e2)
-        if l1 < 2.5 or l2 < 2.5:
-            continue
-        # The game's walls run north-south and east-west. A building within 25 degrees of that keeps
-        # its real length and width; one turned further becomes a square of the same floor area.
-        ang = math.degrees(math.atan2(e1[1], e1[0])) % 180
-        if min(ang % 90, 90 - ang % 90) <= 25:
-            w, dd = (l1, l2) if (ang < 45 or ang > 135) else (l2, l1)
-        else:
-            w = dd = math.sqrt(g.area * m_lon * m_lat)
+        ang, w, dd, rects = shape
         h = d['height'][i] or ((d['num_floors'][i] or 0) * 3.2) or 0
         cls, sub = d['class'][i] or '', d['subtype'][i] or ''
         occ = OCC.get(cls) or OCC.get(sub) or ''
@@ -409,12 +477,16 @@ def write_buildings():
             occ = 'resid'
         elif occ != 'civic':
             name = ''
-        row = [round(c.y, 6), round(c.x, 6), round(w, 1), round(dd, 1), round(h, 1), occ]
-        if name:
-            row.append(name.strip().rstrip('.'))
+        # [lat, lon, width, depth, height, use, name, angle (degrees), pieces]. Width and depth are
+        # measured along the building's own walls; the angle turns them to face the way it really
+        # does. `pieces` (only for L, T and other shapes) are rectangles in the building's own
+        # frame, relative to its centre: [x0, z0, x1, z1] in metres.
+        row = [round(c.y, 6), round(c.x, 6), round(w, 1), round(dd, 1), round(h, 1), occ, name.strip().rstrip('.') if name else '', round(ang, 1)]
+        if rects:
+            row.append(rects)
         rows.append(row)
         src[((d['sources'][i] or [{}])[0] or {}).get('dataset') or 'unknown'] += 1
-    print(f'buildings: {len(rows)} ({", ".join(f"{v} from {k}" for k, v in src.most_common())}); {sum(1 for r in rows if r[4] > 0)} with a measured height, {sum(1 for r in rows if len(r) > 6)} named')
+    print(f'buildings: {len(rows)} ({", ".join(f"{v} from {k}" for k, v in src.most_common())}); {sum(1 for r in rows if r[4] > 0)} with a measured height, {sum(1 for r in rows if r[6])} named')
     write_json('structures.json', rows)
 
 

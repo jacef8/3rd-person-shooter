@@ -71,7 +71,7 @@ test('fair raids: sealed and window bases, the raid share, tool wear, lock tiers
   houses[hid] = { ...houses[hid], owner: O3, ownerName: 'Homebody', hxp: 0, upg: { ...upg0, door: 2 }, doorHp: 3000 };
   const port = 28900 + Math.floor(Math.random() * 400), file = path.join(dir, 'raids.json');
   fs.writeFileSync(file, JSON.stringify({
-    seed: 1337, version: 9, size: 30000, houses, bags: [], structures: [sealedFlag, wall, openFlag],
+    seed: 1337, version: 10, size: 30000, houses, bags: [], structures: [sealedFlag, wall, openFlag],
     characters: {
       [R]: character('Raider', site.x, site.z + 1.4, { xp: xpForLevel(10), tech: 100, inv: { primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [tool('hatchet', RAIDS.toolWear.raidUse)] } }),
       [O2]: character('Napper', site.x + 14, site.z + 3, { xp: xpForLevel(6), wood: 50, stone: 30, parts: 30, inv: { primary: null, secondary: null, armor: null, pack: [tool('hammer')] } }),
@@ -156,7 +156,7 @@ test('new-player shield, solo self-revive, and keeping your marker and tools', a
   const port = 29400 + Math.floor(Math.random() * 400), file = path.join(dir, 'shield.json');
   const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], ...res0, upg: {} }]));
   fs.writeFileSync(file, JSON.stringify({
-    seed: 1337, version: 9, size: 30000, houses, bags: [], structures: [],
+    seed: 1337, version: 10, size: 30000, houses, bags: [], structures: [],
     characters: {
       [V]: character('Veteran', site.x, site.z, { xp: xpForLevel(12), yaw: 0 }),
       [N]: character('Newbie', site.x, site.z + 4, { yaw: Math.PI }),

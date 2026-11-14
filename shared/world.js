@@ -271,6 +271,119 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     }
     return null;
   }
+  /**
+   * A real building at its real angle and shape. `rects` are pieces in its own frame (x along its
+   * walls), relative to (cx, cz). Walls run only along the outside of the shape (where two pieces
+   * meet it's open inside), with one or two doorways; a ceiling over each piece; loot inside.
+   */
+  function realShell(cx, cz, ang, rects, h, type, zone, base, opts = {}) {
+    // Its own random numbers (from where it stands), so a change to one building never reshuffles the rest of the map.
+    const rand = mulberry32((Math.round(cx * 10) * 73856093) ^ (Math.round(cz * 10) * 19349663) ^ seed);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const W = (lx, lz) => [cx + lx * ca - lz * sa, cz + lx * sa + lz * ca];
+    const y0 = base - opts.sink, storey = STOREY + opts.sink, total = h + opts.sink;
+    const bldg = buildings.length + boxes.length * 7919;
+    const part = { shell: 1, bldg, real: 1 };
+    const obox = (x0, z0, x1, z1, hh, yy, extra = {}) => {
+      const [wx, wz] = W((x0 + x1) / 2, (z0 + z1) / 2);
+      const b = orientedBox(wx, wz, (x1 - x0) / 2, (z1 - z0) / 2, ang, { id: boxes.length, h: hh, y0: yy, type, ...part, ...extra });
+      boxes.push(b);
+      grid.insert(b);
+      return b;
+    };
+    // The building's footprint in the world (around every piece), for the record.
+    let lx0 = Infinity, lz0 = Infinity, lx1 = -Infinity, lz1 = -Infinity;
+    for (const [x0, z0, x1, z1] of rects) { lx0 = Math.min(lx0, x0); lz0 = Math.min(lz0, z0); lx1 = Math.max(lx1, x1); lz1 = Math.max(lz1, z1); }
+    const corners = rects.flatMap(([x0, z0, x1, z1]) => [W(x0, z0), W(x1, z0), W(x0, z1), W(x1, z1)]);
+    const bb = { minX: Math.min(...corners.map((q) => q[0])), maxX: Math.max(...corners.map((q) => q[0])), minZ: Math.min(...corners.map((q) => q[1])), maxZ: Math.max(...corners.map((q) => q[1])) };
+    // Too small to walk into: a solid block per piece.
+    if (lx1 - lx0 < 5 || lz1 - lz0 < 5) { for (const [x0, z0, x1, z1] of rects) obox(x0, z0, x1, z1, total, y0); return null; }
+    const oneStorey = total < storey + 1;
+    const wallH = oneStorey ? total - 0.3 : storey;
+    const rec = { ...bb, cx, cz, ang, rects, type, floor: y0, pad: base, doors: [], top: y0 + (oneStorey ? wallH + 0.3 : total), roof: opts.roof || null, bldg, real: 1, ...(opts.name ? { name: opts.name } : {}) };
+    buildings.push(rec);
+    // Outside walls: each piece's edges, minus where another piece carries on past them.
+    const EPS = 0.05, runs = [];
+    rects.forEach(([x0, z0, x1, z1], i) => {
+      const sides = [
+        { side: 'n', along: 'x', at: z0, a: x0, b: x1, out: z0 - EPS },
+        { side: 's', along: 'x', at: z1, a: x0, b: x1, out: z1 + EPS },
+        { side: 'w', along: 'z', at: x0, a: z0, b: z1, out: x0 - EPS },
+        { side: 'e', along: 'z', at: x1, a: z0, b: z1, out: x1 + EPS },
+      ];
+      for (const sd of sides) {
+        let parts = [[sd.a, sd.b]];
+        rects.forEach(([qx0, qz0, qx1, qz1], j) => {
+          if (j === i) return;
+          const crosses = sd.along === 'x' ? qz0 < sd.out && qz1 > sd.out : qx0 < sd.out && qx1 > sd.out;
+          if (!crosses) return;
+          const c0 = sd.along === 'x' ? qx0 : qz0, c1 = sd.along === 'x' ? qx1 : qz1;
+          parts = parts.flatMap(([a, b]) => (c1 <= a || c0 >= b ? [[a, b]] : [[a, Math.max(a, c0)], [Math.min(b, c1), b]].filter(([p, q]) => q - p > 0.2)));
+        });
+        for (const [a, b] of parts) runs.push({ ...sd, a, b, len: b - a });
+      }
+    });
+    // Doorways: one in a small building, two in a bigger one (on different sides when it can).
+    const area = rects.reduce((t, [x0, z0, x1, z1]) => t + (x1 - x0) * (z1 - z0), 0);
+    const fit = runs.filter((r) => r.len >= DOOR_W + 1.4).sort((p, q) => q.len - p.len);
+    const doorRuns = new Set();
+    if (fit.length) {
+      doorRuns.add(fit[Math.floor(rand() * Math.min(2, fit.length))]);
+      if (area >= 100) { const other = fit.find((r) => !doorRuns.has(r) && ![...doorRuns].some((d) => d.side === r.side)); if (other) doorRuns.add(other); }
+    }
+    const OUT = { n: [0, -1], s: [0, 1], w: [-1, 0], e: [1, 0] };
+    for (const r of runs) {
+      // A wall piece along this run, `WALL` thick, on the inside of the line.
+      const seg = (a, b, yy, hh) => {
+        if (b - a < 0.05) return;
+        if (r.side === 'n') obox(a, r.at, b, r.at + WALL, hh, yy);
+        else if (r.side === 's') obox(a, r.at - WALL, b, r.at, hh, yy);
+        else if (r.side === 'w') obox(r.at, a, r.at + WALL, b, hh, yy);
+        else obox(r.at - WALL, a, r.at, b, hh, yy);
+      };
+      if (!doorRuns.has(r)) { seg(r.a, r.b, y0, wallH); continue; }
+      const c = r.a + r.len * (0.3 + rand() * 0.4), da = c - DOOR_W / 2, db = c + DOOR_W / 2;
+      seg(r.a, da, y0, wallH);
+      seg(db, r.b, y0, wallH);
+      const inward = r.side === 'n' || r.side === 'w' ? WALL / 2 : -WALL / 2;
+      const [dx, dz] = r.along === 'x' ? W(c, r.at + inward) : W(r.at + inward, c);
+      const [ox, oz] = OUT[r.side];
+      // The door's centre, which way is out, and the angle of the wall it sits in.
+      rec.doors.push({ x: dx, z: dz, out: [ox * ca - oz * sa, ox * sa + oz * ca], ang: r.along === 'x' ? ang : ang + Math.PI / 2 });
+      const top = Math.max(terrain.exact(dx, dz) + DOOR_H, y0 + 0.1);
+      if (y0 + wallH - top > 0.05) seg(da, db, top, y0 + wallH - top);
+    }
+    // One big room: an interior wall across it, with a gap.
+    let mid = null;
+    const one = rects.length === 1 ? rects[0] : null;
+    const alongX = one ? one[2] - one[0] >= one[3] - one[1] : true;
+    if (one && Math.max(one[2] - one[0], one[3] - one[1]) >= 14) {
+      const [x0, z0, x1, z1] = one;
+      mid = alongX ? (x0 + x1) / 2 : (z0 + z1) / 2;
+      const a0 = (alongX ? z0 : x0) + WALL, a1 = (alongX ? z1 : x1) - WALL;
+      const g0 = a0 + 1 + rand() * (a1 - a0 - 2 - DOOR_W), g1 = g0 + DOOR_W;
+      for (const [a, b] of [[a0, g0], [g1, a1]]) {
+        if (alongX) obox(mid - WALL / 2, a, mid + WALL / 2, b, wallH, y0);
+        else obox(a, mid - WALL / 2, b, mid + WALL / 2, wallH, y0);
+      }
+    }
+    // A ceiling over each piece (or the solid upper floors).
+    for (const [x0, z0, x1, z1] of rects) {
+      if (oneStorey) obox(x0, z0, x1, z1, 0.3, y0 + wallH);
+      else obox(x0, z0, x1, z1, total - storey, y0 + storey);
+    }
+    // Loot inside: one spot per ~120 m² of floor, up to 3, in the bigger pieces and off the walls.
+    const n = zone ? Math.max(1, Math.min(3, Math.floor(area / 120))) : 0;
+    const roomy = rects.filter(([x0, z0, x1, z1]) => x1 - x0 > 3.4 && z1 - z0 > 3.4);
+    for (let k = 0; k < n && roomy.length; k++) {
+      const [x0, z0, x1, z1] = roomy[k % roomy.length];
+      let lx = x0 + 1.6 + rand() * (x1 - x0 - 3.2), lz = z0 + 1.6 + rand() * (z1 - z0 - 3.2);
+      if (mid !== null) { const v = mid + (k % 2 ? 1 : -1) * (1.6 + rand() * Math.max(0, ((alongX ? x1 - x0 : z1 - z0) / 2) - 3.2)); if (alongX) lx = v; else lz = v; }
+      const [wx, wz] = W(lx, lz);
+      lootSpawns.push({ x: wx, z: wz, zone, indoor: true });
+    }
+    return null;
+  }
   const inBounds = (minX, minZ, maxX, maxZ) => minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30;
   const inRect = (x, z, pad = 0) => reserved.near(x, z, pad + 1).some((r) => x > r.minX - pad && x < r.maxX + pad && z > r.minZ - pad && z < r.maxZ + pad);
   const freeRect = (minX, minZ, maxX, maxZ, pad = 0) => inBounds(minX, minZ, maxX, maxZ) &&
@@ -329,15 +442,19 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   // Every real building stands on a level pad cut into (or built up on) the real ground.
   const realPads = [];
   if (realStructs) {
-    for (const [lat, lon, w0, d0] of real.structures) {
+    for (const row of real.structures) {
+      const [lat, lon, w0, d0] = row;
       const { x, z } = project(lat, lon, size);
       const w = Math.max(3, Math.min(120, w0 || 10)), d = Math.max(3, Math.min(120, d0 || 10));
-      const minX = x - w / 2, minZ = z - d / 2, maxX = x + w / 2, maxZ = z + d / 2;
+      // Turned buildings take the area around them (the pad is levelled a little wider anyway).
+      const ang = (row[7] || 0) * Math.PI / 180, ca = Math.abs(Math.cos(ang)), sa = Math.abs(Math.sin(ang));
+      const ex = (ca * w + sa * d) / 2, ez = (sa * w + ca * d) / 2;
+      const minX = x - ex, minZ = z - ez, maxX = x + ex, maxZ = z + ez;
       const hs = [terrain.exact(minX, minZ), terrain.exact(maxX, minZ), terrain.exact(minX, maxZ), terrain.exact(maxX, maxZ), terrain.exact(x, z)];
       const lo = Math.min(...hs), hi = Math.max(...hs);
       // Not in the water, and not on a slope too steep to cut a pad into.
       realPads.push(minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30 && lo > 0.3 && hi - lo < 4
-        ? { minX, minZ, maxX, maxZ, x, z, w, d, elev: Math.round((hs.reduce((a, b) => a + b) / 5) * 100) / 100, margin: PAD_MARGIN, pad: 1 } : null);
+        ? { minX, minZ, maxX, maxZ, x, z, w, d, ang, rects: row[8] || null, elev: Math.round((hs.reduce((a, b) => a + b) / 5) * 100) / 100, margin: PAD_MARGIN, pad: 1 } : null);
     }
     terrain.setFlats([...townFlats, ...realPads.filter(Boolean)]);
   }
@@ -559,8 +676,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (!pad) continue;
       const [, , , , h0, occ, name] = real.structures[si];
       const { minX, minZ, maxX, maxZ, x, z, w, d } = pad;
+      const area0 = pad.rects ? pad.rects.reduce((a, [x0, z0, x1, z1]) => a + (x1 - x0) * (z1 - z0), 0) : w * d;
       if (solidAt(minX - 0.5, minZ - 0.5, maxX + 0.5, maxZ + 0.5) || reserved.rect(minX, minZ, maxX, maxZ).some((r) => r.home && maxX > r.minX && minX < r.maxX && maxZ > r.minZ && minZ < r.maxZ)) continue;
-      const o = String(occ || '').toLowerCase(), area = w * d;
+      const o = String(occ || '').toLowerCase(), area = area0;
       const slim = Math.min(w, d) < 6.5 && Math.max(w, d) > 2.6 * Math.min(w, d);   // a mobile home
       const nearTown = towns.some((t) => Math.abs(t.x - x) < 900 && Math.abs(t.z - z) < 900);
       const type = o.startsWith('agri') ? (area > 300 ? 'barn' : 'farmhouse') : o.startsWith('indus') ? 'warehouse' : o.startsWith('resid') ? 'home'
@@ -574,7 +692,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       // a ceiling), with a pitched roof on houses, barns and small halls. Every other one has loot.
       const zone = type === 'barn' || type === 'farmhouse' ? 'farm' : nearTown ? 'town' : type === 'warehouse' ? 'industrial' : 'road';
       const pitched = type === 'home' || type === 'farmhouse' || type === 'barn' || (type === 'civic' && area < 1200);
-      shell(minX, minZ, maxX, maxZ, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, real: true, name, sink: 0.6 });
+      // Pieces in the building's own frame (one rectangle, or the L / T / wings of the real outline).
+      const rects = pad.rects || [[-w / 2, -d / 2, w / 2, d / 2]];
+      realShell(x, z, pad.ang, rects, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, name: name || undefined, sink: 0.6 });
       realBuildings.push(1);
     }
   }
@@ -882,7 +1002,41 @@ export function mapChecksum(map) {
   return `${map.boxes.length}:${h.toString(16)}`;
 }
 
+// ---------------------------------------------------------------- turned boxes
+// Most boxes run north-south and east-west (minX..maxX, minZ..maxZ). A real building that stands at
+// an angle is made of turned boxes: they also carry a centre (cx, cz), half sizes along their own
+// walls (hw, hd) and the angle (ang, with its cosine and sine). minX..maxZ is then the area around
+// it, which keeps the spatial grid and quick checks working; the exact tests below use the walls.
+/** A box turned by `ang` radians: its own x axis points along (cos ang, sin ang). */
+export function orientedBox(cx, cz, hw, hd, ang, extra = {}) {
+  if (Math.abs(ang) < 0.008) return { ...extra, minX: cx - hw, minZ: cz - hd, maxX: cx + hw, maxZ: cz + hd };
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+  const ex = Math.abs(ca) * hw + Math.abs(sa) * hd, ez = Math.abs(sa) * hw + Math.abs(ca) * hd;
+  return { ...extra, minX: cx - ex, minZ: cz - ez, maxX: cx + ex, maxZ: cz + ez, cx, cz, hw, hd, ang, ca, sa };
+}
+/** A world point in a turned box's own frame. */
+function toBox(b, x, z) { const dx = x - b.cx, dz = z - b.cz; return [dx * b.ca + dz * b.sa, -dx * b.sa + dz * b.ca]; }
+/** Is (x, z) inside a building's walls (`margin` metres in from them)? Works for turned and L-shaped ones. */
+export function insideBuilding(b, x, z, margin = 0.3) {
+  if (!b.rects) return x > b.minX + margin && x < b.maxX - margin && z > b.minZ + margin && z < b.maxZ - margin;
+  const dx = x - b.cx, dz = z - b.cz, ca = Math.cos(b.ang), sa = Math.sin(b.ang);
+  const lx = dx * ca + dz * sa, lz = -dx * sa + dz * ca;
+  return b.rects.some(([x0, z0, x1, z1]) => lx > x0 + margin && lx < x1 - margin && lz > z0 + margin && lz < z1 - margin);
+}
+/** Where a ray meets a box (turned or not): distance, or Infinity. */
+export function rayHitBox(b, ox, oy, oz, dx, dy, dz) {
+  const y0 = b.y0 || 0;
+  if (b.ang === undefined) return rayBox(ox, oy, oz, dx, dy, dz, b.minX, y0, b.minZ, b.maxX, y0 + b.h, b.maxZ);
+  const [lx, lz] = toBox(b, ox, oz);
+  return rayBox(lx, oy, lz, dx * b.ca + dz * b.sa, dy, -dx * b.sa + dz * b.ca, -b.hw, y0, -b.hd, b.hw, y0 + b.h, b.hd);
+}
+
 export function circleOverlapsBox(x, z, r, b) {
+  if (b.ang !== undefined) {
+    const [lx, lz] = toBox(b, x, z);
+    const qx = lx - Math.max(-b.hw, Math.min(lx, b.hw)), qz = lz - Math.max(-b.hd, Math.min(lz, b.hd));
+    return qx * qx + qz * qz < r * r;
+  }
   const cx = Math.max(b.minX, Math.min(x, b.maxX));
   const cz = Math.max(b.minZ, Math.min(z, b.maxZ));
   const dx = x - cx, dz = z - cz;
@@ -902,6 +1056,24 @@ export function resolveCircle(x, z, r, solids, y) {
     let moved = false;
     for (const b of solids) {
       if (y !== undefined && !blocksAt(b, y)) continue;
+      if (b.ang !== undefined) {
+        // A turned box: push out in its own frame, then turn the answer back.
+        const [lx, lz] = toBox(b, x, z);
+        const px = Math.max(-b.hw, Math.min(lx, b.hw)), pz = Math.max(-b.hd, Math.min(lz, b.hd));
+        const qx = lx - px, qz = lz - pz, q2 = qx * qx + qz * qz;
+        if (q2 >= r * r) continue;
+        let nx, nz;
+        if (q2 > 1e-9) { const q = Math.sqrt(q2); nx = px + (qx / q) * r; nz = pz + (qz / q) * r; }
+        else {
+          const pen = [lx + b.hw + r, b.hw - lx + r, lz + b.hd + r, b.hd - lz + r];
+          const m = pen.indexOf(Math.min(...pen));
+          nx = m === 0 ? -b.hw - r : m === 1 ? b.hw + r : lx;
+          nz = m === 2 ? -b.hd - r : m === 3 ? b.hd + r : lz;
+        }
+        x = b.cx + nx * b.ca - nz * b.sa; z = b.cz + nx * b.sa + nz * b.ca;
+        moved = true;
+        continue;
+      }
       const cx = Math.max(b.minX, Math.min(x, b.maxX));
       const cz = Math.max(b.minZ, Math.min(z, b.maxZ));
       const dx = x - cx, dz = z - cz;
@@ -966,8 +1138,7 @@ export function rayBox(ox, oy, oz, dx, dy, dz, minX, minY, minZ, maxX, maxY, max
 export function rayAgainstBoxes(ox, oy, oz, dx, dy, dz, list, maxDist = Infinity) {
   let best = maxDist, hit = null;
   for (const b of list) {
-    const y0 = b.y0 || 0;
-    const t = rayBox(ox, oy, oz, dx, dy, dz, b.minX, y0, b.minZ, b.maxX, y0 + b.h, b.maxZ);
+    const t = rayHitBox(b, ox, oy, oz, dx, dy, dz);
     if (t < best) { best = t; hit = b; }
   }
   return { t: best, box: hit };

@@ -64,9 +64,11 @@ function finishTexture(c) {
   return t;
 }
 
-/** Append a box (no bottom face) to flat geometry arrays. */
+/** Append a box (no bottom face) to flat geometry arrays. A turned box is built in its own frame and turned into place. */
 export function pushBox(buf, b, color, tile) {
-  const { minX, minZ, maxX, maxZ } = b;
+  const turned = b.ang !== undefined;
+  const { minX, minZ, maxX, maxZ } = turned ? { minX: -b.hw, minZ: -b.hd, maxX: b.hw, maxZ: b.hd } : b;
+  const ca = turned ? b.ca : 1, sa = turned ? b.sa : 0, ox = turned ? b.cx : 0, oz = turned ? b.cz : 0;
   const y0 = b.y0 || 0, h = y0 + b.h;
   const faces = [
     // normal, 4 corners (counter-clockwise from outside), uv size
@@ -81,8 +83,8 @@ export function pushBox(buf, b, color, tile) {
     const base = buf.pos.length / 3;
     const top = n[1] === 1;
     corners.forEach(([x, y, z], i) => {
-      buf.pos.push(x, y, z);
-      buf.nor.push(...n);
+      buf.pos.push(ox + x * ca - z * sa, y, oz + x * sa + z * ca);
+      buf.nor.push(n[0] * ca - n[2] * sa, n[1], n[0] * sa + n[2] * ca);
       const shade = top ? 0.85 : 1;
       buf.col.push(color[0] * shade, color[1] * shade, color[2] * shade);
       if (buf.uv) {
@@ -93,13 +95,19 @@ export function pushBox(buf, b, color, tile) {
     buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
 }
-/** A pitched roof over a building record: two slopes along the long side and two gable ends. */
+/** A pitched roof over a building record: one per piece of a real building, turned to its walls. */
 export function pushRoof(buf, r, color, wall) {
-  const o = 0.4, x0 = r.minX - o, x1 = r.maxX + o, z0 = r.minZ - o, z1 = r.maxZ + o, y = r.top;
+  if (!r.rects) return roofPiece(buf, r.minX, r.minZ, r.maxX, r.maxZ, r.top, color, wall, 1, 0, 0, 0);
+  const ca = Math.cos(r.ang), sa = Math.sin(r.ang);
+  for (const [x0, z0, x1, z1] of r.rects) roofPiece(buf, x0, z0, x1, z1, r.top, color, wall, ca, sa, r.cx, r.cz);
+}
+/** Two slopes along the long side and two gable ends, over one rectangle (in its own frame, turned into place). */
+function roofPiece(buf, minX, minZ, maxX, maxZ, top, color, wall, ca, sa, cx, cz) {
+  const o = 0.4, x0 = minX - o, x1 = maxX + o, z0 = minZ - o, z1 = maxZ + o, y = top;
   const alongX = x1 - x0 >= z1 - z0, span = alongX ? z1 - z0 : x1 - x0, rh = Math.min(3.2, span * 0.38);
   const face = (pts, n, c) => {
     const l = Math.hypot(...n), nn = n.map((v) => v / l), base = buf.pos.length / 3;
-    for (const p of pts) { buf.pos.push(...p); buf.nor.push(...nn); buf.col.push(...c); if (buf.uv) buf.uv.push(0.02, 0.02); }
+    for (const [px, py, pz] of pts) { buf.pos.push(cx + px * ca - pz * sa, py, cz + px * sa + pz * ca); buf.nor.push(nn[0] * ca - nn[2] * sa, nn[1], nn[0] * sa + nn[2] * ca); buf.col.push(...c); if (buf.uv) buf.uv.push(0.02, 0.02); }
     if (pts.length === 4) buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3); else buf.idx.push(base, base + 1, base + 2);
   };
   if (alongX) {
@@ -406,7 +414,13 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
     for (const r of buildingsIn.get(key(cx, cz)) || []) {
       if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
       // A floor on the building's level pad (real buildings; the others stand on town paving).
-      if (r.pad !== undefined) pushBox(plain, { minX: r.minX + 0.2, minZ: r.minZ + 0.2, maxX: r.maxX - 0.2, maxZ: r.maxZ - 0.2, y0: r.pad - 0.3, h: 0.34 }, FLOOR_COLORS[r.type] || FLOOR_DEFAULT, 0);
+      if (r.pad !== undefined && r.rects) {
+        const ca = Math.cos(r.ang), sa = Math.sin(r.ang);
+        for (const [x0, z0, x1, z1] of r.rects) {
+          const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
+          pushBox(plain, { ang: r.ang, ca, sa, cx: r.cx + mx * ca - mz * sa, cz: r.cz + mx * sa + mz * ca, hw: (x1 - x0) / 2 - 0.2, hd: (z1 - z0) / 2 - 0.2, y0: r.pad - 0.3, h: 0.34 }, FLOOR_COLORS[r.type] || FLOOR_DEFAULT, 0);
+        }
+      } else if (r.pad !== undefined) pushBox(plain, { minX: r.minX + 0.2, minZ: r.minZ + 0.2, maxX: r.maxX - 0.2, maxZ: r.maxZ - 0.2, y0: r.pad - 0.3, h: 0.34 }, FLOOR_COLORS[r.type] || FLOOR_DEFAULT, 0);
     }
     const group = new THREE.Group();
     const ground = buildTerrain(x0, z0);

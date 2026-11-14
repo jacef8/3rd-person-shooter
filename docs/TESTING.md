@@ -109,6 +109,9 @@ The living world:
   (Ⓐ to feed meat). Log off, have a friend walk in, then log back on and read the **away log**.
 
 The real map:
+- **Buildings now stand at their real angle and in their real shape** (L-shapes, T-shapes and
+  wings), from each building's real outline. Compare a few you know. Heights are still estimates for
+  about 60% of them. (This update starts the world fresh again; your callsign and friends are kept.)
 - There's no fog now: look around from the Bristol side of the river and from the Torreya bluffs north of town.
 - Walk a real street in Blountstown or Bristol. The road's real name shows under the minimap; zoom the
   map in to read the street names.

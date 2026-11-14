@@ -1,5 +1,12 @@
 // Full-map rendering for the map screen (M), the deploy/redeploy screen and fast travel.
 const COL = { grass: '#3f4d31', town: '#4b4f55', building: '#7b7f86', road: '#e4ddcc', street: '#c9c2b0', route: '#f0b54a', dirt: '#b08d58', tree: '#24391f', house: '#a8774c', farm: '#8a6d4c', home: '#9a9186', civic: '#a65f4b' };
+/** Fill a box on a canvas: a turned one as its real four corners. `X`/`Z` map world to pixels. */
+export function fillBox(g, b, X, Z, min = 1) {
+  if (b.ang === undefined) { g.fillRect(X(b.minX), Z(b.minZ), Math.max(min, X(b.maxX) - X(b.minX)), Math.max(min, Z(b.maxZ) - Z(b.minZ))); return; }
+  g.beginPath();
+  for (const [lx, lz] of [[-b.hw, -b.hd], [b.hw, -b.hd], [b.hw, b.hd], [-b.hw, b.hd]]) g.lineTo(X(b.cx + lx * b.ca - lz * b.sa), Z(b.cz + lx * b.sa + lz * b.ca));
+  g.closePath(); g.fill();
+}
 /** Map colours: state routes amber, main roads light, streets a shade darker, dirt tracks brown. */
 const roadColor = (r) => (r.dirt ? COL.dirt : r.hw ? COL.route : (r.width || 12) >= 8 ? COL.road : COL.street);
 const HIDDEN = new Set(['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail']);
@@ -79,7 +86,7 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
     if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
     if (HIDDEN.has(b.type)) continue;
     g.fillStyle = boxColor(b);
-    g.fillRect(X(b.minX), Z(b.minZ), Math.max(1, (b.maxX - b.minX) * k), Math.max(1, (b.maxZ - b.minZ) * k));
+    fillBox(g, b, X, Z);
   }
   g.textAlign = 'center';
   // Labels: towns, rivers and lakes, parks and landmarks.
@@ -185,7 +192,7 @@ export function drawMap(canvas, map, base, view, markers) {
     for (const b of map.grid.rect(minX, minZ, maxX, maxZ, [], true)) {
       if (b.nature || HIDDEN.has(b.type)) continue;
       g.fillStyle = boxColor(b);
-      g.fillRect(sx(b.minX), sz(b.minZ), Math.max(1, (b.maxX - b.minX) * k), Math.max(1, (b.maxZ - b.minZ) * k));
+      fillBox(g, b, sx, sz);
     }
   }
   drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H });

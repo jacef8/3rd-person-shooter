@@ -64,7 +64,7 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
   fishing, hunting deer and hogs, campfire cooking, and cash with a **trading post at every Contact**
   whose prices depend on the town, so hauling goods across the map pays. One shared world that never resets.
 - **Units:** distances, ranges and radii are shown in feet and miles.
-- **Enterable buildings:** town buildings, houses, warehouses, farmhouses, barns and ranger stations
+- **Real buildings:** every building in the county stands where it really is, at its real angle and in its real shape (L, T and wings), built from the real outlines. **Enterable buildings:** town buildings, houses, warehouses, farmhouses, barns and ranger stations
   have doorways, a ceiling and loot inside. Bigger ones have an interior wall, so you can fight room
   to room. Only the ground floor is open for now; upper storeys are solid. **Any of them can be
   claimed** as a stash house: plant a marker inside for a stash locker and lockable doors.

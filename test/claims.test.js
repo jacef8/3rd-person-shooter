@@ -35,7 +35,7 @@ const marker = () => ({ id: `m${Math.random()}`, kind: 'marker', name: 'Claim ma
 const ch = (name, x, z, extra) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), secondary: null, armor: null, pack: [marker(), { id: 'h' + name, kind: 'tool', tool: 'hammer', name: 'Hammer' }] }, ammo: 300, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(10), parts: 200, tech: 50, intel: 6, salvage: 300, wood: 60, stone: 0, comms: 0, field: [], discovered: [], contracts: [], ...extra });
 const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, wood: 0, stone: 0, upg: {} }]));
 houses[rv.id].items = [makeWeapon('dmr')];   // abandoned loot already inside
-fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 9, size: 30000, houses, bags: [], structures: [], characters: {
+fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 10, size: 30000, houses, bags: [], structures: [], characters: {
   [TOK_A]: ch('Ava', rv.crate.x, rv.crate.z),
   [TOK_B]: ch('Ben', rv.crate.x + 3, rv.crate.z + 3),
   [TOK_C]: ch('Cy', flagSpot.x + 2, flagSpot.z + 2),

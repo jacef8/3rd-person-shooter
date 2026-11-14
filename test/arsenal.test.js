@@ -101,7 +101,7 @@ test('on the server: armor-piercing cracks plates, hollow points do not; thermal
     [hex('e1')]: character('Longshot', spot.x + 60, spot.z + 20, makeWeapon('dmr', { optic: 'long12' })),
   };
   const port = 27700 + Math.floor(Math.random() * 500), file = path.join(dir, 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 9, size: 30000, houses: {}, bags: [], structures: [], characters: chars }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 10, size: 30000, houses: {}, bags: [], structures: [], characters: chars }));
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));
   await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));

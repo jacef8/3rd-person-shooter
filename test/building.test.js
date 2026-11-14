@@ -49,7 +49,7 @@ const ch = (name, x, z, extra) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv:
 const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, wood: 0, stone: 0, upg: {} }]));
 const builderHome = map.houses[2];
 houses[builderHome.id] = { ...houses[builderHome.id], owner: TOK_B, ownerName: 'Builder' };
-fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 9, size: 30000, houses, bags: [], structures: [], characters: {
+fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 10, size: 30000, houses, bags: [], structures: [], characters: {
   [TOK_B]: ch('Builder', site.x, site.z, { wood: 10, inv: { primary: null, secondary: makeWeapon('sidearm'), armor: null, pack: [tool('hammer'), tool('hatchet'), tool('pickaxe')] } }),
   [TOK_R]: ch('Raider', site.x - 3, site.z, { inv: { primary: null, secondary: makeWeapon('sidearm'), armor: null, pack: [tool('hatchet'), tool('pickaxe')] } }),
 } }));

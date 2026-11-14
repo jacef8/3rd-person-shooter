@@ -2,6 +2,7 @@
 // stages. Shared so the client's placement preview applies the same rules the server enforces.
 // Numbers live in shared/data/building.json.
 import data from './data/building.json' with { type: 'json' };
+import { orientedBox } from './world.js';
 
 export const TOOLS = data.tools;
 
@@ -13,6 +14,14 @@ export const CRAFTS = data.crafts;
 export const PIECES = data.pieces;
 
 export const BUILD = data.build;
+
+/** The box a placed structure occupies: turned to `st.ang` when it has one (a claimed building's
+ *  doors follow the building's real walls), otherwise square to the map with `rot` 0 or 1. */
+export function structureBox(st, extra = {}) {
+  if (st.ang === undefined) return { ...pieceBox(st.type, st.x, st.z, st.rot, st.y0), ...extra };
+  const [w, d, h] = PIECES[st.type].size;
+  return orientedBox(st.x, st.z, w / 2, d / 2, st.ang, { y0: st.y0 || 0, h, ...extra });
+}
 
 /** The solid box a structure occupies. */
 export function pieceBox(type, x, z, rot, y0 = 0) {

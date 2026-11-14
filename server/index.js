@@ -18,7 +18,7 @@ import zlib from 'node:zlib';
 import { serveStatic } from './static.js';
 import { BOATS, floats, seatPos } from '../shared/boats.js';
 import {
-  SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, characterBounds,
+  SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
 } from '../shared/world.js';
 import {
@@ -26,7 +26,7 @@ import {
   levelFromXp, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
-import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, investedCost, placementProblem } from '../shared/building.js';
+import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, investedCost, placementProblem } from '../shared/building.js';
 import { CLAIM, HOME_XP, homeLevel, homePerks, RAIDS, windowOpen, windowText } from '../shared/claims.js';
 import { EXTRACT } from '../shared/extraction.js';
 import { distText, feet } from '../shared/units.js';
@@ -54,7 +54,7 @@ const PACK_SIZE = COMBAT.packSize;
 const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
-const DB_VERSION = 9;   // 9: real ground, river course and buildings (the map changed under every save)
+const DB_VERSION = 10;   // 10: real buildings at their real angle and shape (the map changed under every save)
 const SQUAD_MAX = COMBAT.crewMax;
 const GOODS = Object.keys(HOMESTEAD.goods);   // cash, seeds, crops, fish, meat, meals
 const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone', ...GOODS];   // carried; all drop on death, all stealable
@@ -194,7 +194,7 @@ function structsNear(x, z, r) {
   return out;
 }
 const stageDef = (s) => PIECES[s.type].stages[s.stage];
-function structBox(s) { return { ...pieceBox(s.type, s.x, s.z, s.rot, s.y0), type: 'struct', structId: s.id }; }
+function structBox(s) { return structureBox(s, { type: 'struct', structId: s.id }); }
 /** Frames are walk-through scaffolding; open gates let you pass; charges aren't solid. */
 function structIsSolid(s) { return stageDef(s).material !== 'frame' && stageDef(s).material !== 'wire' && !PIECES[s.type].explosive && !(PIECES[s.type].door && s.open); }
 function structSolids(x, z, r, out = []) {
@@ -557,7 +557,7 @@ function pvpAllowed(attacker, target) {
 const buildingGrid = new SpatialGrid(map.half + 4, 64);
 map.buildings.forEach((b, i) => { b.idx = i; buildingGrid.insert(b); });
 function buildingAt(x, z) {
-  for (const b of buildingGrid.near(x, z, 1)) if (x > b.minX + 0.3 && x < b.maxX - 0.3 && z > b.minZ + 0.3 && z < b.maxZ - 0.3) return b.idx;
+  for (const b of buildingGrid.near(x, z, 1)) if (insideBuilding(b, x, z, 0.3)) return b.idx;
   return -1;
 }
 const BUILDING_NAMES = { building: 'Building', warehouse: 'Warehouse', farmhouse: 'Farmhouse', barn: 'Barn', home: 'House', civic: 'Hall' };
@@ -569,6 +569,9 @@ function buildingLabel(idx) {
   return `${BUILDING_NAMES[b.type] || 'Building'} ${inTown ? 'in' : 'near'} ${near ? near.name : 'the wilds'}`;
 }
 const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+// A claimed building is found again by where its stash locker stands, so a later change to the map
+// data (which can renumber the buildings) doesn't hand someone a different house.
+for (const st of db.structures) if (st.type === 'locker' && st.building != null) { const idx = buildingAt(st.x, st.z); if (idx >= 0) st.building = idx; }
 function buildingClaimant(idx) { for (const st of structs.values()) if (PIECES[st.type].claim && st.building === idx) return st; return null; }
 // Loot spots inside a claimed building stop restocking: it's someone's home now.
 const spawnBuilding = map.lootSpawns.map((sp) => (sp.indoor ? buildingAt(sp.x, sp.z) : -1));
@@ -586,7 +589,7 @@ function finishClaimBuilding(p, idx) {
   // Find a spot for the locker: near where you stand, clear of walls and doorways.
   const fits = (x, z) => {
     const lb = pieceBox('locker', x, z, 0);
-    if (lb.minX < b.minX + 0.35 || lb.maxX > b.maxX - 0.35 || lb.minZ < b.minZ + 0.35 || lb.maxZ > b.maxZ - 0.35) return false;
+    if (![[lb.minX, lb.minZ], [lb.maxX, lb.minZ], [lb.minX, lb.maxZ], [lb.maxX, lb.maxZ]].every(([cx, cz]) => insideBuilding(b, cx, cz, 0.35))) return false;
     if (b.doors.some((d) => Math.hypot(d.x - x, d.z - z) < 2.6)) return false;
     return !solidsNear(x, z, 2).some((o) => (o.y0 ?? 0) < terrain.height(x, z) + 2 && lb.maxX > o.minX && lb.minX < o.maxX && lb.maxZ > o.minZ && lb.minZ < o.maxZ);
   };
@@ -603,7 +606,12 @@ function finishClaimBuilding(p, idx) {
   };
   const locker = mk('locker', spot.x, spot.z, 0, { building: idx, crew, hxp: 0, items: [], ...Object.fromEntries(RESOURCES.map((r) => [r, 0])), upg: { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0 } });
   locker.hp = flagMax(locker);
-  for (const d of b.doors) mk('door', d.x, d.z, d.out[0] === 0 ? 0 : 1, { claimOf: locker.id });
+  // Each doorway gets a door, turned to match the real wall it sits in.
+  for (const d of b.doors) {
+    const sn = Math.sin(d.ang ?? 0), cs = Math.cos(d.ang ?? 0);
+    if (d.ang === undefined || Math.abs(sn) < 0.01 || Math.abs(cs) < 0.01) mk('door', d.x, d.z, d.ang === undefined ? (d.out[0] === 0 ? 0 : 1) : Math.abs(sn) < 0.01 ? 0 : 1, { claimOf: locker.id });
+    else mk('door', d.x, d.z, 0, { claimOf: locker.id, ang: d.ang });
+  }
   placeAt(p, p.x, p.z);   // step out of the locker if it went in where you stood
   locker.spawn = { x: p.x, z: p.z };
   feed(`${p.name} claimed a ${lowerFirst(buildingLabel(idx))}`);
@@ -2351,8 +2359,7 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
   if (ground < best) { best = ground; kind = 'world'; }
   for (const s of structsNear(ox + dx * range / 2, oz + dz * range / 2, range / 2 + 3)) {
     if (!structIsSolid(s)) continue;
-    const b = structBox(s);
-    const t = rayBox(ox, oy, oz, dx, dy, dz, b.minX, b.y0, b.minZ, b.maxX, b.y0 + b.h, b.maxZ);
+    const t = rayHitBox(structBox(s), ox, oy, oz, dx, dy, dz);
     if (t < best) { best = t; target = s; kind = 'struct'; }
   }
   for (const h of map.houses) {
