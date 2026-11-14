@@ -5,7 +5,7 @@
 // seed and size and the client rebuilds the identical world. Generation therefore only uses
 // + - * / and the seeded RNG (no Math.sin etc., which can differ between JS engines).
 
-import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, PAD_MARGIN, RELIEF } from './terrain.js';
+import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, PAD_MARGIN, RELIEF, COVER } from './terrain.js';
 import { polyDist, lakeDepth, segDist, project, REAL_SIZE } from './geography.js';
 import RIVER from './data/river.json' with { type: 'json' };
 export { WATER_LEVEL } from './terrain.js';
@@ -158,6 +158,7 @@ export const VEHICLE_TYPES = {
  *   structures: [[lat, lon, width, depth, height, class, name?], ...]   real building footprints
  *   roads:      [[name, class, [[lat, lon], ...]], ...]                  real roads, 'track' = dirt
  *   elevation:  the real ground (terrain.parseElevation), with real water cut in
+ *   landcover:  what covers the ground (terrain.parseLandcover): real woods, fields, pasture, town
  * With structures, every real building becomes a walk-in building on a level pad, each town shrinks
  * to a small compound, and the procedural stand-in buildings (town blocks, farms, roadside
  * homesteads) are left out.
@@ -168,7 +169,7 @@ export const VEHICLE_TYPES = {
 export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const rand = mulberry32(seed);
   const half = size / 2;
-  const terrain = createTerrain(seed, size, real.elevation || null);
+  const terrain = createTerrain(seed, size, real.elevation || null, real.landcover || null);
   const geo = terrain.geo;
   const boxes = [], buildings = [], houses = [], lootSpawns = [], terminals = [], contacts = [], towns = [], roads = [], campSites = [], landingZones = [];
   const realStructs = Array.isArray(real.structures) && real.structures.length > 0;
@@ -931,10 +932,36 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       out.push({ id: id++, minX, minZ, maxX, maxZ, h: h + 0.3, y0, type, nature: 1 });
     };
     const spot = (m) => [x0 + m + r() * (NATURE_TILE - 2 * m), z0 + m + r() * (NATURE_TILE - 2 * m)];
+    const pineTile = b.forest + b.desert > b.mountain + b.sea;
+    if (terrain.hasCover) {
+      // Real land cover: woods are thick (about one tree every 9 m), pasture and fields are open
+      // with the odd shade tree, town has yard trees, marsh has scattered cypress, cut-over and
+      // scrub ground has brush and young pines.
+      const cand = Math.round(200 * (0.85 + r() * 0.3));
+      const KEEP = { [COVER.woods]: 1, [COVER.scrub]: 0.12, [COVER.grass]: 0.012, [COVER.crops]: 0.002, [COVER.town]: 0.05, [COVER.marsh]: 0.12 };
+      for (let k = 0; k < cand; k++) {
+        const [x, z] = spot(1), c = terrain.cover(x, z), keep = KEEP[c] || 0, roll = r(), kind = r(), tall = r();
+        if (roll >= keep) continue;
+        if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
+        const pine = c === COVER.marsh ? false : c === COVER.scrub ? true : pineTile ? kind < 0.85 : kind < 0.3;
+        add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, c === COVER.scrub ? 5 + tall * 6 : (pine ? 15 : 10) + tall * 9, pine ? 'pine' : 'tree');
+      }
+      const brush = Math.round(14 * r()) + 6;
+      for (let k = 0; k < brush; k++) {
+        const [x, z] = spot(2), c = terrain.cover(x, z), roll = r(), tall = r();
+        if (!(c === COVER.scrub ? roll < 0.9 : c === COVER.woods ? roll < 0.35 : c === COVER.marsh ? roll < 0.5 : false)) continue;
+        if (Hf(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 1, z - 1, x + 1, z + 1)) continue;
+        add(x - 0.9, z - 0.9, x + 0.9, z + 0.9, 1.1 + tall * 0.7, 'scrub');
+      }
+      if (r() < 0.3) {   // a fallen log or a stump-pile now and then; Florida has no boulders
+        const [x, z] = spot(4), w = 1.2 + r() * 1.5, d = 1 + r() * 1.2;
+        if (terrain.cover(x, z) !== COVER.crops && Hf(x, z) > 0.6 && roadDist(x, z, 14) > 3 && !blocked(x - 0.5, z - 0.5, x + w + 0.5, z + d + 0.5)) add(x, z, x + w, z + d, 0.7 + r() * 0.5, 'rock');
+      }
+      return out;
+    }
     // Trees grow in clumps; open ground between them.
     const nTrees = Math.round((b.forest * 60 + b.sea * 40 + b.mountain * 34 + b.plains * 5 + b.desert * 9) * (0.5 + r()));
     const clumps = [spot(10), spot(10), spot(10)];
-    const pineTile = b.forest + b.desert > b.mountain + b.sea;
     for (let k = 0; k < nTrees; k++) {
       let x, z;
       if (r() < 0.7) { const c = clumps[k % 3]; x = c[0] + (r() * 2 - 1) * 34; z = c[1] + (r() * 2 - 1) * 34; } else [x, z] = spot(1);

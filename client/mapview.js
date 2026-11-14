@@ -15,13 +15,25 @@ const boxColor = (b) => (b.type === 'housewall' || b.type === 'crate' ? COL.hous
 const CHIP = { bg: '#171a21', line: '#2a2f3a', ink: '#ffffff', road: '#ffd27a', place: '#9fe39f', routeBg: '#1d3f73', routeLine: '#5d8fd6' };
 
 const GC = { plains: [104, 124, 68], forest: [58, 86, 44], desert: [214, 206, 170], mountain: [128, 104, 66], swamp: [52, 68, 40], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
-/** Ground colour (0-255 RGB) of dry land at a point: the biome blend, with sand along the water's edge. */
+// Real land cover (terrain.cover): woods dark, pasture bright, each farm field its own crop.
+const COVER_RGB = { 1: [60, 60, 34], 2: [104, 106, 62], 3: [112, 138, 70], 5: [98, 108, 82], 6: [204, 189, 140], 9: [78, 96, 56] };
+const FIELDS = [[150, 122, 80], [118, 142, 62], [166, 154, 94], [136, 128, 70]];
+/** The real ground cover's colour (0-255 RGB) at a point, or null where there's no land cover data. */
+export function coverColor(terrain, x, z) {
+  const c = terrain.cover ? terrain.cover(x, z) : 0;
+  if (!c || c === 8) return null;
+  if (c === 4) { const i = Math.floor(x / 90), j = Math.floor(z / 90); return FIELDS[(Math.imul(i, 73856093) ^ Math.imul(j, 19349663)) >>> 0 & 3]; }
+  return COVER_RGB[c] || null;
+}
+/** Ground colour (0-255 RGB) of dry land at a point: the real cover (or the biome blend), with sand along the water's edge. */
 export function landColor(terrain, x, z, h) {
   const b = terrain.biome(x, z);
   if (h < 0.7 && b.sea < 0.5) return GC.sand;
   const c = [0, 0, 0];
   for (const k of ['plains', 'forest', 'desert', 'mountain']) for (let i = 0; i < 3; i++) c[i] += GC[k][i] * b[k];
   for (let i = 0; i < 3; i++) c[i] += GC.swamp[i] * b.sea;
+  const cc = coverColor(terrain, x, z);
+  if (cc) for (let i = 0; i < 3; i++) c[i] = cc[i] * 0.85 + c[i] * 0.15;
   return c;
 }
 /** Map colour (0-255 RGB) for a point: land colour, water, shaded by slope. */

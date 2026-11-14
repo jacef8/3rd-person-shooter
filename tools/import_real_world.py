@@ -6,6 +6,7 @@
   2. data/real/structures.json   every real building footprint (size, height, class, name)
   3. data/real/roads.json        every real road with its real name or route number
   4. data/real/elevation.bin.gz  real ground elevation, with the real rivers, lakes and ponds cut in
+  5. data/real/landcover.bin.gz  what covers the ground: woods, farm fields, pasture, town, marsh
 
     pip install pyarrow shapely numpy pillow tifffile imagecodecs pyproj
     python3 tools/import_real_world.py
@@ -22,6 +23,8 @@ Sources (see data/real/ATTRIBUTION.md, which this tool writes):
     (public domain), read from USGS's public S3 bucket as Cloud-Optimized GeoTIFFs; only their 4 m
     overview level is downloaded. `--dem terrarium` uses AWS Terrain Tiles instead (USGS 3DEP 1/3
     arc-second data), which is also the fallback for anywhere the lidar has no value.
+  ESA WorldCover 2021 (10 m land cover from Sentinel-1 and -2 satellite images, CC BY 4.0), read
+    from ESA's public S3 bucket: only the 1024-pixel tiles over the map are downloaded.
 
 Elevation and water level. The game's water level is 0 everywhere, but the real river falls about
 4 m across the map. So heights are stored relative to the river's own water surface at the nearest
@@ -48,13 +51,14 @@ from shapely.ops import linemerge, substring
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUCKET = 'https://overturemaps-us-west-2.s3.amazonaws.com/'
 MAP_JSON = os.path.join(ROOT, 'shared', 'data', 'map-bristol.json')
-STEPS = ['rivers', 'highways', 'buildings', 'roads', 'elevation']
+STEPS = ['rivers', 'highways', 'buildings', 'roads', 'elevation', 'landcover']
 
 ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
 ap.add_argument('--release', default=None, help='Overture release, e.g. 2026-10-21.0 (default: the latest)')
 ap.add_argument('--size', type=float, default=30000, help='map size in metres (must match WORLD_SIZE)')
 ap.add_argument('--step', type=float, default=30, help='elevation grid spacing in metres')
 ap.add_argument('--dem', choices=['lidar', 'terrarium'], default='lidar', help='elevation source (see above)')
+ap.add_argument('--cover-step', type=float, default=20, help='land cover grid spacing in metres')
 ap.add_argument('--zoom', type=int, default=13, help='terrain tile zoom (13 is about 16 m per pixel here)')
 ap.add_argument('--out', default=os.path.join(ROOT, 'data', 'real'))
 ap.add_argument('--cache', default=None, help='keep downloads here so a re-run is quick')
@@ -714,6 +718,53 @@ def write_elevation(water, segs):
     print(f'wrote a {n} x {n} elevation grid ({step:g} m) to {p} ({os.path.getsize(p) / 1e6:.2f} MB)')
 
 
+# ------------------------------------------------------------------ land cover
+WORLDCOVER = 'https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_{tile}_Map.tif'
+COVER_NAMES = {1: 'woods', 2: 'scrub', 3: 'grass and pasture', 4: 'farm fields', 5: 'town', 6: 'bare sand', 8: 'water', 9: 'marsh'}
+
+
+def write_landcover():
+    """landcover.bin.gz: 'DZLC', uint16 version=1, uint16 n, float32 step, float32 origin x, z, then
+    n*n bytes, index j * n + i as in elevation.bin.gz. Each byte is the ESA WorldCover class / 10:
+    1 trees, 2 shrubs, 3 grass, 4 cropland, 5 built-up, 6 bare, 8 water, 9 wetland (95 mangrove too)."""
+    import tifffile
+    step = args.cover_step
+    n = int(round(args.size / step)) + 1
+    xs = -HALF + np.arange(n) * step
+    X, Zg = np.meshgrid(xs, xs)
+    lon, lat = to_lonlat(X, Zg)
+    lat0, lon0 = int(math.floor(lat.min() / 3) * 3), int(math.floor(lon.min() / 3) * 3)   # 3-degree tiles, named by their SW corner
+    if int(math.floor(lat.max() / 3) * 3) != lat0 or int(math.floor(lon.max() / 3) * 3) != lon0:
+        sys.exit('landcover: the map crosses a WorldCover tile edge (not handled)')
+    tile = f'{"N" if lat0 >= 0 else "S"}{abs(lat0):02d}{"E" if lon0 >= 0 else "W"}{abs(lon0):03d}'
+    url = WORLDCOVER.format(tile=tile)
+    with tifffile.TiffFile(RangeFile(url, remote_size(url))) as t:
+        p = t.pages[0]
+        res = p.tags[33550].value[0]
+        west, north = p.tags[33922].value[3], p.tags[33922].value[4]
+        col, row = np.floor((lon - west) / res).astype(int), np.floor((north - lat) / res).astype(int)
+        T = p.tilewidth
+        across = (p.shape[1] + T - 1) // T
+        out = np.zeros(X.shape, np.uint8)
+        fh = t.filehandle
+        for tr in range(row.min() // T, row.max() // T + 1):
+            for tc in range(col.min() // T, col.max() // T + 1):
+                k = tr * across + tc
+                fh.seek(p.dataoffsets[k])
+                data = p.decode(fh.read(p.databytecounts[k]), k)[0].reshape(T, T)
+                mk = (row // T == tr) & (col // T == tc)
+                out[mk] = data[row[mk] - tr * T, col[mk] - tc * T]
+    cls = np.where(out == 95, 9, out // 10).astype(np.uint8)
+    counts = Counter(cls.ravel().tolist())
+    print('landcover: ' + ', '.join(f'{COVER_NAMES.get(c, c)} {100 * v / cls.size:.1f}%' for c, v in counts.most_common()))
+    raw = struct.pack('<4sHHfff', b'DZLC', 1, n, step, -HALF, -HALF) + cls.tobytes()
+    os.makedirs(args.out, exist_ok=True)
+    p = os.path.join(args.out, 'landcover.bin.gz')
+    with gzip.GzipFile(p, 'wb', compresslevel=9, mtime=0) as fh:
+        fh.write(raw)
+    print(f'wrote a {n} x {n} land cover grid ({step:g} m) to {p} ({os.path.getsize(p) / 1e6:.2f} MB)')
+
+
 # ------------------------------------------------------------------ output
 def write_json(name, rows):
     os.makedirs(args.out, exist_ok=True)
@@ -731,13 +782,14 @@ Made by `tools/import_real_world.py` from open data. Keep this file with the dat
 |---|---|---|
 | `structures.json` | Building footprints, heights and landmark names | Overture Maps Foundation, release {release}. Footprints from **Microsoft ML Building Footprints** (CDLA Permissive 2.0) and **OpenStreetMap** contributors (ODbL 1.0). |
 | `roads.json` | Roads, their names and route numbers | Overture Maps Foundation, release {release}; road data **© OpenStreetMap contributors** (ODbL 1.0). |
+| `landcover.bin.gz` | What covers the ground: woods, fields, pasture, town, marsh | **ESA WorldCover 10 m 2021 v200** © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0). |
 | `elevation.bin.gz` | Ground elevation, with rivers, lakes and ponds cut in | **USGS 3D Elevation Program** 1 m lidar DEM, FL Hurricane Michael 2020 survey (public domain); **AWS Terrain Tiles** (USGS 3DEP 1/3 arc-second) where the lidar has no value. Water outlines **© OpenStreetMap contributors** (ODbL 1.0) via Overture. |
 
 The river's course and the highway lines in `shared/data/map-bristol.json` also come from
 OpenStreetMap via Overture.
 
 OpenStreetMap data is open under the Open Database Licence: https://www.openstreetmap.org/copyright
-Overture Maps: https://overturemaps.org · USGS 3DEP: https://www.usgs.gov/3d-elevation-program · Terrain tiles: https://registry.opendata.aws/terrain-tiles/
+Overture Maps: https://overturemaps.org · USGS 3DEP: https://www.usgs.gov/3d-elevation-program · ESA WorldCover: https://esa-worldcover.org · Terrain tiles: https://registry.opendata.aws/terrain-tiles/
 
 Shop and brand names are left out of the building names on purpose. Everything the game does with
 these places is fiction.
@@ -758,6 +810,8 @@ if 'roads' in ONLY:
     write_roads(segs)
 if 'elevation' in ONLY:
     write_elevation(water, segs)
+if 'landcover' in ONLY:
+    write_landcover()
 os.makedirs(args.out, exist_ok=True)
 with open(os.path.join(args.out, 'ATTRIBUTION.md'), 'w') as fh:
     fh.write(ATTRIBUTION.format(release=RELEASE))

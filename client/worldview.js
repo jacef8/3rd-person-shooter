@@ -6,6 +6,7 @@
 //        it (the depth buffer is cleared in between), so the two can never fight over depth.
 import * as THREE from 'three';
 import { BRIDGE_DECK } from '/shared/terrain.js';
+import { coverColor } from './mapview.js';
 
 const CHUNK = 160;
 export const SKY_TOP = 0x5b8fc7, SKY_HORIZON = 0xc6d9e6;
@@ -234,6 +235,8 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
     const c = [0, 0, 0];
     for (const k of ['plains', 'forest', 'desert', 'mountain']) for (let i = 0; i < 3; i++) c[i] += GROUND[k][i] * b[k];
     for (let i = 0; i < 3; i++) c[i] += GROUND.swamp[i] * b.sea;
+    const cc = coverColor(terrain, x, z);   // the real woods, fields, pasture and lawns
+    if (cc) for (let i = 0; i < 3; i++) c[i] = cc[i] / 255 * 0.85 + c[i] * 0.15;
     return c;
   }
   // Roads are their own surface laid on the ground, so they stay crisp (the ground mesh has a point

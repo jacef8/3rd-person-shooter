@@ -5,12 +5,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import { generateMap, moveWithCollision, rayAgainstBoxes, insideBuilding, PLAYER_RADIUS } from '../shared/world.js';
-import { parseElevation } from '../shared/terrain.js';
+import { parseElevation, parseLandcover } from '../shared/terrain.js';
 
 const rj = (n) => JSON.parse(fs.readFileSync(new URL(`../data/real/${n}`, import.meta.url), 'utf8'));
 const map = generateMap(1337, 30000, {
   structures: rj('structures.json').rows, roads: rj('roads.json').rows,
   elevation: parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('../data/real/elevation.bin.gz', import.meta.url)))),
+  landcover: parseLandcover(zlib.gunzipSync(fs.readFileSync(new URL('../data/real/landcover.bin.gz', import.meta.url)))),
 });
 
 test('real buildings keep their angle and shape', () => {

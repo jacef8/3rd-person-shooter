@@ -13,7 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { biomeName, DEEP_WATER, parseElevation } from '../shared/terrain.js';
+import { biomeName, DEEP_WATER, parseElevation, parseLandcover } from '../shared/terrain.js';
 import zlib from 'node:zlib';
 import { serveStatic } from './static.js';
 import { BOATS, floats, seatPos } from '../shared/boats.js';
@@ -73,10 +73,11 @@ const SUPPLY_FALL_MS = Number(process.env.SUPPLY_FALL_MS || ACTIVITIES.supplyDro
 const REAL_DIR = process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real');
 const readReal = (name) => { try { return JSON.parse(fs.readFileSync(path.join(REAL_DIR, name), 'utf8')); } catch { return null; } };
 const readElevation = () => { try { return parseElevation(zlib.gunzipSync(fs.readFileSync(path.join(REAL_DIR, 'elevation.bin.gz')))); } catch { return null; } };
-const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json'), elevation: readElevation() };
-const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.rows, roads: realFiles.roads?.rows, elevation: realFiles.elevation });
+const readLandcover = () => { try { return parseLandcover(zlib.gunzipSync(fs.readFileSync(path.join(REAL_DIR, 'landcover.bin.gz')))); } catch { return null; } };
+const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json'), elevation: readElevation(), landcover: readLandcover() };
+const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.rows, roads: realFiles.roads?.rows, elevation: realFiles.elevation, landcover: realFiles.landcover });
 // Clients fetch the same files so they generate the identical world.
-const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation } : null;
+const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation, landcover: !!realFiles.landcover } : null;
 const grid = map.grid;
 const terrain = map.terrain;
 /** Look something up by a key a client sent: only the table's own entries count (never 'constructor'

@@ -72,8 +72,20 @@ export function parseElevation(bytes) {
   return { n, step, ox, oz, data };
 }
 
-/** `elevation` (optional, from parseElevation) replaces the generated hills with the real ground. */
-export function createTerrain(seed, size, elevation = null) {
+/** What covers the ground (ESA WorldCover classes / 10), from data/real/landcover.bin.gz. */
+export const COVER = { none: 0, woods: 1, scrub: 2, grass: 3, crops: 4, town: 5, bare: 6, water: 8, marsh: 9 };
+/** Real land cover (tools/import_real_world.py): { n, step, ox, oz, data } or null. */
+export function parseLandcover(bytes) {
+  if (!bytes || bytes.byteLength < 20) return null;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== 'DZLC') return null;
+  const n = dv.getUint16(6, true), step = dv.getFloat32(8, true), ox = dv.getFloat32(12, true), oz = dv.getFloat32(16, true);
+  return { n, step, ox, oz, data: new Uint8Array(bytes.buffer.slice(bytes.byteOffset + 20, bytes.byteOffset + 20 + n * n)) };
+}
+
+/** `elevation` (optional, from parseElevation) replaces the generated hills with the real ground;
+ *  `landcover` (optional, from parseLandcover) says where the real woods, fields and town are. */
+export function createTerrain(seed, size, elevation = null, landcover = null) {
   const half = size / 2;
   const s0 = (seed * 7919) | 0;
   const geo = geography(size);
@@ -338,8 +350,16 @@ export function createTerrain(seed, size, elevation = null) {
     return polyDist(x, z, br.path) < DECK_HALF_WIDTH ? Math.max(g, BRIDGE_DECK) : g;
   }
 
+  /** The real land cover at a point (COVER.*), or 0 where there's none. */
+  const lc = landcover;
+  function cover(x, z) {
+    if (!lc) return 0;
+    const i = Math.round((x - lc.ox) / lc.step), j = Math.round((z - lc.oz) / lc.step);
+    return i < 0 || j < 0 || i >= lc.n || j >= lc.n ? 0 : lc.data[j * lc.n + i];
+  }
+
   return {
-    seed, size, half, geo, bridges,
+    seed, size, half, geo, bridges, cover, hasCover: !!lc,
     biome, raw, height, exact: flattened, channel, bridgeAt,
     /** The ground as it's drawn: under a bridge deck that's the river and its banks, not the deck you walk on. */
     drawn(x, z) { return bridgeAt(x, z, BRIDGE_HALF_WIDTH + 17) ? flattened(x, z, true) : height(x, z); },

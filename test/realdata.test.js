@@ -9,12 +9,13 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import WebSocket from 'ws';
 import { generateMap, mapChecksum, moveWithCollision, PLAYER_RADIUS } from '../shared/world.js';
-import { parseElevation, DEEP_WATER, BRIDGE_DECK, RELIEF } from '../shared/terrain.js';
+import { parseElevation, parseLandcover, DEEP_WATER, BRIDGE_DECK, RELIEF, COVER } from '../shared/terrain.js';
 import { floats } from '../shared/boats.js';
 
 const REAL = new URL('../data/real/', import.meta.url);
 const rows = (name) => JSON.parse(fs.readFileSync(new URL(name, REAL))).rows;
-const real = () => ({ structures: rows('structures.json'), roads: rows('roads.json'), elevation: parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('elevation.bin.gz', REAL)))) });
+const real = () => ({ structures: rows('structures.json'), roads: rows('roads.json'), elevation: parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('elevation.bin.gz', REAL)))),
+  landcover: parseLandcover(zlib.gunzipSync(fs.readFileSync(new URL('landcover.bin.gz', REAL)))) });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 10000) {
   const end = Date.now() + ms;
@@ -117,7 +118,7 @@ test('the server runs on the real map and hands the same data to clients', async
   await new Promise((r) => ws.on('open', r));
   ws.send(JSON.stringify({ t: 'join', name: 'Surveyor', token: 'ab'.repeat(16) }));
   const welcome = await until(() => got.find((m) => m.t === 'welcome'));
-  assert.deepEqual(welcome.real, { structures: true, roads: true, elevation: true });
+  assert.deepEqual(welcome.real, { structures: true, roads: true, elevation: true, landcover: true });
   const map = generateMap(welcome.seed, welcome.size, real());
   assert.equal(mapChecksum(map), welcome.mapSum, 'client and server build the same world');
   ws.send(JSON.stringify({ t: 'deploy', kind: 'contact', id: 0 }));
@@ -129,4 +130,21 @@ test('the server runs on the real map and hands the same data to clients', async
   await sleep(300);
   assert.ok(map.terrain.height(at.x, at.z) > 0.5, 'deployed on dry ground');
   ws.close();
+});
+
+test('the real woods are thick, the real farm fields and pasture are open', () => {
+  const map = generateMap(1337, 30000, real());
+  const T = map.natureTileSize, t = map.terrain;
+  const per = { [COVER.woods]: [], [COVER.crops]: [], [COVER.grass]: [] };
+  for (let tx = 0; tx < 30000 / T; tx += 3) for (let tz = 0; tz < 30000 / T; tz += 3) {
+    const x0 = -15000 + tx * T, z0 = -15000 + tz * T, n = {};
+    for (let a = 8; a < T; a += 16) for (let b = 8; b < T; b += 16) { const c = t.cover(x0 + a, z0 + b); n[c] = (n[c] || 0) + 1; }
+    const top = Object.entries(n).find(([, v]) => v >= 56);   // seven-eighths one kind of cover
+    if (top && per[top[0]]) per[top[0]].push(map.natureTile(tx, tz).length);
+  }
+  const avg = (l) => l.reduce((a, b) => a + b, 0) / Math.max(1, l.length);
+  assert.ok(per[COVER.woods].length > 100 && per[COVER.crops].length > 3 && per[COVER.grass].length > 20, 'the map has woods, fields and pasture');
+  assert.ok(avg(per[COVER.woods]) > 120, `woods: ${avg(per[COVER.woods]).toFixed(0)} trees per 128 m square`);
+  assert.ok(avg(per[COVER.crops]) < 6, `fields: ${avg(per[COVER.crops]).toFixed(1)} trees`);
+  assert.ok(avg(per[COVER.grass]) < 8, `pasture: ${avg(per[COVER.grass]).toFixed(1)} trees`);
 });

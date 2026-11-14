@@ -18,7 +18,7 @@ import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
 import { BOATS, BOAT_RULES, stepBoat, seatPos } from '/shared/boats.js';
-import { parseElevation, biomeName } from '/shared/terrain.js';
+import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
 import HOMESTEAD from '/shared/data/homestead.json' with { type: 'json' };
 const GOODS = HOMESTEAD.goods;
@@ -107,7 +107,15 @@ async function loadRealData(info) {
       return r.ok ? parseElevation(new Uint8Array(await r.arrayBuffer())) || undefined : undefined;
     } catch { return undefined; }
   };
-  return { structures: info.structures ? await get('structures.json') : undefined, roads: info.roads ? await get('roads.json') : undefined, elevation: info.elevation ? await elevation() : undefined };
+  const landcover = async () => {
+    try {
+      const r = await fetch('/data/real/landcover.bin');   // served from landcover.bin.gz
+      return r.ok ? parseLandcover(new Uint8Array(await r.arrayBuffer())) || undefined : undefined;
+    } catch { return undefined; }
+  };
+  const [structures, roads, elev, cover] = await Promise.all([info.structures ? get('structures.json') : undefined, info.roads ? get('roads.json') : undefined,
+    info.elevation ? elevation() : undefined, info.landcover ? landcover() : undefined]);
+  return { structures, roads, elevation: elev, landcover: cover };
 }
 
 function initWorld(m) {
