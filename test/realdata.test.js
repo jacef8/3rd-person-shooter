@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 import { generateMap, mapChecksum, moveWithCollision, PLAYER_RADIUS } from '../shared/world.js';
 import { parseElevation, parseLandcover, DEEP_WATER, BRIDGE_DECK, RELIEF, COVER } from '../shared/terrain.js';
 import { floats } from '../shared/boats.js';
+import { segDist } from '../shared/geography.js';
 
 const REAL = new URL('../data/real/', import.meta.url);
 const rows = (name) => JSON.parse(fs.readFileSync(new URL(name, REAL))).rows;
@@ -163,6 +164,15 @@ test('real infrastructure stands where it really is', () => {
   const landing = (n) => map.docks.find((d) => d.name === n);
   assert.equal(landing('Bristol Landing').real, 'Liberty County Boat Landing-Bristol');
   assert.equal(landing('Blountstown Landing').real, 'Neal Landing');
+  assert.equal(landing('Estiffanulga Landing').real, 'Estiffanulga County Park boat ramp');
+  assert.ok(landing('Harry Donar Landing'), 'Harry Donar Landing on Beaverdam Creek');
+  for (const d of map.docks) assert.ok(floats(map.terrain, d.wx, d.wz), `${d.name} mooring floats`);
+  // The Lake Mystic airstrip: clear of trees, with its hangar and plane.
+  const strip = map.airstrips[0];
+  assert.ok(strip && Math.hypot(strip.x2 - strip.x1, strip.z2 - strip.z1) > 400);
+  assert.ok(map.boxes.some((b) => b.type === 'plane') && map.boxes.some((b) => b.type === 'hangar'));
+  const T = map.natureTileSize, mx = (strip.x1 + strip.x2) / 2, mz = (strip.z1 + strip.z2) / 2, tx = Math.floor((mx + 15000) / T), tz = Math.floor((mz + 15000) / T);
+  for (const tr of map.natureTile(tx, tz)) assert.ok(segDist((tr.minX + tr.maxX) / 2, (tr.minZ + tr.maxZ) / 2, strip.x1, strip.z1, strip.x2, strip.z2).d > strip.width / 2, 'no tree on the runway');
   assert.ok(map.labels.some((l) => l.kind === 'place' && l.text === 'Alum Bluff Overlook'));
   assert.ok(!map.labels.some((l) => /school|church/i.test(l.text) && l.kind === 'place'), 'schools and churches are not named');
 });

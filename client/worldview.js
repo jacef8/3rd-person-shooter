@@ -18,7 +18,7 @@ const COLORS = {
   rockwall: [0.62, 0.5, 0.38], logwall: [0.36, 0.25, 0.16], plankwall: [0.55, 0.42, 0.28], jetty: [0.5, 0.38, 0.25],
   roomwall: [0.66, 0.63, 0.58], dam: [0.62, 0.62, 0.6], scrub: [0.35, 0.42, 0.24],
   tower: [0.6, 0.62, 0.64], beacon: [0.9, 0.12, 0.08], tank: [0.86, 0.88, 0.9], fence: [0.56, 0.58, 0.6], equipment: [0.5, 0.55, 0.5],
-  pole: [0.38, 0.28, 0.19], solar: [0.12, 0.16, 0.28],
+  pole: [0.38, 0.28, 0.19], solar: [0.12, 0.16, 0.28], marker: [0.95, 0.95, 0.92], hangar: [0.66, 0.68, 0.68], plane: [0.93, 0.93, 0.9], windsock: [1, 0.45, 0.1],
 };
 // Each real building is painted one colour (picked by its id), so a street isn't all the same.
 const HOME_COLORS = [[0.9, 0.88, 0.82], [0.82, 0.8, 0.72], [0.74, 0.79, 0.82], [0.86, 0.8, 0.62], [0.64, 0.72, 0.64], [0.72, 0.62, 0.52], [0.6, 0.62, 0.65], [0.8, 0.72, 0.68], [0.68, 0.44, 0.36], [0.52, 0.58, 0.64]];
@@ -278,6 +278,7 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
   // Roads are their own surface laid on the ground, so they stay crisp (the ground mesh has a point
   // only every 8 m, which smeared a 6 m road into the grass). Asphalt with a yellow centre line on
   // main roads, a double line on state routes, brown on dirt tracks.
+  const STRIP_COL = { turf: [0.5, 0.6, 0.31], paint: [0.94, 0.94, 0.9] };
   const RAIL_COL = { bed: [0.45, 0.42, 0.38], tie: [0.3, 0.22, 0.16], steel: [0.62, 0.6, 0.58] };
   const ROAD_COL = { asphalt: [0.27, 0.28, 0.3], route: [0.25, 0.26, 0.28], dirt: [0.55, 0.45, 0.31], line: [0.92, 0.74, 0.2], edge: [0.85, 0.85, 0.82] };
   const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
@@ -363,6 +364,17 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
         }
         for (const d of [gauge, -gauge]) strip(off(d, pts), 0.05, RAIL_COL.steel, 0.24);
       }
+    }
+    // Airstrips: a mown runway with white bars across each end.
+    for (const a of map.airstrips || []) {
+      if (Math.max(a.x1, a.x2) + a.width < x0 || Math.min(a.x1, a.x2) - a.width > x0 + CHUNK || Math.max(a.z1, a.z2) + a.width < z0 || Math.min(a.z1, a.z2) - a.width > z0 + CHUNK) continue;
+      const len = Math.hypot(a.x2 - a.x1, a.z2 - a.z1), ux = (a.x2 - a.x1) / len, uz = (a.z2 - a.z1) / len, n = Math.ceil(len / 4);
+      const pt = (d) => [a.x1 + ux * d, a.z1 + uz * d], inside = ([x, z]) => x >= x0 && x < x0 + CHUNK && z >= z0 && z < z0 + CHUNK;
+      let run = [];
+      const flush = () => { if (run.length > 1) strip(run, a.width / 2, STRIP_COL.turf, 0.07); run = []; };
+      for (let k = 0; k < n; k++) { const d0 = k * len / n, d1 = (k + 1) * len / n; if (!inside(pt((d0 + d1) / 2))) { flush(); continue; } if (!run.length) run.push(pt(d0)); run.push(pt(d1)); }
+      flush();
+      for (const d of [6, 9, len - 9, len - 6]) { const c = pt(d); if (inside(c)) strip([[c[0] - ux * 0.6, c[1] - uz * 0.6], [c[0] + ux * 0.6, c[1] + uz * 0.6]], a.width / 2 - 1, STRIP_COL.paint, 0.09); }
     }
     if (!idx.length) return null;
     const g = new THREE.BufferGeometry();

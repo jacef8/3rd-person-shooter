@@ -8,6 +8,7 @@
 import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, PAD_MARGIN, RELIEF, COVER } from './terrain.js';
 import { polyDist, lakeDepth, segDist, project, REAL_SIZE } from './geography.js';
 import RIVER from './data/river.json' with { type: 'json' };
+import EXTRA from './data/real-extra.json' with { type: 'json' };
 export { WATER_LEVEL } from './terrain.js';
 
 export const DEFAULT_WORLD_SIZE = REAL_SIZE;   // 30 x 30 km of the real Bristol, FL area at 1:1
@@ -850,10 +851,13 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       return d;
     };
     // A town's landing is at its real public boat ramp where there is one near enough.
-    const ramps = (real.infrastructure?.places || []).filter((q) => q[2] === 'landing').map(([lat, lon, , name]) => ({ ...project(lat, lon, size), name }));
+    const ramps = (real.infrastructure?.places || []).filter((q) => q[2] === 'landing').map(([lat, lon, , name]) => ({ ...project(lat, lon, size), name }))
+      .concat(real.infrastructure ? EXTRA.landings.map((l) => ({ ...project(l.lat, l.lon, size), name: l.real, own: l.name })) : []);
+    const usedRamps = new Set();
     for (const t of towns) {
       const ramp = ramps.filter((q) => Math.hypot(q.x - t.x, q.z - t.z) < RIVER.docks.maxFromTown).sort((a, b) => Math.hypot(a.x - t.x, a.z - t.z) - Math.hypot(b.x - t.x, b.z - t.z))[0];
       const c = onRiver(ramp ? ramp.x : t.x, ramp ? ramp.z : t.z);
+      if (ramp) usedRamps.add(ramp);
       if (ramp || c.d < RIVER.docks.maxFromTown) addDock(`${t.name} Landing`, c, { townId: t.id, ...(ramp ? { real: ramp.name } : {}) });
     }
     // Swamp camps: out in the floodplain, away from towns and roads.
@@ -888,6 +892,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       camps.push({ id, name, x: cx, z: cz, dockId: dock.id, shacks: shackIds, radius: C.safeRadius });
       reserve({ minX: cx - 8, minZ: cz - 8, maxX: cx + 8, maxZ: cz + 8 });
     }
+    // Real public ramps that aren't a town's landing get one of their own (added last, so the
+    // other landings keep their numbers).
+    for (const r of ramps) if (r.own && !usedRamps.has(r)) addDock(r.own, onRiver(r.x, r.z), { real: r.name });
   }
   // Landing zones, named after the nearest town.
   const lzGrid = Math.max(2, Math.round(size / 6000));
@@ -1012,7 +1019,43 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       }
     }
   }
-  const nearRail = (x, z, r) => railGrid.near(x, z, r).some((s) => segDist(x, z, s.x1, s.z1, s.x2, s.z2).d < r);
+  // Airstrips (hand-placed, shared/data/real-extra.json): a mown grass runway with edge markers,
+  // an open-fronted hangar with a light plane in it, and a windsock.
+  const airstrips = [];
+  if (infra) for (const a of EXTRA.airstrips) {
+    const S = project(a.south[0], a.south[1], size), N = project(a.north[0], a.north[1], size);
+    const len = Math.hypot(N.x - S.x, N.z - S.z), ux = (N.x - S.x) / len, uz = (N.z - S.z) / len, ex = -uz, ez = ux;   // (ex, ez): across the strip
+    const ang = Math.atan2(uz, ux), w = a.width;
+    airstrips.push({ name: a.name, x1: S.x, z1: S.z, x2: N.x, z2: N.z, width: w });
+    for (let d = 0; d <= len; d += 50) for (const side of [-1, 1]) {   // white edge markers
+      const x = S.x + ux * d + ex * side * (w / 2 + 1), z = S.z + uz * d + ez * side * (w / 2 + 1);
+      box(x - 0.35, z - 0.35, x + 0.35, z + 0.35, 0.7, 'marker', { y0: terrain.exact(x, z) - 0.3 });
+    }
+    // The hangar: beside the north end, its open side facing the runway.
+    const hx = N.x - ux * 70 + ex * (w / 2 + 26), hz = N.z - uz * 70 + ez * (w / 2 + 26), hw = 12, hd = 10, H = 6.5;
+    const hy = Math.min(terrain.exact(hx - hw, hz - hw), terrain.exact(hx + hw, hz + hw), terrain.exact(hx - hw, hz + hw), terrain.exact(hx + hw, hz - hw)) - 0.4;
+    const L = (lx, lz) => [hx + ux * lx + ex * lz, hz + uz * lx + ez * lz];   // lx along the strip, lz away from it
+    const wall = (lx, lz, a2, b2, hh, yy, type) => { const [cx, cz] = L(lx, lz); const b = orientedBox(cx, cz, a2, b2, ang, { id: boxes.length, h: hh, y0: yy, type }); boxes.push(b); grid.insert(b); };
+    if (!solidAt(hx - 16, hz - 16, hx + 16, hz + 16)) {
+    wall(0, hd, hw, 0.2, H + 0.4, hy, 'hangar');            // back wall
+    wall(-hw, 0, 0.2, hd, H + 0.4, hy, 'hangar');            // ends
+    wall(hw, 0, 0.2, hd, H + 0.4, hy, 'hangar');
+    wall(0, 0, hw + 0.3, hd + 0.3, 0.3, hy + H + 0.4, 'hangar');   // roof
+    // A high-wing light plane parked inside, nose out.
+    const py = hy + 0.4;
+    wall(0, 1, 0.65, 3.8, 1.4, py + 0.5, 'plane');           // fuselage
+    wall(0, 0.2, 5.4, 0.8, 0.15, py + 1.95, 'plane');        // wing
+    wall(0, 4.4, 1.6, 0.4, 0.12, py + 1.2, 'plane');         // tailplane
+    wall(0, 4.5, 0.08, 0.5, 1.3, py + 1.3, 'plane');         // fin
+    }
+    reserve({ minX: hx - 18, minZ: hz - 18, maxX: hx + 18, maxZ: hz + 18 });
+    // The windsock, by the south end.
+    const wx = S.x + ux * 30 - ex * (w / 2 + 12), wz = S.z + uz * 30 - ez * (w / 2 + 12), wy = terrain.exact(wx, wz) - 0.3;
+    box(wx - 0.08, wz - 0.08, wx + 0.08, wz + 0.08, 6.5, 'pole', { y0: wy });
+    box(wx - 0.3, wz - 1.6, wx + 0.3, wz, 0.6, 'windsock', { y0: wy + 5.6 });
+  }
+  const nearStrip = (x, z) => airstrips.some((a) => segDist(x, z, a.x1, a.z1, a.x2, a.z2).d < a.width / 2 + 10);
+  const nearRail = (x, z, r) => railGrid.near(x, z, r).some((s) => segDist(x, z, s.x1, s.z1, s.x2, s.z2).d < r) || nearStrip(x, z);
 
   const free = (p, r = 1.0) => { const gh = terrain.exact(p.x, p.z); return gh > 0.3 && !grid.near(p.x, p.z, r + 1, [], true).some((b) => circleOverlapsBox(p.x, p.z, r, b) && b.type !== 'caveroof' && b.type !== 'canopy' && !(b.y0 > gh + 2)); };
   for (const p of [...landingZones, ...campSites]) for (let k = 0; k < 10 && !free(p, 3); k++) { p.x += 7; p.z += 3; }
@@ -1116,11 +1159,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })).filter(onMap),
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
     ...(infra?.places || []).filter(([lat, lon, kind]) => kind !== 'landing').map(([lat, lon, kind, text]) => ({ ...project(lat, lon, size), text, kind: 'place', place: kind })).filter(onMap),
+    ...airstrips.map((a) => ({ text: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, kind: 'place', place: 'airstrip' })),
   ];
   return {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
-    docks, camps, river: river ? river.pts : null, powerLines, rails,
+    docks, camps, river: river ? river.pts : null, powerLines, rails, airstrips,
     /** The trees in one 128 m countryside tile, for drawing far-off woods without loading them into the world. */
     natureTile: (tx, tz) => natureTile(tx, tz, terrain.exact).filter((b) => b.type === 'tree' || b.type === 'pine'), natureTileSize: NATURE_TILE,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },

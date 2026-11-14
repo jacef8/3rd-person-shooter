@@ -9,10 +9,10 @@ export function fillBox(g, b, X, Z, min = 1) {
 }
 /** Map colours: state routes amber, main roads light, streets a shade darker, dirt tracks brown. */
 const roadColor = (r) => (r.dirt ? COL.dirt : r.hw ? COL.route : (r.width || 12) >= 8 ? COL.road : COL.street);
-const HIDDEN = new Set(['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail', 'tower', 'beacon', 'pole', 'fence', 'equipment']);
+const HIDDEN = new Set(['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail', 'tower', 'beacon', 'pole', 'fence', 'equipment', 'marker', 'windsock', 'plane']);
 const boxColor = (b) => (b.type === 'solar' ? '#2b3a5c' : b.type === 'tank' ? '#d8dde2' : b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : b.type === 'home' ? COL.home : b.type === 'civic' ? COL.civic : COL.building);
 // Label chips: solid panels with sharp text (no outlines or glows).
-const PLACE_INK = { sheriff: '#9cc3ff', 'fire station': '#ff9f8a', hospital: '#ff9f8a', 'gas station': '#ffd27a', prison: '#c9b8ff', overlook: '#9fe39f', park: '#9fe39f', campground: '#9fe39f', 'post office': '#e8e8e8' };
+const PLACE_INK = { airstrip: '#ffffff', sheriff: '#9cc3ff', 'fire station': '#ff9f8a', hospital: '#ff9f8a', 'gas station': '#ffd27a', prison: '#c9b8ff', overlook: '#9fe39f', park: '#9fe39f', campground: '#9fe39f', 'post office': '#e8e8e8' };
 const CHIP = { bg: '#171a21', line: '#2a2f3a', ink: '#ffffff', road: '#ffd27a', place: '#9fe39f', routeBg: '#1d3f73', routeLine: '#5d8fd6' };
 
 const GC = { plains: [104, 124, 68], forest: [58, 86, 44], desert: [214, 206, 170], mountain: [128, 104, 66], swamp: [52, 68, 40], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
@@ -102,6 +102,7 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
     g.strokeStyle = '#2b2622'; g.lineWidth = r.narrow ? 1.6 : 2.6; g.setLineDash([]); g.stroke();
     g.strokeStyle = '#cfc6b8'; g.lineWidth = r.narrow ? 0.6 : 1; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
   }
+  for (const a of map.airstrips || []) { g.strokeStyle = '#d9dccf'; g.lineWidth = Math.max(3, a.width * k); g.beginPath(); g.moveTo(X(a.x1), Z(a.z1)); g.lineTo(X(a.x2), Z(a.z2)); g.stroke(); }
   g.lineCap = 'round';
   for (const t of map.towns) { g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {

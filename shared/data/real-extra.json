@@ -1,0 +1,10 @@
+{
+  "_about": "Real places the open map data is missing, placed by hand. Used only with the real-world map (data/real/infrastructure.json present).",
+  "landings": [
+    { "_about": "Estiffanulga County Park boat ramp, east bank (Apalachicola Riverkeeper blueway guide).", "name": "Estiffanulga Landing", "real": "Estiffanulga County Park boat ramp", "lat": 30.3083, "lon": -85.04 },
+    { "_about": "Harry Donar Landing at the end of Harry Donar Road, Beaverdam Creek WMA, east bank north of Bristol (Apalachicola Riverkeeper blueway guide).", "name": "Harry Donar Landing", "real": "Harry Donar Landing (Beaverdam Creek)", "lat": 30.5152, "lon": -84.9914 }
+  ],
+  "airstrips": [
+    { "_about": "A grass strip in the open field east of CR 379 near Lake Mystic, laid along the road. Made up for the game.", "name": "Lake Mystic airstrip", "south": [30.372441, -84.966242], "north": [30.376061, -84.967497], "width": 20 }
+  ]
+}
