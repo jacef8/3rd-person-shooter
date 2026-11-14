@@ -45,7 +45,8 @@ check('keyboard opens on the letter row', /BUTTON#\.HL:Q/.test(await focused()),
 const name = 'PAD' + String(Date.now()).slice(-5);
 await typeKeys(name);
 await press(BTN.MENU);
-for (let k = 0; k < 4 && !(await focused()).includes('register'); k++) await press(BTN.DOWN);
+// "Create callsign" sits beside the callsign box (the device-link boxes are below it).
+for (let k = 0; k < 4 && !(await focused()).includes('register'); k++) await press(k < 2 ? BTN.RIGHT : BTN.DOWN);
 await press(BTN.A);
 await p.waitForSelector('#lbMain:not([hidden])', { timeout: 15000 });
 await sleep(700);

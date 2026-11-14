@@ -166,7 +166,7 @@ Set `REAL_DATA=0` to run on the old generated stand-in world (the automated test
 The save file is tied to the map, so new data starts a fresh world.
 
 **Controls:** WASD move · Shift sprint · C crouch, hold C to go prone (makes low walls and cars real cover) · mouse aim ·
-LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q swap weapon ·
+LMB fire · RMB aim down sights · E interact (loot, bags, stash, doors) · R reload · Q next gun · 1 / 2 / 3 main gun 1, main gun 2, sidearm ·
 H medkit · Tab inventory · F tag · G throw grenade (Z switches sensor/stun) · V optical camo · T rally (squad leader) ·
 B crew ping · P crew panel and leaderboards · M map · X build mode (1-5 piece, R rotate, click
 place, E upgrade, Q dismantle). Controller layout below. Open your stash (E at the orange crate in your house) → **Open Gunsmith**.
@@ -200,7 +200,7 @@ On phones the game also uses a lighter graphics setting and a smaller HUD for la
 | RT / LT | Fire / aim down sights | |
 | A | Interact: loot, doors, stash, hack terminals | Select |
 | B | Crouch (tap) · prone (hold) | Back |
-| X / Y | Reload / swap weapon | Y: gunsmith exploded view |
+| X / Y | Reload / next gun (main 1 → main 2 → sidearm) | Y: gunsmith exploded view |
 | RB / LB | Tag target / throw grenade (hold LB to switch sensor/stun) | |
 | R3 (click right stick) | Optical camo; while aiming, flip a two-range sight | |
 | D-pad ▲ ▼ ◀ ▶ | Medkit · squad ping · Rally (leader) · build mode | Move highlight |

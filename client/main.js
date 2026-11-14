@@ -548,9 +548,16 @@ function makeCharacter(kind, name) {
     part(cbox(0.09, 0.09, 0.1), skin, 0, -0.3, 0, elbow);
     return shoulder;
   };
-  const arms = [arm(-1, -0.55, 0.15, -1.25), arm(1, -1.15, -0.5, -0.45)];
-  const gun = joint(-0.13, 0.45, 0.3, upper);   // the gunsmith-built weapon model goes in here
-  g.userData = { hips, legs, upper, head, arms, gun, phase: 0, last: null, lastT: performance.now() };
+  const arms = [arm(-1, -0.45, -0.05, -1.1), arm(1, -1.2, -0.75, -0.35)];
+  const gun = joint(-0.3, 0.4, 0.22, upper);   // the gunsmith-built weapon model goes in here: held at the right side, where the camera over your shoulder can see it
+  // Guns you carry but aren't holding: two main guns slung crossways on the back, the sidearm in a
+  // holster on the right thigh.
+  const sling = [joint(-0.06, 0.4, -0.33, upper), joint(0.06, 0.4, -0.37, upper)];
+  for (const [i, sl] of sling.entries()) { sl.rotation.order = 'ZXY'; sl.rotation.set(-Math.PI / 2, 0, i ? -0.5 : 0.5); }
+  const holster = joint(-0.1, -0.12, 0.02, legs[1].thigh);
+  holster.rotation.x = Math.PI / 2;
+  part(cbox(0.06, 0.16, 0.1), dark, -0.105, -0.16, 0.01, legs[1].thigh);   // the holster itself
+  g.userData = { hips, legs, upper, head, arms, gun, sling, holster, stowedKey: '', phase: 0, last: null, lastT: performance.now() };
   if (kind !== 'self') {
     const label = makeLabel(name, kind === 'contact' ? 0.006 : 0.0042, kind === 'bot' ? '#ff6b6b' : '#ffb27a');
     label.position.y = 2.35;
@@ -568,6 +575,22 @@ function makeCharacter(kind, name) {
   scene.add(g);
   return g;
 }
+
+/** Show the guns a character carries but isn't holding ([{ slot, a, parts, paint }]). */
+function setCharacterStowed(g, list) {
+  const key = JSON.stringify(list || []);
+  if (g.userData.stowedKey === key) return;
+  g.userData.stowedKey = key;
+  for (const m of [...g.userData.sling, g.userData.holster]) m.clear();
+  let back = 0;
+  for (const w of list || []) {
+    const model = buildGunModel(w);
+    if (w.slot === 'secondary') g.userData.holster.add(model);
+    else if (back < 2) g.userData.sling[back++].add(model);
+  }
+}
+/** Your own stowed guns, from your inventory. */
+function stowedOf(me) { return ['primary', 'primary2', 'secondary'].filter((sl) => sl !== me.active && me.inv[sl]).map((sl) => ({ slot: sl, a: me.inv[sl].archetype, parts: me.inv[sl].parts, paint: me.inv[sl].paint })); }
 
 function setCharacterGun(g, gun) {
   const key = gunKey(gun);
@@ -924,6 +947,7 @@ function handle(m) {
         if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, ground(p.x, p.z), p.z); state.players.set(p.id, rec); }
         rec.data = p;
         setCharacterGun(rec.mesh, p.gun);
+        setCharacterStowed(rec.mesh, p.stowed);
         setLabel(rec.mesh.userData.label, `${p.sq ? '◆ ' : ''}${p.name}  [${p.level}]${p.sh ? ' 🛡' : ''}${p.hacking ? '  ⌁ hacking' : ''}`, p.sq ? '#7dff9a' : '#ffb27a');
         setCloak(rec.mesh, p.camo ? (p.sq ? 0.35 : 0.12) : 1);
         setGlint(rec.mesh, !!p.gl);
@@ -990,6 +1014,7 @@ function handle(m) {
       document.body.classList.toggle('cloaked', !!m.camoActive);
       updateGadgetBar();
       setCharacterGun(selfMesh, m.inv[m.active] ? { a: m.inv[m.active].archetype, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
+      setCharacterStowed(selfMesh, stowedOf(m));
       break;
     }
     case 'boatFix':
@@ -1187,6 +1212,8 @@ function updateHud() {
   $('foodbar').parentElement.classList.toggle('low', me.food < HOMESTEAD.hunger.noRegenBelow);
   const w = me.inv[me.active];
   $('wname').textContent = w ? `${w.name}${w.parts?.muzzle === 'suppressor' ? ' · suppressed' : ''}` : 'Unarmed';
+  const slotsHtml = ['primary', 'primary2', 'secondary'].map((sl, i) => { const it = me.inv[sl]; return `<span data-slot="${sl}" class="${sl === me.active ? 'on' : it ? '' : 'none'}">${i + 1} ${it ? esc(shortGun(it)) : '—'}</span>`; }).join('');
+  if ($('wslots').innerHTML !== slotsHtml) $('wslots').innerHTML = slotsHtml;
   $('mag').textContent = me.mag;
   $('reserve').textContent = me.ammo;
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
@@ -1246,10 +1273,16 @@ function itemCard(item, { slot, buttons = [] } = {}) {
   return el;
 }
 
+const SLOT_LABEL = { primary: 'Main gun 1', primary2: 'Main gun 2', secondary: 'Sidearm', armor: 'Armor' };
+/** A short name for the weapon strip ("Marksman Rifle" is just "Marksman"). */
+const shortGun = (it) => String(it.name || it.archetype || '').replace(/ Rifle$/, '');
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// Tap (or click) a gun in the weapon strip to take it in hand.
+$('wslots').addEventListener('pointerdown', (e) => { const sl = e.target.closest('[data-slot]')?.dataset.slot; if (sl && state.me?.inv[sl]) { e.stopPropagation(); send({ t: 'weapon', slot: sl }); } });
 function equippedFor(item) {
   const inv = state.me.inv;
   if (item.kind === 'armor') return inv.armor;
-  if (item.kind === 'weapon') return item.archetype === 'sidearm' ? inv.secondary : inv.primary;
+  if (item.kind === 'weapon') return item.archetype === 'sidearm' ? inv.secondary : !inv.primary || !inv.primary2 ? null : inv[state.me.active === 'primary2' ? 'primary2' : 'primary'];
   return undefined;
 }
 
@@ -1305,8 +1338,8 @@ function renderInventory() {
   // ---- you
   const you = $('youCol'); you.innerHTML = '';
   you.append(head('Equipped'));
-  for (const slot of ['primary', 'secondary', 'armor']) {
-    const it = inv[slot], label = { primary: 'Main gun', secondary: 'Sidearm', armor: 'Armor' }[slot];
+  for (const slot of ['primary', 'primary2', 'secondary', 'armor']) {
+    const it = inv[slot], label = SLOT_LABEL[slot];
     you.append(...invRow(`eq-${slot}`, it
       ? { title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
       : { title: `${label}: empty`, detail: 'Equip one from your backpack', why: 'Empty' }));
@@ -1315,7 +1348,10 @@ function renderInventory() {
   if (!inv.pack.length) you.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
   inv.pack.forEach((it) => {
     const actions = [];
-    if (it.kind === 'weapon' || it.kind === 'armor') actions.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })]);
+    if (it.kind === 'weapon' && it.archetype !== 'sidearm') {
+      // Two main guns: put it in either slot (it swaps with what's there).
+      for (const slot of ['primary', 'primary2']) actions.push([inv[slot] ? `${SLOT_LABEL[slot]}: swap for ${inv[slot].name}` : `Carry as ${SLOT_LABEL[slot].toLowerCase()}`, () => send({ t: 'inv', action: 'equip', itemId: it.id, slot })]);
+    } else if (it.kind === 'weapon' || it.kind === 'armor') actions.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })]);
     if (it.kind === 'medkit') actions.push(['Use', () => send({ t: 'inv', action: 'use' })]);
     if (put) actions.push(['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })]);
     if (it.kind !== 'package') actions.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })]);
@@ -1874,7 +1910,7 @@ const gsTurntable = new THREE.Group(); gsScene.add(gsTurntable);
 function ownedWeapons() {
   const me = state.me, out = [];
   if (!me) return out;
-  for (const slot of ['primary', 'secondary']) if (me.inv[slot]) out.push({ item: me.inv[slot], where: slot });
+  for (const slot of ['primary', 'primary2', 'secondary']) if (me.inv[slot]) out.push({ item: me.inv[slot], where: slot });
   for (const i of me.inv.pack) if (i.kind === 'weapon') out.push({ item: i, where: 'backpack' });
   if (state.container?.gunsmith) for (const i of state.container.items) if (i.kind === 'weapon') out.push({ item: i, where: 'stash' });
   return out;
@@ -2106,6 +2142,9 @@ function doAction(a) {
     case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
     case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && state.me.ammo > 0) sfx.reload(); send({ t: 'reload' }); break;
     case 'swap': send({ t: 'swap' }); break;
+    case 'slot1': send({ t: 'weapon', slot: 'primary' }); break;
+    case 'slot2': send({ t: 'weapon', slot: 'primary2' }); break;
+    case 'slot3': send({ t: 'weapon', slot: 'secondary' }); break;
     case 'heal': send({ t: 'inv', action: 'use' }); break;
     case 'crouch': if (state.prone) { state.prone = false; state.crouch = true; } else state.crouch = !state.crouch; stanceNote(); break;
     case 'prone': state.prone = !state.prone; if (state.prone) state.crouch = false; stanceNote(); break;
@@ -2120,7 +2159,7 @@ $('name').value = localStorage.getItem('dz_name') || '';
     hint.innerHTML = '<b class="accent">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
   } else {
     hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<span class="more"><br />'
-      + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> swap weapon · <b>L3</b> sprint<br />'
+      + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm) · <b>L3</b> sprint<br />'
       + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
       + 'The two small buttons: <b>⧉</b> (left) bag, hold to accept an invite · <b>☰</b> (right) map, hold for the crew panel</span>';
   }
@@ -2154,7 +2193,7 @@ addEventListener('keydown', (e) => {
 addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
-  KeyQ: 'swap', Digit1: 'swap', Digit2: 'swap', KeyH: 'heal', ControlLeft: 'crouch',
+  KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', KeyH: 'heal', ControlLeft: 'crouch',
 };
 addEventListener('keydown', (e) => {
   if (document.activeElement?.tagName === 'INPUT') return;
@@ -3445,6 +3484,11 @@ function buildTouchUI() {
   const knob = $('tknob'), base = $('tstick');
   ui.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.tbtn')) return;
+    // A tap on a gun in the weapon strip (drawn under this layer) takes that gun in hand.
+    for (const chip of $('wslots').children) {
+      const r = chip.getBoundingClientRect();
+      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { if (state.me?.inv[chip.dataset.slot]) send({ t: 'weapon', slot: chip.dataset.slot }); e.preventDefault(); return; }
+    }
     e.preventDefault();
     ui.setPointerCapture(e.pointerId);
     if (e.clientX < innerWidth * 0.45 && !touch.stick) {

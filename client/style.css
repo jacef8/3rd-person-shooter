@@ -98,6 +98,12 @@ button.ghost { background: transparent; color: var(--ink); border-color: var(--l
 
 #weapon { position: absolute; bottom: 24px; right: 24px; text-align: right; }
 #wname { font-size: 15px; font-weight: 700; }
+/* The three guns you carry: 1 and 2 main guns, 3 sidearm; the one in your hands lit up. */
+#wslots { display: flex; gap: 4px; justify-content: flex-end; margin: 4px 0 2px; }
+#wslots span { font-size: 12px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line); white-space: nowrap; }
+#wslots span[data-slot] { pointer-events: auto; cursor: pointer; }
+#wslots span.on { background: var(--accent); color: #111; border-color: var(--accent); }
+#wslots span.none { opacity: 0.55; }
 #wammo { font-size: 38px; font-weight: 800; line-height: 1; }
 #wammo small { font-size: 18px; color: var(--ink-2); }
 #wextra { font-size: 12px; color: var(--ink-2); }
@@ -181,7 +187,7 @@ button.ghost { background: transparent; color: var(--ink); border-color: var(--l
 .gadget.cooldown, .gadget.notech { opacity: 0.55; border-color: var(--line-2); }
 .gadget.on { border-color: var(--tech); color: var(--tech); }
 /* What you carry: each number with its word, on a solid strip. */
-#resources { position: absolute; bottom: 92px; right: 24px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; max-width: 520px; padding: 5px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+#resources { position: absolute; bottom: 162px; right: 24px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; max-width: 520px; padding: 5px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 #resources b { color: var(--ink); font-weight: 700; }
 /* Stance: what you are now and the buttons that change it. */
 #stance { position: absolute; bottom: 86px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: baseline; padding: 4px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; white-space: nowrap; }
@@ -218,7 +224,7 @@ input { -webkit-user-select: text; user-select: text; }
   .bar { height: 10px; } .bar span { font-size: 12px; line-height: 10px; }
   #weapon { bottom: 10px; right: calc(10px + env(safe-area-inset-right)); }
   #wname { font-size: 12px; } #wammo { font-size: 26px; } #wammo small { font-size: 13px; } #wextra { font-size: 12px; }
-  #resources { bottom: 64px; right: calc(10px + env(safe-area-inset-right)); font-size: 12px; gap: 2px 8px; max-width: 46vw; }
+  #resources { bottom: 124px; right: calc(10px + env(safe-area-inset-right)); font-size: 12px; gap: 2px 8px; max-width: 46vw; }
   #gadgets { bottom: 8px; gap: 3px; } .gadget { min-width: 42px; font-size: 12px; padding: 2px 4px; }
   #xpfeed { bottom: 70px; font-size: 12px; left: calc(10px + env(safe-area-inset-left)); }
   #prompt { font-size: 12px; } #toasts div { font-size: 12px; padding: 4px 10px; }
@@ -315,7 +321,13 @@ body:has(#downbar:not([hidden])) #game { filter: saturate(0.3) brightness(0.8); 
 body.touchui #gadgets { display: none; }
 body.touchui #weapon { right: auto; left: 50%; transform: translateX(-50%); bottom: 6px; text-align: center; }
 body.touchui #weapon #wname, body.touchui #weapon #wextra { display: inline-block; margin: 0 6px; }
-body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); bottom: 88px; white-space: nowrap; }
+/* Phones: one compact row (the gun chips name the gun in your hands), and the chips are buttons. */
+body.touchui #weapon { padding: 4px 8px; display: flex; align-items: center; gap: 8px; }
+body.touchui #weapon #wname, body.touchui #weapon #wlabel, body.touchui #weapon #wextra { display: none; }
+body.touchui #wslots { margin: 0; }
+body.touchui #wslots span { min-height: 44px; display: inline-flex; align-items: center; padding: 0 10px; font-size: 13px; }
+body.touchui #wammo { font-size: 24px; }
+body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); bottom: 70px; white-space: nowrap; }
 @media (max-height: 520px) {
   /* Touch: the thumb buttons own the space under the minimap, so the place name goes top centre on one line. */
   body.touchui #where { top: 32px; right: auto; left: 50%; transform: translateX(-50%); width: auto; max-width: 62vw; white-space: nowrap; padding: 4px 10px; }

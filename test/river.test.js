@@ -215,3 +215,29 @@ test('boats get stolen and sunk; swamp camps trade and are safe ground', async (
   await th.toast(/boat went down/);
   await until(() => !th.you.boat && !th.snap.boats.some((b) => b.id === boat.id));
 });
+
+test('you carry two main guns and a sidearm, and switch between them', async (t) => {
+  const A = hex('e1'), B = hex('e2');
+  const shotgun = makeWeapon('shotgun'), pistol = makeWeapon('sidearm');
+  const home = map.docks[0];
+  const srv = await server('slots', {
+    [A]: character('Twoguns', home.x, home.z, { inv: { primary: makeWeapon('carbine'), secondary: pistol, armor: null, pack: [shotgun] } }),
+    [B]: character('Watcher', home.x + 3, home.z),
+  });
+  t.after(() => srv.proc.kill('SIGKILL'));
+  const a = await conn(srv.port, 'Twoguns', A), b = await conn(srv.port, 'Watcher', B);
+  await until(() => a.you && b.you);
+  // The shotgun goes into the empty second main-gun slot, not over the carbine.
+  a.send({ t: 'inv', action: 'equip', itemId: shotgun.id });
+  await until(() => a.you.inv.primary2?.id === shotgun.id && a.you.inv.primary?.archetype === 'carbine' && a.you.inv.secondary?.id === pistol.id);
+  // Switching: straight to a slot, then round all three.
+  a.send({ t: 'weapon', slot: 'secondary' });
+  await until(() => a.you.active === 'secondary');
+  const seen = [];
+  for (let i = 0; i < 3; i++) { const before = a.you.active; a.send({ t: 'swap' }); await until(() => a.you.active !== before); seen.push(a.you.active); }
+  assert.deepEqual(seen, ['primary', 'primary2', 'secondary']);
+  // Others see the guns you aren't holding (on your back and on your hip).
+  const other = await until(() => b.snap?.players?.find((p) => p.name === 'Twoguns' && p.gun?.a === 'sidearm' && p));
+  assert.deepEqual(other.stowed.map((w) => w.slot).sort(), ['primary', 'primary2']);
+  assert.deepEqual(other.stowed.map((w) => w.a).sort(), ['carbine', 'shotgun']);
+});

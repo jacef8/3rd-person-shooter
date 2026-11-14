@@ -209,7 +209,7 @@ const dist2 = (a, b) => (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
 
 // ---------------------------------------------------------------- characters
 function starterKit() {
-  return { primary: null, secondary: makeWeapon('sidearm'), armor: null, pack: [makeConsumable('medkit')] };
+  return { primary: null, primary2: null, secondary: makeWeapon('sidearm'), armor: null, pack: [makeConsumable('medkit')] };
 }
 function starterLoadout() {
   const inv = starterKit();
@@ -339,7 +339,12 @@ function abandonClaim(p) {
 }
 function maxHp() { return 100; }
 function maxArmor(p) { return armorStats(p.inv.armor).armor; }
-function activeWeapon(p) { return p.inv[p.active] || p.inv.primary || p.inv.secondary || null; }
+const ARCHETYPE_KEYS = ['sidearm', 'smg', 'carbine', 'shotgun', 'dmr', 'lmg'];
+// Every player carries two main guns and a sidearm: 'primary', 'primary2' and 'secondary' (the sidearm).
+const GUN_SLOTS = ['primary', 'primary2', 'secondary'];
+function activeWeapon(p) { return p.inv[p.active] || p.inv.primary || p.inv.primary2 || p.inv.secondary || null; }
+/** The guns you're carrying but not holding (slung on your back, or the sidearm in its holster). */
+function stowedGuns(p) { return GUN_SLOTS.filter((s) => s !== p.active && p.inv[s]).map((s) => ({ slot: s, a: p.inv[s].archetype, parts: p.inv[s].parts, paint: p.inv[s].paint })); }
 function stats(p) { return weaponStats(activeWeapon(p)); }
 function level(p) { return levelFromXp(p.xp || 0); }
 function hasField(p, id) { return (p.field || []).includes(id); }
@@ -2289,12 +2294,12 @@ function killPlayer(p, attacker, headshotKill) {
   if (p.boat) unseat(p);
   p.dead = true;
   Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null });
-  const { primary, secondary, armor, pack } = p.inv;
+  const { primary, primary2, secondary, armor, pack } = p.inv;
   const keepIntel = hasField(p, 'pouch') ? Math.min(3, p.intel) : 0;
   // Your claim marker and tools stay with you: losing them would leave you unable to start again.
   const keep = pack.filter((i) => i && (i.kind === 'marker' || i.kind === 'tool'));
-  dropBag(p.x, p.z, [primary, secondary, armor, ...pack.filter((i) => !keep.includes(i))], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
-  p.inv = { primary: null, secondary: null, armor: null, pack: keep };
+  dropBag(p.x, p.z, [primary, primary2, secondary, armor, ...pack.filter((i) => !keep.includes(i))], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
+  p.inv = { primary: null, primary2: null, secondary: null, armor: null, pack: keep };
   p.mags = {}; p.armor = 0; p.camoOn = false;
   for (const r of RESOURCES) p[r] = 0;
   p.intel = keepIntel;
@@ -3191,7 +3196,7 @@ function atOwnStash(p) {
 }
 function findOwnedWeapon(p, itemId) {
   const inv = p.inv;
-  for (const slot of ['primary', 'secondary']) if (inv[slot]?.id === itemId) return inv[slot];
+  for (const slot of GUN_SLOTS) if (inv[slot]?.id === itemId) return inv[slot];
   const inPack = inv.pack.find((i) => i.id === itemId);
   if (inPack) return inPack;
   return claimOf(p)?.store.items.find((i) => i.id === itemId) || null;
@@ -3326,7 +3331,12 @@ function invAction(p, msg) {
     const item = inv.pack[idx];
     let slot;
     if (item.kind === 'armor') slot = 'armor';
-    else if (item.kind === 'weapon') slot = item.archetype === 'sidearm' ? 'secondary' : 'primary';
+    else if (item.kind === 'weapon') {
+      // A main gun goes in the slot you asked for, else an empty one, else replaces the one in your hands.
+      if (item.archetype === 'sidearm') slot = 'secondary';
+      else if (msg.slot === 'primary' || msg.slot === 'primary2') slot = msg.slot;
+      else slot = !inv.primary ? 'primary' : !inv.primary2 ? 'primary2' : p.active === 'primary2' ? 'primary2' : 'primary';
+    }
     else return;
     inv.pack.splice(idx, 1);
     if (inv[slot]) inv.pack.push(inv[slot]);
@@ -3335,7 +3345,7 @@ function invAction(p, msg) {
     p.armor = Math.min(p.armor, maxArmor(p));
   } else if (msg.action === 'unequip') {
     const slot = msg.slot;
-    if (!['primary', 'secondary', 'armor'].includes(slot) || !inv[slot]) return;
+    if (![...GUN_SLOTS, 'armor'].includes(slot) || !inv[slot]) return;
     if (inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
     inv.pack.push(inv[slot]);
     inv[slot] = null;
@@ -3718,7 +3728,15 @@ wss.on('connection', (ws) => {
       case 'state': return handleState(p, msg);
       case 'shoot': return handleShoot(p, msg);
       case 'reload': return handleReload(p);
-      case 'swap': if (!p.dead && p.reloadUntil < Date.now()) { p.active = p.active === 'primary' ? 'secondary' : 'primary'; if (!p.inv[p.active]) p.active = p.active === 'primary' ? 'secondary' : 'primary'; dirty(p); } return;
+      case 'swap': {   // next gun you're carrying: main gun 1, main gun 2, sidearm, round again
+        if (p.dead || p.reloadUntil >= Date.now()) return;
+        const at = GUN_SLOTS.indexOf(p.active);
+        for (let k = 1; k <= 3; k++) { const s2 = GUN_SLOTS[(at + k) % 3]; if (p.inv[s2]) { p.active = s2; break; } }
+        dirty(p); return;
+      }
+      case 'weapon':   // straight to one slot (keys 1, 2, 3)
+        if (!p.dead && p.reloadUntil < Date.now() && GUN_SLOTS.includes(msg.slot) && p.inv[msg.slot]) { p.active = msg.slot; dirty(p); }
+        return;
       case 'interact': p.buildIntent = !!msg.build; return !p.dead && interact(p);
       case 'container': return !p.dead && containerAction(p, msg);
       case 'closeContainer': p.openContainer = null; return;
@@ -3773,6 +3791,7 @@ wss.on('connection', (ws) => {
         if (Number.isFinite(msg.damage)) return applyDamage(p, msg.damage, null, false);
         if (msg.event) { const e = startEvent(msg.event); if (e && Number.isFinite(msg.x)) { e.x = msg.x; e.z = msg.z; } return; }
         if (msg.endEvent) { const e = [...worldEvents.values()].find((x) => x.type === msg.endEvent); if (e) endEvent(e, 'expired'); return; }
+        if (typeof msg.giveGun === 'string' && ARCHETYPE_KEYS.includes(msg.giveGun)) { const w = makeWeapon(msg.giveGun); p.inv.pack.push(w); p.mags[w.id] = weaponStats(w).mag; dirty(p); return; }
         if (msg.give && typeof msg.give === 'object') { for (const [k, v] of Object.entries(msg.give)) if (RESOURCES.includes(k) && Number.isFinite(v)) p[k] = (p[k] || 0) + v; dirty(p); return; }
         if (Number.isInteger(msg.boatTo) && p.boat && map.docks[msg.boatTo]) { const b = boatById(p.boat), d = map.docks[msg.boatTo]; b.x = d.wx; b.z = d.wz; placeOccupants(b); return send(p.ws, { t: 'boatFix', x: b.x, z: b.z, yaw: b.yaw }); }
         if (Number.isFinite(msg.boatDamage) && msg.boatId) { const b = boatById(msg.boatId); if (b) damageBoat(b, msg.boatDamage, p); return; }
@@ -3889,6 +3908,7 @@ const loop = setInterval(() => {
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
+      stowed: stowedGuns(p),
     }]));
     for (const v of views.values()) Object.defineProperty(v, 'json', { value: JSON.stringify(v) });   // not enumerable: never encoded twice
     for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(snapshotFor(r, views, now));
