@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.md': 'text/plain; charset=utf-8', '.apk': 'application/vnd.android.package-archive' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.md': 'text/plain; charset=utf-8', '.apk': 'application/vnd.android.package-archive', '.woff2': 'font/woff2' };
 const TEXT = new Set(['.html', '.js', '.css', '.json', '.svg', '.webmanifest', '.md']);
 const zipped = new Map();   // file -> { mtimeMs, gz }
 const GZ = { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' };
@@ -17,6 +17,8 @@ export function serveStatic(req, res, url, roots) {
     if (!url.startsWith(prefix)) continue;
     const file = path.join(dir, url.slice(prefix.length) || 'index.html');
     if (!file.startsWith(dir)) return false;
+    // Several folders can share a prefix (the fonts): try the next one if this one hasn't the file.
+    if (roots.some(([p2, d2]) => p2 === prefix && d2 !== dir) && !fs.existsSync(file) && !fs.existsSync(file + '.gz')) continue;
     send(req, res, file);
     return true;
   }

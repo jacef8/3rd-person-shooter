@@ -11,6 +11,8 @@
   <link rel="icon" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   <title>Deadzone — persistent looter shooter prototype</title>
+  <link rel="preload" href="/fonts/atkinson-hyperlegible-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/archivo-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/style.css" />
   <script type="importmap">{ "imports": { "three": "/vendor/three.module.js" } }</script>
 </head>
@@ -19,29 +21,34 @@
   <div id="invitebar" hidden></div>
   <canvas id="game"></canvas>
 
-  <div id="login" class="panel center lobby">
-    <h1>DEADZONE</h1>
-    <p class="sub">Persistent worlds. Always PvP. Your stash house stays in the world when you log off — and anyone can breach it.</p>
-    <div id="lbName" hidden>
-      <p class="sub" style="margin-bottom:6px">Pick your callsign. It's how friends find you, and it's yours in every world.</p>
-      <input id="name" maxlength="16" placeholder="Callsign" autocomplete="off" />
-      <button id="register">Create callsign</button>
+  <div id="login" class="lobby2">
+    <canvas id="lobbyfx" aria-hidden="true"></canvas>
+    <div class="lb-shell">
+      <header class="lb-brand">
+        <svg class="lb-mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="19" /><path d="M32 4v14M32 46v14M4 32h14M46 32h14" /><circle cx="32" cy="32" r="2.5" class="dot" /></svg>
+        <h1>DEADZONE</h1>
+        <p class="lb-place">Liberty County · Florida</p>
+        <p class="lb-pitch">One living county that never resets. Make a home, farm it, trade along the river, and raid. Your place stays when you log off, and anyone can come for it.</p>
+      </header>
+      <main class="lb-card">
+        <div id="lbName" hidden>
+          <h2>Pick your callsign</h2>
+          <p class="lb-note">It's how friends find you. It's yours in every world.</p>
+          <div class="lb-namerow"><input id="name" maxlength="16" placeholder="Callsign" autocomplete="off" /><button id="register">Create callsign</button></div>
+        </div>
+        <div id="lbMain" hidden>
+          <p class="lb-who">Signed in as <b id="lbWho"></b></p>
+          <div id="lbWorlds"><div class="lb-skel"></div></div>
+          <h2>Friends</h2>
+          <div id="lbFriends"></div>
+          <div id="getApp" class="getapp"></div>
+        </div>
+      </main>
     </div>
-    <div id="lbMain" hidden>
-      <p class="sub" style="margin:0 0 8px">Agent <b id="lbWho"></b></p>
-      <div class="lbcols">
-        <section><h2>Worlds</h2><div id="lbWorlds"><div class="empty">Loading worlds…</div></div>
-          <p class="sub" style="text-align:left;font-size:12px">One living world: everyone's farms, camps, bases and trade routes share it, and it never resets.</p>
-          <div id="getApp" class="getapp"></div></section>
-        <section><h2>Friends</h2><div id="lbFriends"></div></section>
-      </div>
-    </div>
-    <div id="padhint" class="controls"></div>
-    <div class="controls kbonly">
-      Keyboard and mouse work too: <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch · <b>Mouse</b> aim · <b>LMB</b> fire · <b>RMB</b> aim down sights<br />
-      <b>E</b> interact / loot / door · <b>R</b> reload · <b>Q</b> swap weapon · <b>H</b> medkit · <b>Tab</b> inventory · <b>P</b> squad &amp; leaderboard · <b>M</b> map<br />
-      <b>F</b> tag · <b>G</b> sensor grenade · <b>V</b> optical camo · <b>T</b> rally (leader) · <b>B</b> squad ping · <b>X</b> build mode<br />Level up by playing to unlock weapons and attachments, then customise them at the gunsmith in your stash house
-    </div>
+    <footer class="lb-help">
+      <div id="padhint" class="controls"></div>
+      <div class="controls kbonly">Keyboard and mouse work too: <b>WASD</b> move · <b>Shift</b> sprint · <b>C</b> crouch (hold: prone) · <b>Mouse</b> aim · <b>Left click</b> fire · <b>Right click</b> aim down sights · <b>E</b> use · <b>R</b> reload · <b>Tab</b> bag · <b>M</b> map · <b>P</b> crew</div>
+    </footer>
   </div>
 
   <div id="hud" hidden>
@@ -63,6 +70,7 @@
     <div id="weapon">
       <div id="wname"></div>
       <div id="wammo"><span id="mag">0</span><small> / <span id="reserve">0</span></small></div>
+      <div id="wlabel">in the gun / rounds carried</div>
       <div id="wextra"></div>
     </div>
     <div id="where"><b id="wherePlace"></b><span id="whereTown"></span></div>

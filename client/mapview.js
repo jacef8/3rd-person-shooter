@@ -93,8 +93,9 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   for (const l of map.labels || map.towns.map((t) => ({ text: t.name, x: t.x, z: t.rect.minZ, kind: 'town' }))) {
     const water = l.kind === 'water', lm = l.kind === 'landmark';
     g.font = `${water ? 'italic ' : 'bold '}${Math.round(px / (water ? 105 : lm ? 115 : 85))}px Segoe UI, sans-serif`;
-    g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.7)';
-    g.strokeText(l.text, X(l.x), Z(l.z) - 4);
+    // Place names on a solid chip (no outline around the letters).
+    const tw = g.measureText(l.text).width, th = parseInt(g.font.match(/(\d+)px/)[1], 10);
+    g.fillStyle = CHIP.bg; g.fillRect(X(l.x) - tw / 2 - th * 0.35, Z(l.z) - 4 - th * 0.95, tw + th * 0.7, th * 1.3);
     g.fillStyle = water ? '#a9d7f2' : lm ? '#bfe6a8' : '#f0f0f0';
     g.fillText(l.text, X(l.x), Z(l.z) - 4);
   }
@@ -215,10 +216,11 @@ export function drawMap(canvas, map, base, view, markers) {
     }
     if (m.highlight) { g.beginPath(); g.arc(x, y, s + 6, 0, Math.PI * 2); g.strokeStyle = '#ffc53d'; g.lineWidth = 3; g.stroke(); }
     if (m.label) {
-      g.font = `bold ${m.highlight ? 13 : 11}px Segoe UI, sans-serif`;
-      g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.8)';
-      g.strokeText(m.label, x, y - s - 5);
-      g.fillStyle = m.highlight ? '#ffc53d' : '#eee'; g.fillText(m.label, x, y - s - 5);
+      g.font = `700 ${m.highlight ? 14 : 13}px 'Atkinson Hyperlegible', Segoe UI, sans-serif`;
+      // Marker names on a solid chip, like the road names.
+      const tw = g.measureText(m.label).width;
+      g.fillStyle = CHIP.bg; g.beginPath(); g.roundRect(x - tw / 2 - 6, y - s - 21, tw + 12, 20, 6); g.fill();
+      g.fillStyle = m.highlight ? '#ffc53d' : '#ffffff'; g.fillText(m.label, x, y - s - 6);
     }
   }
   // Scale bar in feet / miles.
@@ -226,10 +228,10 @@ export function drawMap(canvas, map, base, view, markers) {
   const toM = ([v, u]) => (u === 'ft' ? v / 3.28084 : v * 1609.344);
   const step = STEPS.find((st) => toM(st) * k >= 70) || STEPS[STEPS.length - 1];
   const bw = toM(step) * k, bx = 16, by = H - 18;
-  g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(bx - 6, by - 20, bw + 12, 28);
+  g.fillStyle = CHIP.bg; g.fillRect(bx - 6, by - 20, bw + 12, 28);
   g.strokeStyle = '#eee'; g.lineWidth = 2;
   g.beginPath(); g.moveTo(bx, by - 5); g.lineTo(bx, by); g.lineTo(bx + bw, by); g.lineTo(bx + bw, by - 5); g.stroke();
-  g.fillStyle = '#eee'; g.font = 'bold 11px Segoe UI, sans-serif'; g.textAlign = 'center';
+  g.fillStyle = '#ffffff'; g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'center';
   g.fillText(`${step[0]} ${step[1]}`, bx + bw / 2, by - 7);
   return { toWorld: (px, py) => ({ x: view.cx + (px - W / 2) / k, z: view.cz + (py - H / 2) / k }), k };
 }

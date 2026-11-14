@@ -254,6 +254,8 @@ hubWss.on('connection', (ws) => {
 // ---------------------------------------------------------------- http: static files + routing
 const STATIC = [
   ['/vendor/', path.join(ROOT, 'node_modules', 'three', 'build')],
+  ['/fonts/', path.join(ROOT, 'node_modules', '@fontsource', 'archivo', 'files')],
+  ['/fonts/', path.join(ROOT, 'node_modules', '@fontsource', 'atkinson-hyperlegible', 'files')],
   ['/shared/', path.join(ROOT, 'shared')],
   ['/data/real/', process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real')],
   ['/', path.join(ROOT, 'client')],

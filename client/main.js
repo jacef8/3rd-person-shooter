@@ -9,6 +9,7 @@ import {
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import * as sfx from '/sound.js';
+import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand, fillBox } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, placementProblem } from '/shared/building.js';
@@ -330,11 +331,14 @@ function setLabel(s, text, color = '#fff') {
   s.userData.text = key;
   const g = s.userData.c.getContext('2d');
   g.clearRect(0, 0, 512, 96);
-  g.font = 'bold 40px Segoe UI, sans-serif';
-  g.textAlign = 'center';
-  g.lineWidth = 6; g.strokeStyle = 'rgba(0,0,0,0.8)';
-  g.strokeText(text, 256, 60);
-  g.fillStyle = color; g.fillText(text, 256, 60);
+  if (!text) { s.userData.tex.needsUpdate = true; return; }
+  // Name tags: sharp text on a solid dark chip (no outline or glow around the letters).
+  g.font = "700 40px 'Atkinson Hyperlegible', 'Segoe UI', sans-serif";
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  const w = Math.min(500, g.measureText(text).width + 36);
+  g.fillStyle = 'rgba(22, 26, 34, 0.92)';
+  g.beginPath(); g.roundRect(256 - w / 2, 18, w, 62, 16); g.fill();
+  g.fillStyle = color; g.fillText(text, 256, 50);
   s.userData.tex.needsUpdate = true;
 }
 
@@ -1515,7 +1519,7 @@ function renderContact() {
     const d = distText(Math.hypot(o.x - state.x, o.z - state.z));
     const row = document.createElement('div');
     row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${def.name} <small style="color:#888">${d} away</small></div><div class="st">${def.desc}</div><div class="at">Reward: ${Object.entries(def.reward).map(([k, v]) => `${v} ${k === 'comms' ? '★' : k}`).join(' · ')} · ${def.xp} XP</div></div>`;
+    row.innerHTML = `<div class="meta"><div class="nm">${def.name} <small class="muted">${d} away</small></div><div class="st">${def.desc}</div><div class="at">Reward: ${Object.entries(def.reward).map(([k, v]) => `${v} ${k === 'comms' ? '★' : k}`).join(' · ')} · ${def.xp} XP</div></div>`;
     const b = btn('Accept', () => send({ t: 'acceptContract', contactId: c.id, id: o.id }));
     b.disabled = state.contracts.length >= 2;
     row.append(b);
@@ -1562,7 +1566,7 @@ function renderContact() {
     const row = document.createElement('div');
     row.className = 'item';
     row.innerHTML = `<div class="meta"><div class="nm">★ ${d.name}</div><div class="st">${sub}${d.level > 1 ? ` · level ${d.level}+` : ''}</div></div>`;
-    if (owned) row.insertAdjacentHTML('beforeend', '<small style="color:#5fd35f">OWNED</small>');
+    if (owned) row.insertAdjacentHTML('beforeend', '<small class="good">OWNED</small>');
     else {
       const b = btn(`★ ${d.field}`, () => send({ t: 'requisition', contactId: c.id, kind, id }));
       b.disabled = me.comms < d.field || me.level < (d.level || 1);
@@ -1576,7 +1580,7 @@ function renderContact() {
 function renderTracker() {
   const el = $('tracker');
   el.innerHTML = state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('') +
-    (state.worldEvents || []).map((e) => `<div style="color:#c77dff">📣 ${e.name} <span>${e.type === 'swing' ? '' : `${distText(Math.hypot(e.x - state.x, e.z - state.z))} · `}${Math.max(0, Math.ceil((e.endsAt - Date.now()) / 60000))} min left</span></div>`).join('');
+    (state.worldEvents || []).map((e) => `<div class="eventc">📣 ${e.name} <span>${e.type === 'swing' ? '' : `${distText(Math.hypot(e.x - state.x, e.z - state.z))} · `}${Math.max(0, Math.ceil((e.endsAt - Date.now()) / 60000))} min left</span></div>`).join('');
 }
 setInterval(() => { if (state.map) renderTracker(); }, 1000);
 
@@ -2009,12 +2013,12 @@ $('name').value = localStorage.getItem('dz_name') || '';
   // Login-screen controller help. Gamepads only exist on HTTPS/localhost pages.
   const hint = $('padhint');
   if (!window.isSecureContext) {
-    hint.innerHTML = '<b style="color:#ff8a2a">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
+    hint.innerHTML = '<b class="accent">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
   } else {
-    hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<br />'
+    hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<span class="more"><br />'
       + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> swap weapon · <b>L3</b> sprint<br />'
       + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
-      + 'The two small buttons: <b>⧉</b> (left) bag, hold to accept an invite · <b>☰</b> (right) map, hold for the crew panel';
+      + 'The two small buttons: <b>⧉</b> (left) bag, hold to accept an invite · <b>☰</b> (right) map, hold for the crew panel</span>';
   }
   if (MOBILE) document.body.classList.add('mobile');
 }
@@ -2490,7 +2494,7 @@ function drawSquadPanel() {
     const row = document.createElement('div');
     row.className = 'item';
     const me = m.id === state.id && m.online;
-    row.innerHTML = `<div class="meta"><div class="nm"><span style="color:${m.online ? '#7dff9a' : '#666'}">●</span> ${m.name} <small style="color:#888">lvl ${m.level} · ${RANK[m.rank]}${me ? ' · you' : m.online ? '' : ' · offline'}</small></div></div>`;
+    row.innerHTML = `<div class="meta"><div class="nm"><span class="${m.online ? 'good' : 'muted'}">●</span> ${m.name} <small class="muted">lvl ${m.level} · ${RANK[m.rank]}${me ? ' · you' : m.online ? '' : ' · offline'}</small></div></div>`;
     if (leader && !me) {
       row.append(btn('Make leader', () => send({ t: 'squad', action: 'leader', pid: m.pid })));
       row.append(m.rank === 'officer' ? btn('Demote', () => send({ t: 'squad', action: 'demote', pid: m.pid })) : btn('Make officer', () => send({ t: 'squad', action: 'officer', pid: m.pid })));
@@ -2512,7 +2516,7 @@ function drawSquadPanel() {
   for (const p of others) {
     const row = document.createElement('div');
     row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${p.name} <small style="color:#888">lvl ${p.level}</small></div></div>`;
+    row.innerHTML = `<div class="meta"><div class="nm">${p.name} <small class="muted">lvl ${p.level}</small></div></div>`;
     if (canInvite) row.append(btn('Crew invite', () => send({ t: 'squad', action: 'invite', id: p.id })));
     row.append(btn('Trade', () => { send({ t: 'ptrade', action: 'request', id: p.id }); }));
     if (lobby.state && !lobby.state.friends.some((f) => f.name === p.name) && !lobby.state.sent.includes(p.name)) row.append(btn('Add friend', () => hubSend({ t: 'friendRequest', name: p.name })));
@@ -3086,7 +3090,7 @@ function renderBuildBar() {
   const pad = state.inputMode === 'pad';
   $('buildbar').innerHTML = `<div class="pieces">${items}</div><div class="bhint">${pad
     ? 'LB/RB piece · X rotate · RT place · A upgrade · Y dismantle · ▶ exit'
-    : '1-9 or F/G piece · R / wheel rotate · Click place · E upgrade · Q dismantle · X exit'}${me.inv.pack.some((i) => i.tool === 'hammer') ? '' : ' · <b style="color:#ff6b6b">You need a hammer</b>'}</div>`;
+    : '1-9 or F/G piece · R / wheel rotate · Click place · E upgrade · Q dismantle · X exit'}${me.inv.pack.some((i) => i.tool === 'hammer') ? '' : ' · <b class="danger">You need a hammer</b>'}</div>`;
 }
 const buildWorldClient = () => ({
   terrain: state.map.terrain, towns: state.map.towns, contacts: state.map.contacts, landingZones: state.map.landingZones,
@@ -3450,14 +3454,15 @@ function renderLobby() {
   if (!st) return;
   const wl = $('lbWorlds'); wl.innerHTML = '';
   for (const w of st.worlds) {
-    const row = document.createElement('div');
-    row.className = 'item';
-    const friends = w.friends.length ? `<div class="st" style="color:#7dff9a">👥 ${w.friends.join(', ')}</div>` : '';
-    row.innerHTML = `<div class="meta"><div class="nm">🌎 ${w.name}</div><div class="st">${w.up ? `${w.online} / ${w.cap} playing` : 'starting…'}</div>${friends}</div>`;
-    const b = btn('Play', () => playWorld(w.id), '');
+    // The world as a card: its name, who's on, which friends are there, and one big Play button.
+    const card = document.createElement('div');
+    card.className = 'lb-world';
+    card.innerHTML = `<div class="lb-wname">${w.name}</div><div class="lb-wstat">${w.up ? `<b>${w.online}</b> of ${w.cap} players on now` : 'Starting up, a few seconds…'}</div>${w.friends.length ? `<div class="lb-wfriends">Friends here: ${w.friends.join(', ')}</div>` : ''}`;
+    const b = btn(w.up ? (w.online >= w.cap ? 'Full right now' : 'Play') : 'Starting…', () => playWorld(w.id), 'lb-play');
+    b.dataset.pad = `play-${w.id}`;
     b.disabled = !w.up || w.online >= w.cap;
-    row.append(b);
-    wl.append(row);
+    card.append(b);
+    wl.append(card);
   }
   renderFriends($('lbFriends'), false);
 }
@@ -3478,7 +3483,7 @@ function renderFriends(el, inGame) {
   srow.append(input, btn('Search', go, ''));
   el.append(srow);
   for (const r of lobby.results || []) {
-    add(`<div class="nm">${r.name} <small style="color:${r.online ? '#7dff9a' : '#777'}">${r.online ? '● online' : 'offline'}</small></div>`,
+    add(`<div class="nm">${r.name} <small class="${r.online ? 'good' : 'muted'}">${r.online ? '● online' : 'offline'}</small></div>`,
       r.friend ? [] : r.requested ? [Object.assign(btn('Requested', () => {}), { disabled: true })] : [btn('Add friend', () => hubSend({ t: 'friendRequest', name: r.name }))]);
   }
   if (st.requests.length) {
@@ -3494,12 +3499,19 @@ function renderFriends(el, inGame) {
     if (inGame && f.online && f.world !== state.worldId) buttons.push(btn('Invite here', () => send({ t: 'squad', action: 'ticket', for: f.name }), ''));
     if (inGame && f.world === state.worldId && !crewNames.has(f.name)) buttons.push(btn('Crew invite', () => send({ t: 'squad', action: 'invite', name: f.name }), ''));
     if (f.world && f.world !== state.worldId) buttons.push(btn(`Join ${f.worldName}`, () => playWorld(f.world)));
-    buttons.push(btn('✕', () => { if (confirm(`Remove ${f.name} from your friends?`)) hubSend({ t: 'unfriend', name: f.name }); }));
-    add(`<div class="nm"><span style="color:${f.online ? '#7dff9a' : '#666'}">●</span> ${f.name} <small style="color:#888">${where}${crewNames.has(f.name) ? ' · your crew' : ''}</small></div>`, buttons);
+    // Removing a friend takes two presses: the first asks, the second does it (no browser pop-up).
+    const rm = btn('Remove', () => {
+      if (rm.dataset.sure) return hubSend({ t: 'unfriend', name: f.name });
+      rm.dataset.sure = '1'; rm.textContent = `Remove ${f.name}? Press again`; rm.className = 'danger-btn';
+      setTimeout(() => { if (rm.isConnected) { delete rm.dataset.sure; rm.textContent = 'Remove'; rm.className = 'ghost'; } }, 4000);
+    });
+    rm.dataset.pad = `rm-${f.name}`;
+    buttons.push(rm);
+    add(`<div class="nm"><span class="${f.online ? 'good' : 'muted'}">●</span> ${f.name} <small class="muted">${where}${crewNames.has(f.name) ? ' · your crew' : ''}</small></div>`, buttons);
   }
   if (st.recent.length) {
     head('Played with recently');
-    for (const r of st.recent) add(`<div class="nm">${r.name} <small style="color:#888">${r.world ? `in ${r.worldName}` : r.online ? 'online' : 'offline'}</small></div>`,
+    for (const r of st.recent) add(`<div class="nm">${r.name} <small class="muted">${r.world ? `in ${r.worldName}` : r.online ? 'online' : 'offline'}</small></div>`,
       st.sent.includes(r.name) ? [Object.assign(btn('Requested', () => {}), { disabled: true })] : [btn('Add friend', () => hubSend({ t: 'friendRequest', name: r.name }))]);
   }
 }
@@ -3533,6 +3545,8 @@ setInterval(() => {
 
 // Start talking to the lobby once everything above exists.
 hubConnect();
+// The lobby's moving map (stops by itself once you're in the game). The right stick leans it too.
+startLobbyFx($('lobbyfx'), { isVisible: () => !$('login').hidden, look: () => { const g = readPad(); return g ? [g.axes[2] || 0, g.axes[3] || 0] : [0, 0]; } });
 
 // ------------------------------------------------------------------ install as an app
 // Phones and computers: the browser's own "Install" (Chrome / Edge) or Add to Home Screen (iPhone).
