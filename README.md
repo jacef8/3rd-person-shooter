@@ -126,6 +126,12 @@ The world is built from open data for the real place, in `data/real/` (about 3.8
   woods are (72% of the map; thick pine flatwoods and hardwoods), where the pasture and cut-over
   ground is open, where the farm fields are and where town lawns are. Trees grow only where the real
   woods are, and the ground and the map are coloured to match.
+- **Infrastructure:** the real cell and radio towers (with their red lights), water towers, storage
+  tanks, substations, power lines on their real steel towers and wooden poles with the wires strung
+  between, the Flowers Creek solar farm, and the railways (the Apalachicola Northern through Hosford
+  and Telogia, the Marianna & Blountstown, and Bristol's park train). Bristol's and Blountstown's
+  boat landings are at their real public ramps, and the map names sheriff's offices, fire stations,
+  the hospital, parks, overlooks and campgrounds (not schools or churches, and no shop brands).
 - **Water:** the Apalachicola follows its real course, with its real width, islands and side channels,
   and 335 real lakes, ponds and reservoirs are cut in (OpenStreetMap, via Overture Maps).
 - **Roads:** every real road, 2,129 stretches of them. 1,234 carry a real name or route number

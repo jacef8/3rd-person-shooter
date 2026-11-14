@@ -9,9 +9,10 @@ export function fillBox(g, b, X, Z, min = 1) {
 }
 /** Map colours: state routes amber, main roads light, streets a shade darker, dirt tracks brown. */
 const roadColor = (r) => (r.dirt ? COL.dirt : r.hw ? COL.route : (r.width || 12) >= 8 ? COL.road : COL.street);
-const HIDDEN = new Set(['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail']);
-const boxColor = (b) => (b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : b.type === 'home' ? COL.home : b.type === 'civic' ? COL.civic : COL.building);
+const HIDDEN = new Set(['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail', 'tower', 'beacon', 'pole', 'fence', 'equipment']);
+const boxColor = (b) => (b.type === 'solar' ? '#2b3a5c' : b.type === 'tank' ? '#d8dde2' : b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : b.type === 'home' ? COL.home : b.type === 'civic' ? COL.civic : COL.building);
 // Label chips: solid panels with sharp text (no outlines or glows).
+const PLACE_INK = { sheriff: '#9cc3ff', 'fire station': '#ff9f8a', hospital: '#ff9f8a', 'gas station': '#ffd27a', prison: '#c9b8ff', overlook: '#9fe39f', park: '#9fe39f', campground: '#9fe39f', 'post office': '#e8e8e8' };
 const CHIP = { bg: '#171a21', line: '#2a2f3a', ink: '#ffffff', road: '#ffd27a', place: '#9fe39f', routeBg: '#1d3f73', routeLine: '#5d8fd6' };
 
 const GC = { plains: [104, 124, 68], forest: [58, 86, 44], desert: [214, 206, 170], mountain: [128, 104, 66], swamp: [52, 68, 40], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
@@ -93,6 +94,15 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   g.strokeStyle = COL.road; g.lineCap = 'round';
   // Minor roads first, highways on top.
   for (const r of [...map.roads].sort((a, b) => (a.hw ? 1 : 0) - (b.hw ? 1 : 0) || (a.width || 12) - (b.width || 12))) { g.strokeStyle = roadColor(r); g.lineWidth = Math.max(r.hw ? 3 : (r.width || 12) >= 8 ? 1.6 : r.dirt ? 0.8 : 1, (r.width || 12) * k); g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke(); }
+  // Power lines (thin grey) and railways (dark, with cross-ties).
+  g.lineCap = 'butt';
+  for (const line of map.powerLines || []) { g.strokeStyle = 'rgba(205,210,218,0.55)'; g.lineWidth = 1; g.beginPath(); line.forEach((q, i) => (i ? g.lineTo(X(q.x), Z(q.z)) : g.moveTo(X(q.x), Z(q.z)))); g.stroke(); }
+  for (const r of map.rails || []) {
+    g.beginPath(); r.pts.forEach(([x, z], i) => (i ? g.lineTo(X(x), Z(z)) : g.moveTo(X(x), Z(z))));
+    g.strokeStyle = '#2b2622'; g.lineWidth = r.narrow ? 1.6 : 2.6; g.setLineDash([]); g.stroke();
+    g.strokeStyle = '#cfc6b8'; g.lineWidth = r.narrow ? 0.6 : 1; g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
+  }
+  g.lineCap = 'round';
   for (const t of map.towns) { g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {
     if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
@@ -103,6 +113,7 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   g.textAlign = 'center';
   // Labels: towns, rivers and lakes, parks and landmarks.
   for (const l of map.labels || map.towns.map((t) => ({ text: t.name, x: t.x, z: t.rect.minZ, kind: 'town' }))) {
+    if (l.kind === 'place') continue;   // public places are named as you zoom in (drawNames)
     const water = l.kind === 'water', lm = l.kind === 'landmark';
     g.font = `${water ? 'italic ' : 'bold '}${Math.round(px / (water ? 105 : lm ? 115 : 85))}px Segoe UI, sans-serif`;
     // Place names on a solid chip (no outline around the letters).
@@ -156,6 +167,8 @@ function drawNames(g, map, roads, v) {
   const list = [...best.values()].sort((a, b) => a.tier - b.tier || b.len - a.len);
   let placed = 0;
   for (const e of list) { if (placed >= 70) break; if (chip(e.name, e.x, e.y, e.tier === -1 ? '#ffc53d' : e.tier === 0 ? '#ffffff' : e.tier === 1 ? CHIP.road : CHIP.ink, e.tier === 0)) placed++; }
+  // Public places (landings, sheriff, fire station, hospital, parks, overlooks...) a little way in.
+  if (v.k > 0.05) for (const l of map.labels || []) if (l.kind === 'place' && l.x > v.minX && l.x < v.maxX && l.z > v.minZ && l.z < v.maxZ) chip(l.text, v.sx(l.x), v.sz(l.z), PLACE_INK[l.place] || CHIP.place);
   // Landmarks once you're in close enough to find them.
   if (v.k > 0.12) for (const b of map.buildings) if (b.name && b.maxX > v.minX && b.minX < v.maxX && b.maxZ > v.minZ && b.minZ < v.maxZ) chip(b.name, v.sx((b.minX + b.maxX) / 2), v.sz(b.minZ) - 12, CHIP.place);
 }

@@ -15,7 +15,7 @@ import { floats } from '../shared/boats.js';
 const REAL = new URL('../data/real/', import.meta.url);
 const rows = (name) => JSON.parse(fs.readFileSync(new URL(name, REAL))).rows;
 const real = () => ({ structures: rows('structures.json'), roads: rows('roads.json'), elevation: parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('elevation.bin.gz', REAL)))),
-  landcover: parseLandcover(zlib.gunzipSync(fs.readFileSync(new URL('landcover.bin.gz', REAL)))) });
+  landcover: parseLandcover(zlib.gunzipSync(fs.readFileSync(new URL('landcover.bin.gz', REAL)))), infrastructure: JSON.parse(fs.readFileSync(new URL('infrastructure.json', REAL), 'utf8')) });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 10000) {
   const end = Date.now() + ms;
@@ -118,7 +118,7 @@ test('the server runs on the real map and hands the same data to clients', async
   await new Promise((r) => ws.on('open', r));
   ws.send(JSON.stringify({ t: 'join', name: 'Surveyor', token: 'ab'.repeat(16) }));
   const welcome = await until(() => got.find((m) => m.t === 'welcome'));
-  assert.deepEqual(welcome.real, { structures: true, roads: true, elevation: true, landcover: true });
+  assert.deepEqual(welcome.real, { structures: true, roads: true, elevation: true, landcover: true, infrastructure: true });
   const map = generateMap(welcome.seed, welcome.size, real());
   assert.equal(mapChecksum(map), welcome.mapSum, 'client and server build the same world');
   ws.send(JSON.stringify({ t: 'deploy', kind: 'contact', id: 0 }));
@@ -147,4 +147,22 @@ test('the real woods are thick, the real farm fields and pasture are open', () =
   assert.ok(avg(per[COVER.woods]) > 120, `woods: ${avg(per[COVER.woods]).toFixed(0)} trees per 128 m square`);
   assert.ok(avg(per[COVER.crops]) < 6, `fields: ${avg(per[COVER.crops]).toFixed(1)} trees`);
   assert.ok(avg(per[COVER.grass]) < 8, `pasture: ${avg(per[COVER.grass]).toFixed(1)} trees`);
+});
+
+test('real infrastructure stands where it really is', () => {
+  const map = generateMap(1337, 30000, real());
+  const count = (t) => map.boxes.filter((b) => b.type === t).length;
+  assert.ok(count('beacon') >= 6, `${count('beacon')} cell and radio towers with their lights`);
+  assert.ok(count('tank') >= 2, 'water towers and tanks');
+  assert.ok(count('equipment') > 20, 'substations');
+  assert.ok(count('solar') > 2000, 'the Flowers Creek solar farm');
+  const supports = map.powerLines.reduce((a, l) => a + l.length, 0);
+  assert.ok(map.powerLines.length > 8 && supports > 400, `${supports} power line supports on ${map.powerLines.length} lines`);
+  assert.ok(map.rails.some((r) => /Marianna and Blountstown/.test(r.name || '')) && map.rails.some((r) => /^AN /.test(r.name || '')), 'the M&B and Apalachicola Northern railways');
+  // Each town's landing is at its real public boat ramp.
+  const landing = (n) => map.docks.find((d) => d.name === n);
+  assert.equal(landing('Bristol Landing').real, 'Liberty County Boat Landing-Bristol');
+  assert.equal(landing('Blountstown Landing').real, 'Neal Landing');
+  assert.ok(map.labels.some((l) => l.kind === 'place' && l.text === 'Alum Bluff Overlook'));
+  assert.ok(!map.labels.some((l) => /school|church/i.test(l.text) && l.kind === 'place'), 'schools and churches are not named');
 });

@@ -60,7 +60,8 @@ async function press(c, done, ms = 9000) {
   throw new Error('timed out pressing E');
 }
 /** A dry spot right by a landing's mooring, to step into a boat from. */
-const bankBy = (d) => ({ x: d.wx + d.nx * 3, z: d.wz + d.nz * 3 });
+/** The first dry ground from a landing's mooring toward its bank (where you'd stand to step aboard). */
+const bankBy = (d) => { let k = 3; while (k < 6.5 && map.terrain.height(d.wx + d.nx * k, d.wz + d.nz * k) < 0.3) k += 0.5; return { x: d.wx + d.nx * k, z: d.wz + d.nz * k }; };
 const myBoat = (c) => c.snap?.boats?.find((b) => b.mine);
 
 test('the map has river landings and swamp camps on the Apalachicola', () => {

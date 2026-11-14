@@ -159,6 +159,7 @@ export const VEHICLE_TYPES = {
  *   roads:      [[name, class, [[lat, lon], ...]], ...]                  real roads, 'track' = dirt
  *   elevation:  the real ground (terrain.parseElevation), with real water cut in
  *   landcover:  what covers the ground (terrain.parseLandcover): real woods, fields, pasture, town
+ *   infrastructure: towers, water towers, substations, power lines, the solar farm, railways, places
  * With structures, every real building becomes a walk-in building on a level pad, each town shrinks
  * to a small compound, and the procedural stand-in buildings (town blocks, farms, roadside
  * homesteads) are left out.
@@ -830,7 +831,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (k >= 400) return null;
       // Mooring: back toward the channel until it's deep enough to float.
       let w = k;
-      while (w > 0 && terrain.exact(c.x + c.nx * w, c.z + c.nz * w) > RIVER.rules.minDepth - 0.5) w -= 0.5;
+      while (w > 0 && Math.max(terrain.exact(c.x + c.nx * w, c.z + c.nz * w), terrain.height(c.x + c.nx * w, c.z + c.nz * w)) > RIVER.rules.minDepth - 0.5) w -= 0.5;
       return { bx: c.x + c.nx * k, bz: c.z + c.nz * k, wx: c.x + c.nx * w, wz: c.z + c.nz * w };
     };
     const addDock = (name, c, extra) => {
@@ -848,9 +849,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       docks.push(d);
       return d;
     };
+    // A town's landing is at its real public boat ramp where there is one near enough.
+    const ramps = (real.infrastructure?.places || []).filter((q) => q[2] === 'landing').map(([lat, lon, , name]) => ({ ...project(lat, lon, size), name }));
     for (const t of towns) {
-      const c = onRiver(t.x, t.z);
-      if (c.d < RIVER.docks.maxFromTown) addDock(`${t.name} Landing`, c, { townId: t.id });
+      const ramp = ramps.filter((q) => Math.hypot(q.x - t.x, q.z - t.z) < RIVER.docks.maxFromTown).sort((a, b) => Math.hypot(a.x - t.x, a.z - t.z) - Math.hypot(b.x - t.x, b.z - t.z))[0];
+      const c = onRiver(ramp ? ramp.x : t.x, ramp ? ramp.z : t.z);
+      if (ramp || c.d < RIVER.docks.maxFromTown) addDock(`${t.name} Landing`, c, { townId: t.id, ...(ramp ? { real: ramp.name } : {}) });
     }
     // Swamp camps: out in the floodplain, away from towns and roads.
     const C = RIVER.camps;
@@ -905,6 +909,111 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   box(-half - 2, -half, -half, half, 300, 'border', { y0: -50 });
   box(half, -half, half + 2, half, 300, 'border', { y0: -50 });
 
+  // ---- real infrastructure (tools/import_real_world.py): cell and radio towers, water towers, tanks,
+  // substations, power lines on their real steel towers and wooden poles, the solar farm and the
+  // railways. Built last, and never on top of anything already standing.
+  const infra = real.infrastructure || null;
+  const powerLines = [], rails = [];
+  const railGrid = new SpatialGrid(half + 4, 64);
+  if (infra) {
+    const P = (ll) => project(ll[0], ll[1], size);
+    const onMap = (x, z, m = 30) => Math.abs(x) < half - m && Math.abs(z) < half - m;
+    const lowest = (x, z, r) => Math.min(terrain.exact(x - r, z - r), terrain.exact(x + r, z - r), terrain.exact(x - r, z + r), terrain.exact(x + r, z + r), terrain.exact(x, z));
+    const open = (x, z, r) => onMap(x, z) && !solidAt(x - r, z - r, x + r, z + r) && lowest(x, z, r) > 0.4;
+    const obox = (cx, cz, hw, hd, ang, h, y0, type) => { const b = orientedBox(cx, cz, hw, hd, ang, { id: boxes.length, h, y0, type }); boxes.push(b); grid.insert(b); return b; };
+    /** A steel lattice tower: tapering sections, a platform, a red light on top. */
+    const lattice = (x, z, base, height, light = true) => {
+      const y = lowest(x, z, base / 2) - 0.3, n = 6, sh = height / n;
+      for (let k = 0; k < n; k++) { const w = base * (1 - k / (n + 1.5)) / 2; box(x - w, z - w, x + w, z + w, sh + 0.05, 'tower', { y0: y + k * sh }); }
+      if (light) box(x - 0.35, z - 0.35, x + 0.35, z + 0.35, 0.7, 'beacon', { y0: y + height });
+      return y;
+    };
+    for (const [lat, lon, kind] of infra.towers || []) {
+      const { x, z } = P([lat, lon]);
+      if (!open(x, z, 7)) continue;
+      const height = kind === 'radio' ? 95 : 55, y = lattice(x, z, kind === 'radio' ? 4.5 : 3.2, height);
+      box(x - 2.4, z - 2.4, x + 2.4, z + 2.4, 0.5, 'tower', { y0: y + height - 4 });   // the antenna platform
+      // The fenced yard and the equipment shed at its foot.
+      for (const [a, b, c, d] of [[-7, -7, 7, -6.9], [-7, 6.9, 7, 7], [-7, -7, -6.9, 7], [6.9, -7, 7, 2]]) box(x + a, z + b, x + c, z + d, 2.4, 'fence', { y0: lowest(x, z, 7) - 0.2 });
+      box(x + 3, z + 3, x + 6, z + 6, 2.8, 'equipment', { y0: lowest(x + 4.5, z + 4.5, 1.5) - 0.2 });
+    }
+    for (const ll of infra.waterTowers || []) {
+      const { x, z } = P(ll);
+      if (!open(x, z, 6)) continue;
+      const y = lowest(x, z, 4) - 0.3;
+      for (const [a, b] of [[-3.2, -3.2], [3.2, -3.2], [-3.2, 3.2], [3.2, 3.2]]) box(x + a - 0.3, z + b - 0.3, x + a + 0.3, z + b + 0.3, 31, 'tower', { y0: y });
+      box(x - 0.4, z - 0.4, x + 0.4, z + 0.4, 31, 'tower', { y0: y });
+      box(x - 5, z - 5, x + 5, z + 5, 8, 'tank', { y0: y + 30 });
+    }
+    for (const [lat, lon, dm] of infra.tanks || []) {
+      const { x, z } = P([lat, lon]), r = dm / 2;
+      if (open(x, z, r + 1)) box(x - r, z - r, x + r, z + r, 9, 'tank', { y0: lowest(x, z, r) - 0.3 });
+    }
+    for (const [lat, lon, w, d, angDeg] of infra.substations || []) {
+      const { x, z } = P([lat, lon]), ang = angDeg * Math.PI / 180, ca = Math.cos(ang), sa = Math.sin(ang);
+      const ex = (Math.abs(ca) * w + Math.abs(sa) * d) / 2, ez = (Math.abs(sa) * w + Math.abs(ca) * d) / 2;
+      if (!onMap(x, z, 40) || solidAt(x - ex, z - ez, x + ex, z + ez) || lowest(x, z, Math.max(ex, ez)) < 0.4) continue;
+      const y = lowest(x, z, Math.max(ex, ez)) - 0.2, W = (lx, lz) => [x + lx * ca - lz * sa, z + lx * sa + lz * ca];
+      for (const [lx, lz, hw, hd] of [[0, -d / 2, w / 2, 0.08], [0, d / 2, w / 2, 0.08], [-w / 2, 0, 0.08, d / 2], [w / 2, -d / 4, 0.08, d / 4]]) { const [cx, cz] = W(lx, lz); obox(cx, cz, hw, hd, ang, 2.6, y, 'fence'); }
+      let n = 0;
+      for (let lx = -w / 2 + 6; lx < w / 2 - 4 && n < 24; lx += 9) for (let lz = -d / 2 + 6; lz < d / 2 - 4 && n < 24; lz += 8, n++) {
+        const [cx, cz] = W(lx, lz);
+        obox(cx, cz, 1.6, 1.2, ang, 3.2, y, 'equipment');
+        obox(cx, cz, 0.15, 0.15, ang, 7, y, 'tower');   // a bus-bar post above it
+      }
+    }
+    // Power lines: a support at every real tower and pole (and in between where the data skips some),
+    // with the line's direction for its cross-arm. Wires are drawn by the client between them.
+    for (const run of infra.powerLines || []) {
+      const pts = run.map((q) => ({ ...P(q), kind: q[2] }));
+      const line = [];
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[i + 1];
+        line.push(a);
+        if (!b) break;
+        const len = Math.hypot(b.x - a.x, b.z - a.z), gap = a.kind === 'pylon' && b.kind === 'pylon' ? 240 : 70, extra = Math.floor(len / gap);
+        for (let k = 1; k <= extra && len > gap * 1.4; k++) line.push({ x: a.x + (b.x - a.x) * k / (extra + 1), z: a.z + (b.z - a.z) * k / (extra + 1), kind: a.kind === 'pylon' || b.kind === 'pylon' ? 'pylon' : 'pole' });
+      }
+      const sup = [];
+      for (let i = 0; i < line.length; i++) {
+        const q = line[i], prev = line[Math.max(0, i - 1)], next = line[Math.min(line.length - 1, i + 1)];
+        const ang = Math.atan2(next.z - prev.z, next.x - prev.x) + Math.PI / 2;   // the cross-arm runs across the line
+        const pylon = q.kind === 'pylon', top = pylon ? 26 : 10.5;
+        let y = terrain.exact(q.x, q.z);
+        if (onMap(q.x, q.z, 5) && y > 0.4 && !solidAt(q.x - 1.5, q.z - 1.5, q.x + 1.5, q.z + 1.5)) {
+          if (pylon) y = lattice(q.x, q.z, 2.4, top, false);
+          else { y -= 0.4; box(q.x - 0.17, q.z - 0.17, q.x + 0.17, q.z + 0.17, top + 0.4, 'pole', { y0: y }); }
+          obox(q.x, q.z, pylon ? 6 : 1.3, 0.2, ang, 0.35, y + top - 1, pylon ? 'tower' : 'pole');
+        }
+        sup.push({ x: q.x, z: q.z, y: y + top - 0.8, ang, pylon });
+      }
+      if (sup.length > 1) powerLines.push(sup);
+    }
+    // The solar farm: rows of panel tables running east-west, 7 m apart.
+    for (const ring of infra.solar || []) {
+      const poly = ring.map((q) => { const p = P(q); return [p.x, p.z]; });
+      const xs = poly.map((p) => p[0]), zs = poly.map((p) => p[1]);
+      const inPoly = (x, z) => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, zi] = poly[i], [xj, zj] = poly[j]; if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c; } return c; };
+      for (let z = Math.min(...zs) + 6; z < Math.max(...zs) - 6; z += 7) for (let x = Math.min(...xs) + 4; x < Math.max(...xs) - 30; x += 32) {
+        if (!inPoly(x, z) || !inPoly(x + 28, z) || !onMap(x + 14, z, 20)) continue;
+        const g0 = terrain.exact(x, z), g1 = terrain.exact(x + 28, z);
+        if (Math.min(g0, g1) < 0.4 || Math.abs(g1 - g0) > 2.5 || solidAt(x, z - 2, x + 28, z + 2)) continue;
+        box(x, z - 1.9, x + 28, z + 1.9, 0.3, 'solar', { y0: Math.max(g0, g1) + 1.1 });
+        box(x + 13.8, z - 0.15, x + 14.2, z + 0.15, Math.max(g0, g1) + 1.1 - Math.min(g0, g1) + 0.3, 'tower', { y0: Math.min(g0, g1) - 0.3 });   // the post it stands on
+      }
+    }
+    // Railways: drawn by the client; kept clear of trees.
+    for (const r of infra.rail || []) {
+      const pts = r.pts.map((q) => { const p = P(q); return [p.x, p.z]; });
+      rails.push({ name: r.name || null, narrow: !!r.narrow, pts });
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [x1, z1] = pts[i], [x2, z2] = pts[i + 1];
+        railGrid.insert({ minX: Math.min(x1, x2) - 4, minZ: Math.min(z1, z2) - 4, maxX: Math.max(x1, x2) + 4, maxZ: Math.max(z1, z2) + 4, x1, z1, x2, z2 });
+      }
+    }
+  }
+  const nearRail = (x, z, r) => railGrid.near(x, z, r).some((s) => segDist(x, z, s.x1, s.z1, s.x2, s.z2).d < r);
+
   const free = (p, r = 1.0) => { const gh = terrain.exact(p.x, p.z); return gh > 0.3 && !grid.near(p.x, p.z, r + 1, [], true).some((b) => circleOverlapsBox(p.x, p.z, r, b) && b.type !== 'caveroof' && b.type !== 'canopy' && !(b.y0 > gh + 2)); };
   for (const p of [...landingZones, ...campSites]) for (let k = 0; k < 10 && !free(p, 3); k++) { p.x += 7; p.z += 3; }
   const spawns = lootSpawns.filter((p) => free(p));
@@ -942,7 +1051,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       for (let k = 0; k < cand; k++) {
         const [x, z] = spot(1), c = terrain.cover(x, z), keep = KEEP[c] || 0, roll = r(), kind = r(), tall = r();
         if (roll >= keep) continue;
-        if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
+        if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || nearRail(x, z, 4) || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
         const pine = c === COVER.marsh ? false : c === COVER.scrub ? true : pineTile ? kind < 0.85 : kind < 0.3;
         add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, c === COVER.scrub ? 5 + tall * 6 : (pine ? 15 : 10) + tall * 9, pine ? 'pine' : 'tree');
       }
@@ -1006,11 +1115,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...geo.rivers.map(riverLabel).filter(Boolean),
     ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })).filter(onMap),
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
+    ...(infra?.places || []).filter(([lat, lon, kind]) => kind !== 'landing').map(([lat, lon, kind, text]) => ({ ...project(lat, lon, size), text, kind: 'place', place: kind })).filter(onMap),
   ];
   return {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
-    docks, camps, river: river ? river.pts : null,
+    docks, camps, river: river ? river.pts : null, powerLines, rails,
     /** The trees in one 128 m countryside tile, for drawing far-off woods without loading them into the world. */
     natureTile: (tx, tz) => natureTile(tx, tz, terrain.exact).filter((b) => b.type === 'tree' || b.type === 'pine'), natureTileSize: NATURE_TILE,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },

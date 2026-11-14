@@ -113,9 +113,10 @@ async function loadRealData(info) {
       return r.ok ? parseLandcover(new Uint8Array(await r.arrayBuffer())) || undefined : undefined;
     } catch { return undefined; }
   };
-  const [structures, roads, elev, cover] = await Promise.all([info.structures ? get('structures.json') : undefined, info.roads ? get('roads.json') : undefined,
-    info.elevation ? elevation() : undefined, info.landcover ? landcover() : undefined]);
-  return { structures, roads, elevation: elev, landcover: cover };
+  const whole = async (name) => { try { const r = await fetch(`/data/real/${name}`); return r.ok ? await r.json() : undefined; } catch { return undefined; } };
+  const [structures, roads, elev, cover, infrastructure] = await Promise.all([info.structures ? get('structures.json') : undefined, info.roads ? get('roads.json') : undefined,
+    info.elevation ? elevation() : undefined, info.landcover ? landcover() : undefined, info.infrastructure ? whole('infrastructure.json') : undefined]);
+  return { structures, roads, elevation: elev, landcover: cover, infrastructure };
 }
 
 function initWorld(m) {

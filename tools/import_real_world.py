@@ -7,6 +7,8 @@
   3. data/real/roads.json        every real road with its real name or route number
   4. data/real/elevation.bin.gz  real ground elevation, with the real rivers, lakes and ponds cut in
   5. data/real/landcover.bin.gz  what covers the ground: woods, farm fields, pasture, town, marsh
+  6. data/real/infrastructure.json  towers, water towers, substations, power lines, the solar farm,
+     railways, boat landings and public places for the map
 
     pip install pyarrow shapely numpy pillow tifffile imagecodecs pyproj
     python3 tools/import_real_world.py
@@ -51,7 +53,7 @@ from shapely.ops import linemerge, substring
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUCKET = 'https://overturemaps-us-west-2.s3.amazonaws.com/'
 MAP_JSON = os.path.join(ROOT, 'shared', 'data', 'map-bristol.json')
-STEPS = ['rivers', 'highways', 'buildings', 'roads', 'elevation', 'landcover']
+STEPS = ['rivers', 'highways', 'buildings', 'roads', 'elevation', 'landcover', 'infrastructure']
 
 ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
 ap.add_argument('--release', default=None, help='Overture release, e.g. 2026-10-21.0 (default: the latest)')
@@ -765,6 +767,101 @@ def write_landcover():
     print(f'wrote a {n} x {n} land cover grid ({step:g} m) to {p} ({os.path.getsize(p) / 1e6:.2f} MB)')
 
 
+# ------------------------------------------------------------------ infrastructure
+PLACE_KINDS = [   # (Overture place category or name pattern, kind, keep the real name?)
+    (r'boat_service|boat_ramp|marina|landing$', 'landing', True), (r'fire_station', 'fire station', True),
+    (r'police_station', 'sheriff', True), (r'^hospital$', 'hospital', True), (r'post_office', 'post office', False),
+    (r'gas_station', 'gas station', False), (r'jail_or_prison', 'prison', True), (r'campground|rv_park', 'campground', True),
+    (r'^park$', 'park', True)]
+
+
+def write_infrastructure():
+    """infrastructure.json: the real towers, water towers, tanks, substations, power lines (with which
+    supports are steel towers and which are wooden poles), the solar farm, the railways, and a few kinds
+    of public place for the map (landings, fire stations, sheriff, hospital, gas stations, parks...).
+    Schools and churches are left out on purpose, and so are shop and brand names."""
+    inside = lambda lat, lon: BBOX[1] <= lat <= BBOX[3] and BBOX[0] <= lon <= BBOX[2]
+    ll = lambda x, y: [round(y, 6), round(x, 6)]
+    t = fetch('infrastructure', 'theme=base/type=infrastructure', ['id', 'geometry', 'subtype', 'class', 'names'])
+    d = t.to_pydict()
+    geoms = [wkb.loads(g) for g in d['geometry']]
+    name = lambda i: (d['names'][i] or {}).get('primary')
+    out = {'source': f'Overture Maps Foundation, release {RELEASE} (OpenStreetMap). See ATTRIBUTION.md.',
+           'towers': [], 'waterTowers': [], 'tanks': [], 'substations': [], 'powerLines': [], 'solar': [], 'rail': [], 'places': []}
+    lon0, lat0 = (BBOX[0] + BBOX[2]) / 2, (BBOX[1] + BBOX[3]) / 2
+    m_lon, m_lat = 111320 * math.cos(math.radians(lat0)), 110540
+    pts_of = lambda cls: np.array([[geoms[i].x, geoms[i].y] for i in range(t.num_rows) if d['class'][i] == cls and geoms[i].geom_type == 'Point']).reshape(-1, 2)
+    pylons, poles = pts_of('power_tower'), pts_of('power_pole')
+    near = (lambda P, x, y: len(P) and (np.hypot((P[:, 0] - x) * m_lon, (P[:, 1] - y) * m_lat).min() < 15))
+    for i in range(t.num_rows):
+        g, cls = geoms[i], d['class'][i]
+        c = g.centroid
+        if cls in ('mobile_phone_tower', 'communication_tower') and inside(c.y, c.x):
+            out['towers'].append(ll(c.x, c.y) + ['radio' if cls == 'communication_tower' else 'cell'])
+        elif cls == 'water_tower' and inside(c.y, c.x):
+            out['waterTowers'].append(ll(c.x, c.y))
+        elif cls == 'storage_tank' and inside(c.y, c.x):
+            out['tanks'].append(ll(c.x, c.y) + [round(max(8.0, min(30.0, 2 * math.sqrt(max(g.area * m_lon * m_lat, 1) / math.pi))), 1)])
+        elif cls == 'substation' and inside(c.y, c.x) and g.geom_type.endswith('Polygon'):
+            f = footprint(g, lon0, lat0, m_lon, m_lat)
+            if f:
+                out['substations'].append(ll(c.x, c.y) + [round(max(12, f[1]), 1), round(max(10, f[2]), 1), round(f[0], 1)])
+        elif cls == 'plant' and g.geom_type.endswith('Polygon'):
+            for poly in getattr(g, 'geoms', [g]):
+                poly = poly.intersection(shp_box(*BBOX))
+                for q in getattr(poly, 'geoms', [poly]):
+                    if q.geom_type == 'Polygon' and q.area * m_lon * m_lat > 5000:
+                        out['solar'].append([ll(x, y) for x, y in q.exterior.coords])
+        elif cls in ('power_line', 'minor_line') and g.geom_type == 'LineString':
+            cs = list(g.coords)
+            kinds = ['pylon' if near(pylons, x, y) else 'pole' if near(poles, x, y) else None for x, y in cs]
+            known = [k for k in kinds if k]
+            default = max(set(known), key=known.count) if known else ('pylon' if g.length * m_lon > 3000 else 'pole')
+            run = []
+            for (x, y), k in zip(cs, kinds):
+                if inside(y, x):
+                    run.append(ll(x, y) + [k or default])
+                elif run:
+                    if len(run) > 1: out['powerLines'].append(run)
+                    run = []
+            if len(run) > 1:
+                out['powerLines'].append(run)
+        elif cls in ('viewpoint', 'camp_site') and name(i) and inside(c.y, c.x):
+            out['places'].append(ll(c.x, c.y) + ['overlook' if cls == 'viewpoint' else 'campground', name(i)])
+    # Railways (in the transportation theme alongside the roads).
+    r = fetch('roads', 'theme=transportation/type=segment', ['id', 'geometry', 'subtype', 'class', 'subclass', 'names', 'routes', 'connectors', 'road_surface']).to_pydict()
+    for i in range(len(r['id'])):
+        if r['subtype'][i] != 'rail':
+            continue
+        g = wkb.loads(r['geometry'][i]).intersection(shp_box(*BBOX))
+        for part in getattr(g, 'geoms', [g]):
+            if part.geom_type == 'LineString' and part.length * m_lon > 20:
+                out['rail'].append({'name': (r['names'][i] or {}).get('primary'), 'narrow': r['class'][i] == 'narrow_gauge', 'pts': [ll(x, y) for x, y in part.coords]})
+    # Public places, for the map.
+    pl = fetch('places', 'theme=places/type=place', ['id', 'geometry', 'names', 'basic_category', 'taxonomy', 'confidence']).to_pydict()
+    for i in range(len(pl['id'])):
+        cat = (pl['taxonomy'][i] or {}).get('primary') or pl['basic_category'][i] or ''
+        nm = (pl['names'][i] or {}).get('primary') or ''
+        for pat, kind, keep in PLACE_KINDS:
+            if re.search(pat, cat) or (kind == 'landing' and re.search(r'(boat )?landing$', nm, re.I) and 'RV' not in nm):
+                if kind == 'hospital' and 'Hospital' not in nm:
+                    break
+                g = wkb.loads(pl['geometry'][i])
+                if not inside(g.y, g.x):
+                    break
+                label = nm if keep else kind.capitalize()
+                if 'Business Office' in nm or any(q[2] == kind and ((keep and q[3] == label) or (abs(q[0] - g.y) < 0.0007 and abs(q[1] - g.x) < 0.0007)) for q in out['places']):
+                    break
+                out['places'].append(ll(g.x, g.y) + [kind, label])
+                break
+    os.makedirs(args.out, exist_ok=True)
+    p = os.path.join(args.out, 'infrastructure.json')
+    with open(p, 'w') as fh:
+        json.dump(out, fh, separators=(',', ':'), ensure_ascii=False)
+    print('infrastructure: ' + ', '.join(f'{len(v)} {k}' for k, v in out.items() if isinstance(v, list)) + f'; {sum(len(l) for l in out["powerLines"])} line supports')
+    print(f'wrote {p} ({os.path.getsize(p) / 1e3:.0f} KB)')
+
+
 # ------------------------------------------------------------------ output
 def write_json(name, rows):
     os.makedirs(args.out, exist_ok=True)
@@ -783,6 +880,7 @@ Made by `tools/import_real_world.py` from open data. Keep this file with the dat
 | `structures.json` | Building footprints, heights and landmark names | Overture Maps Foundation, release {release}. Footprints from **Microsoft ML Building Footprints** (CDLA Permissive 2.0) and **OpenStreetMap** contributors (ODbL 1.0). |
 | `roads.json` | Roads, their names and route numbers | Overture Maps Foundation, release {release}; road data **© OpenStreetMap contributors** (ODbL 1.0). |
 | `landcover.bin.gz` | What covers the ground: woods, fields, pasture, town, marsh | **ESA WorldCover 10 m 2021 v200** © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0). |
+| `infrastructure.json` | Towers, water towers, substations, power lines, the solar farm, railways, landings and public places | Overture Maps Foundation, release {release}: infrastructure and transportation **© OpenStreetMap contributors** (ODbL 1.0); places from Overture's places data (CDLA Permissive 2.0). |
 | `elevation.bin.gz` | Ground elevation, with rivers, lakes and ponds cut in | **USGS 3D Elevation Program** 1 m lidar DEM, FL Hurricane Michael 2020 survey (public domain); **AWS Terrain Tiles** (USGS 3DEP 1/3 arc-second) where the lidar has no value. Water outlines **© OpenStreetMap contributors** (ODbL 1.0) via Overture. |
 
 The river's course and the highway lines in `shared/data/map-bristol.json` also come from
@@ -812,6 +910,8 @@ if 'elevation' in ONLY:
     write_elevation(water, segs)
 if 'landcover' in ONLY:
     write_landcover()
+if 'infrastructure' in ONLY:
+    write_infrastructure()
 os.makedirs(args.out, exist_ok=True)
 with open(os.path.join(args.out, 'ATTRIBUTION.md'), 'w') as fh:
     fh.write(ATTRIBUTION.format(release=RELEASE))

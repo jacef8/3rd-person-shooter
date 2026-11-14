@@ -74,10 +74,10 @@ const REAL_DIR = process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real');
 const readReal = (name) => { try { return JSON.parse(fs.readFileSync(path.join(REAL_DIR, name), 'utf8')); } catch { return null; } };
 const readElevation = () => { try { return parseElevation(zlib.gunzipSync(fs.readFileSync(path.join(REAL_DIR, 'elevation.bin.gz')))); } catch { return null; } };
 const readLandcover = () => { try { return parseLandcover(zlib.gunzipSync(fs.readFileSync(path.join(REAL_DIR, 'landcover.bin.gz')))); } catch { return null; } };
-const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json'), elevation: readElevation(), landcover: readLandcover() };
-const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.rows, roads: realFiles.roads?.rows, elevation: realFiles.elevation, landcover: realFiles.landcover });
+const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json'), elevation: readElevation(), landcover: readLandcover(), infrastructure: readReal('infrastructure.json') };
+const map = generateMap(SEED, WORLD_SIZE, { structures: realFiles.structures?.rows, roads: realFiles.roads?.rows, elevation: realFiles.elevation, landcover: realFiles.landcover, infrastructure: realFiles.infrastructure });
 // Clients fetch the same files so they generate the identical world.
-const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation, landcover: !!realFiles.landcover } : null;
+const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation, landcover: !!realFiles.landcover, infrastructure: !!realFiles.infrastructure } : null;
 const grid = map.grid;
 const terrain = map.terrain;
 /** Look something up by a key a client sent: only the table's own entries count (never 'constructor'

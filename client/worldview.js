@@ -17,6 +17,8 @@ const COLORS = {
   boulder: [0.44, 0.42, 0.4], cactus: [0.3, 0.5, 0.25], cavewall: [0.38, 0.36, 0.34], caveroof: [0.4, 0.38, 0.35],
   rockwall: [0.62, 0.5, 0.38], logwall: [0.36, 0.25, 0.16], plankwall: [0.55, 0.42, 0.28], jetty: [0.5, 0.38, 0.25],
   roomwall: [0.66, 0.63, 0.58], dam: [0.62, 0.62, 0.6], scrub: [0.35, 0.42, 0.24],
+  tower: [0.6, 0.62, 0.64], beacon: [0.9, 0.12, 0.08], tank: [0.86, 0.88, 0.9], fence: [0.56, 0.58, 0.6], equipment: [0.5, 0.55, 0.5],
+  pole: [0.38, 0.28, 0.19], solar: [0.12, 0.16, 0.28],
 };
 // Each real building is painted one colour (picked by its id), so a street isn't all the same.
 const HOME_COLORS = [[0.9, 0.88, 0.82], [0.82, 0.8, 0.72], [0.74, 0.79, 0.82], [0.86, 0.8, 0.62], [0.64, 0.72, 0.64], [0.72, 0.62, 0.52], [0.6, 0.62, 0.65], [0.8, 0.72, 0.68], [0.68, 0.44, 0.36], [0.52, 0.58, 0.64]];
@@ -175,7 +177,41 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
   const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
   const canopyGeo = new THREE.IcosahedronGeometry(1, 1);
   const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2d4f25, roughness: 1, flatShading: true });
-  const shared = new Set([trunkGeo, crownGeo, farCrownGeo, canopyGeo, waterGeo]);
+  const tankGeo = new THREE.CylinderGeometry(1, 1, 1, 20);
+  tankGeo.translate(0, 0.5, 0);
+  const tankMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, roughness: 0.6, metalness: 0.2 });
+  const shared = new Set([trunkGeo, crownGeo, farCrownGeo, canopyGeo, waterGeo, tankGeo]);
+  // Power line wires, strung between the real towers and poles with a little sag.
+  if (map.powerLines?.length) {
+    const pos = [];
+    for (const line of map.powerLines) for (let i = 0; i < line.length - 1; i++) {
+      const a = line[i], b = line[i + 1], span = Math.hypot(b.x - a.x, b.z - a.z);
+      if (span > 700 || span < 1) continue;
+      const offs = a.pylon && b.pylon ? [-5.4, 0, 5.4] : [-1.1, 0, 1.1], sag = Math.min(8, span * 0.03);
+      for (const o of offs) {
+        const ax = a.x + Math.cos(a.ang) * o, az = a.z + Math.sin(a.ang) * o, bx = b.x + Math.cos(b.ang) * o, bz = b.z + Math.sin(b.ang) * o;
+        let px = ax, py = a.y, pz = az;
+        for (let k = 1; k <= 10; k++) {
+          const t = k / 10, x = ax + (bx - ax) * t, z = az + (bz - az) * t, y = a.y + (b.y - a.y) * t - sag * 4 * t * (1 - t);
+          pos.push(px, py, pz, x, y, z); px = x; py = y; pz = z;
+        }
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    const wires = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x24262a }));
+    scene.add(wires);
+  }
+  // Railway segments bucketed by chunk (drawn with the roads).
+  const railIn = new Map();
+  for (const r of map.rails || []) for (let i = 0; i < r.pts.length - 1; i++) {
+    const [x1, z1] = r.pts[i], [x2, z2] = r.pts[i + 1], seg = { x1, z1, x2, z2, narrow: r.narrow };
+    for (let cx = Math.floor(Math.min(x1, x2) / CHUNK); cx <= Math.floor(Math.max(x1, x2) / CHUNK); cx++) for (let cz = Math.floor(Math.min(z1, z2) / CHUNK); cz <= Math.floor(Math.max(z1, z2) / CHUNK); cz++) {
+      const k = key(cx, cz);
+      if (!railIn.has(k)) railIn.set(k, []);
+      railIn.get(k).push(seg);
+    }
+  }
 
   // ------------------------------------------------------------------ the far scene
   const far = new THREE.Scene();
@@ -242,6 +278,7 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
   // Roads are their own surface laid on the ground, so they stay crisp (the ground mesh has a point
   // only every 8 m, which smeared a 6 m road into the grass). Asphalt with a yellow centre line on
   // main roads, a double line on state routes, brown on dirt tracks.
+  const RAIL_COL = { bed: [0.45, 0.42, 0.38], tie: [0.3, 0.22, 0.16], steel: [0.62, 0.6, 0.58] };
   const ROAD_COL = { asphalt: [0.27, 0.28, 0.3], route: [0.25, 0.26, 0.28], dirt: [0.55, 0.45, 0.31], line: [0.92, 0.74, 0.2], edge: [0.85, 0.85, 0.82] };
   const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
   /** Height of the drawn ground mesh itself (the same 8 m triangles), so a road never sinks into it. */
@@ -300,6 +337,31 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
           // A dashed centre line: 3 m painted, 3 m gap.
           for (let k = 0; k < pts.length - 1; k += 2) strip([pts[k], [(pts[k][0] + pts[k + 1][0]) / 2, (pts[k][1] + pts[k + 1][1]) / 2]], 0.13, ROAD_COL.line, 0.08);
         }
+      }
+    }
+    // Railways: a gravel bed, cross-ties, and two steel rails.
+    for (const r of railIn.get(key(Math.floor(x0 / CHUNK), Math.floor(z0 / CHUNK))) || []) {
+      const len = Math.hypot(r.x2 - r.x1, r.z2 - r.z1);
+      if (len < 0.5) continue;
+      const ux = (r.x2 - r.x1) / len, uz = (r.z2 - r.z1) / len, n = Math.max(1, Math.ceil(len / 3));
+      const pt = (t) => [r.x1 + (r.x2 - r.x1) * t, r.z1 + (r.z2 - r.z1) * t];
+      const runs = [];
+      let run = [];
+      for (let k = 0; k < n; k++) {
+        const [mx, mz] = pt((k + 0.5) / n);
+        if (!(mx >= x0 && mx < x0 + CHUNK && mz >= z0 && mz < z0 + CHUNK && terrain.drawn(mx, mz) > 0.15)) { if (run.length > 1) runs.push(run); run = []; continue; }
+        if (!run.length) run.push(pt(k / n));
+        run.push(pt((k + 1) / n));
+      }
+      if (run.length > 1) runs.push(run);
+      const gauge = r.narrow ? 0.45 : 0.72, off = (d, pts) => pts.map(([x, z]) => [x - uz * d, z + ux * d]);
+      for (const pts of runs) {
+        strip(pts, r.narrow ? 1.1 : 1.8, RAIL_COL.bed, 0.1);
+        for (let k = 0; k < pts.length - 1; k++) for (const f of [0, 0.5]) {
+          const x = pts[k][0] + (pts[k + 1][0] - pts[k][0]) * f, z = pts[k][1] + (pts[k + 1][1] - pts[k][1]) * f, w = gauge + 0.45;
+          strip([[x - ux * 0.13, z - uz * 0.13], [x + ux * 0.13, z + uz * 0.13]], w, RAIL_COL.tie, 0.16);
+        }
+        for (const d of [gauge, -gauge]) strip(off(d, pts), 0.05, RAIL_COL.steel, 0.24);
       }
     }
     if (!idx.length) return null;
@@ -401,12 +463,13 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
     const office = newBuf(true), siding = newBuf(true), plain = newBuf(false), roof = newBuf(false);
-    const trees = [], pines = [], canopies = [];
+    const trees = [], pines = [], canopies = [], tanks = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
       if (b.type === 'tree') { trees.push(b); continue; }
       if (b.type === 'pine') { pines.push(b); continue; }
       if (b.type === 'canopy') { canopies.push(b); continue; }
+      if (b.type === 'tank') { tanks.push(b); continue; }
       const [c, tex] = paint(b);
       pushBox(tex === 'office' ? office : tex === 'siding' ? siding : plain, b, c, tex ? 4 : 0);
     }
@@ -452,6 +515,13 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
     };
     forest(trees, crownMat, 2.2);
     forest(pines, pineMat, 1.4);
+    for (const t of tanks) {   // water tower tanks and storage tanks are round
+      const m = new THREE.Mesh(tankGeo, tankMat);
+      m.position.set((t.minX + t.maxX) / 2, t.y0, (t.minZ + t.maxZ) / 2);
+      m.scale.set((t.maxX - t.minX) / 2, t.h, (t.maxZ - t.minZ) / 2);
+      m.castShadow = true;
+      group.add(m);
+    }
     for (const c of canopies) {
       const m = new THREE.Mesh(canopyGeo, canopyMat);
       m.position.set((c.minX + c.maxX) / 2, c.y0 + c.h / 2, (c.minZ + c.maxZ) / 2);
