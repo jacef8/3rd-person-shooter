@@ -922,11 +922,21 @@ function pawnView(p) {
   const G = (g) => HOMESTEAD.goods[g]?.name || g;
   return { town: PAWN.name, who: PAWN.keeper, pawn: true,
     sells: Object.keys(ECONOMY.prices).map((g) => ({ good: g, pays: Math.max(1, Math.floor(ECONOMY.prices[g] * PAWN.goodsPays)), name: G(g) })),
-    shop: Object.entries(ECONOMY.shop).filter(([k]) => !k.startsWith('_')).map(([k, it]) => ({ id: k, name: it.name || G(k), price: it.kind === 'good' && ECONOMY.prices[k] ? Math.max(it.price, Math.round(ECONOMY.prices[k] * PAWN.goodsMarkup)) : it.price, qty: it.qty || 1 })),
+    shop: [{ id: 'rescueFlare', name: 'Rescue flare (calls the helicopter from anywhere)', price: FLARE.price, qty: 1 },
+      ...Object.entries(ECONOMY.shop).filter(([k]) => !k.startsWith('_')).map(([k, it]) => ({ id: k, name: it.name || G(k), price: it.kind === 'good' && ECONOMY.prices[k] ? Math.max(it.price, Math.round(ECONOMY.prices[k] * PAWN.goodsMarkup)) : it.price, qty: it.qty || 1 }))],
     case: pawnCase().map((it) => ({ ...it, price: pawnPrice(it) })),
     offers: p ? pawnSellable(p).map(({ item, slot }) => ({ id: item.id, name: item.name, kind: item.kind, archetype: item.archetype, type: item.type, parts: item.parts, paint: item.paint, slot, pays: pawnPays(item) })) : [] };
 }
+const makeFlare = () => ({ id: uid('fl'), kind: 'flare', name: 'Rescue flare' });
 function pawnTrade(p, b, msg) {
+  if (msg.action === 'buy' && msg.item === 'rescueFlare') {
+    if ((p.cash || 0) < FLARE.price) return toast(p, `A rescue flare is $${FLARE.price}. You have $${p.cash || 0}`), true;
+    if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full'), true;
+    p.cash -= FLARE.price;
+    p.inv.pack.push(makeFlare());
+    toast(p, 'Bought a rescue flare. Fire it from your bag, out in the open.');
+    return true;
+  }
   if (msg.action === 'buyItem') {
     const stock = pawnCase(), i = stock.findIndex((x) => x.id === msg.itemId);
     if (i < 0) return toast(p, 'Somebody bought that one already'), true;
@@ -2299,6 +2309,7 @@ function tickHacks(now) {
       const { comms, ...res } = SUPPLY_DROP_CONTENTS;
       for (const [k, v] of Object.entries(res)) p[k] += v;
       p.comms += comms;
+      if (Math.random() < FLARE.dropChance && p.inv.pack.length < PACK_SIZE) { p.inv.pack.push(makeFlare()); toast(p, 'There was a rescue flare in the drop!'); }
       award(p, XP.supplyDrop, 'Supply drop secured', true);
       feed(`${p.name} secured a supply drop`);
       sendEvents();
@@ -2443,7 +2454,8 @@ function killBot(b, attacker, headshotKill) {
   }
   const res = b.kind === 'hvt' ? { ammo: 60, parts: 40, tech: 20, salvage: 30, intel: 2 } : { ammo: 30, parts: 15, tech: 5, salvage: 8, intel: b.serial % 2 };
   // What they carried is yours to take: their gun, and a Lieutenant's plate carrier.
-  const gear = [makeWeapon(b.arche || 'carbine'), ...(b.kind === 'hvt' ? [makeArmor('medium')] : []), ...(b.serial % 3 === 0 ? [makeConsumable('medkit')] : [])];
+  const gear = [makeWeapon(b.arche || 'carbine'), ...(b.kind === 'hvt' ? [makeArmor('medium')] : []), ...(b.serial % 3 === 0 ? [makeConsumable('medkit')] : []),
+    ...(b.kind === 'hvt' && Math.random() < FLARE.lieutenantChance ? [makeFlare()] : [])];
   dropBag(b.x, b.z, gear, res, b.kind === 'hvt' ? 'Lieutenant\'s body' : 'Rogue\'s body');
   markAssist(b, attacker);
   if (attacker && !attacker.isBot) {
@@ -3125,7 +3137,7 @@ function interact(p) {
   const it = nearestInteractable(p);
   // Nothing else here: at a landing zone, E calls the extraction helicopter.
   if (!it) {
-    if (map.landingZones.some((l) => Math.hypot(l.x - p.x, l.z - p.z) < EXTRACT.callRange)) return callExtraction(p);
+    if (taxiAt(p) && !map.contacts.some((c) => Math.hypot(c.x - p.x, c.z - p.z) < 8)) return taxiMenu(p);
     const b = buildingAt(p.x, p.z);
     if (b >= 0) return startClaimBuilding(p, b);
     if (nearWater(p.x, p.z)) {
@@ -3457,6 +3469,10 @@ function invAction(p, msg) {
     const idx = inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0) return;
     dropBag(p.x, p.z, [inv.pack.splice(idx, 1)[0]], {}, `${p.name}'s drop`);
+  } else if (msg.action === 'flare') {
+    const it = inv.pack.find((i) => i.id === msg.itemId && i.kind === 'flare');
+    if (it) return callExtraction(p, it);
+    return;
   } else if (msg.action === 'eat') {
     return eat(p, msg.good);
   } else if (msg.action === 'use') {
@@ -3590,27 +3606,90 @@ function extractSite(p) {
   for (const l of map.landingZones) { const d = Math.hypot(l.x - p.x, l.z - p.z); if (d < bd) { bd = d; best = { x: l.x, z: l.z, name: l.name }; } }
   return best;
 }
+const FLARE = ACTIVITIES.rescueFlare, TAXI = ACTIVITIES.airTaxi, TAXI_WAIT_MS = Number(process.env.TAXI_WAIT_MS || TAXI.waitMs);
+// ---- the helicopter taxi: between landing zones, Contacts and the airstrip, for a fare
+const taxiPoints = [
+  ...map.landingZones.map((l) => ({ id: `lz${l.id}`, name: l.name, x: l.x, z: l.z, range: TAXI.pickupRange })),
+  ...map.contacts.map((c) => ({ id: `ct${c.id}`, name: c.name.replace(/ Contact$/, ''), x: c.x, z: c.z, range: TAXI.pickupRange })),
+  ...(map.airstrips || []).map((a, i) => ({ id: `as${i}`, name: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, range: TAXI.airstripRange })),
+];
+const taxis = new Map();   // owner token -> { from, to, arrivesAt, fare }
+const taxiAt = (p) => taxiPoints.find((t) => Math.hypot(t.x - p.x, t.z - p.z) <= t.range) || null;
+const taxiFare = (a, b) => Math.round(TAXI.baseFare + TAXI.perMile * Math.hypot(a.x - b.x, a.z - b.z) / 1609.344);
+function taxiMenu(p) {
+  const here = taxiAt(p);
+  if (!here) return toast(p, 'Helicopters land at landing zones, Contacts and the airstrip');
+  send(p.ws, { t: 'taxiMenu', from: here.id, fromName: here.name, cash: p.cash || 0, readyIn: Math.max(0, (p.taxiReadyAt || 0) - Date.now()),
+    dests: taxiPoints.filter((t) => t !== here).map((t) => ({ id: t.id, name: t.name, x: Math.round(t.x), z: Math.round(t.z), fare: taxiFare(here, t), miles: +(Math.hypot(t.x - here.x, t.z - here.z) / 1609.344).toFixed(1) })) });
+}
+function taxiAction(p, msg) {
+  if (p.dead || p.downed) return;
+  if (msg.action === 'menu') return taxiMenu(p);
+  if (msg.action !== 'call') return;
+  const now = Date.now(), here = taxiAt(p), to = taxiPoints.find((t) => t.id === msg.to);
+  if (!here || !to || to === here) return toast(p, 'Stand on a landing zone, at a Contact or on the airstrip to call the helicopter');
+  if (taxis.has(p.token)) return toast(p, 'Your helicopter is already on its way: stay on the pad');
+  if (now - (p.lastHit || 0) < 10_000) return toast(p, 'The pilot won\'t land in a firefight');
+  if (hasCargo(p)) return toast(p, 'No freight on the helicopter');
+  if ((p.taxiReadyAt || 0) > now) return toast(p, `Pilot refuelling: ${Math.ceil((p.taxiReadyAt - now) / 1000)}s`);
+  const fare = taxiFare(here, to);
+  if ((p.cash || 0) < fare) return toast(p, `The fare to ${to.name} is $${fare}. You have $${p.cash || 0}`);
+  taxis.set(p.token, { from: here, to, fare, arrivesAt: now + TAXI_WAIT_MS });
+  toast(p, `🚁 Helicopter to ${to.name} lands in ${Math.round(TAXI_WAIT_MS / 1000)}s ($${fare} when you board). Stay on the pad; crewmates on it ride free.`);
+}
+function tickTaxis(now) {
+  for (const [tok, t] of [...taxis]) {
+    const p = onlineByToken(tok);
+    const onPad = (o) => o && !o.dead && !o.downed && Math.hypot(o.x - t.from.x, o.z - t.from.z) <= Math.max(TAXI.radius, t.from.range);
+    if (!onPad(p)) { taxis.delete(tok); if (p) toast(p, 'The helicopter turned back: you left the pad (no charge)'); continue; }
+    if (now < t.arrivesAt) continue;
+    taxis.delete(tok);
+    if (now - (p.lastHit || 0) < 10_000) { toast(p, 'The pilot saw the shooting and turned back (no charge)'); continue; }
+    if ((p.cash || 0) < t.fare) { toast(p, `You can't cover the $${t.fare} fare`); continue; }
+    p.cash -= t.fare;
+    const riders = [...players.values()].filter((o) => onPad(o) && (o === p || sameSquad(o, p)) && !hasCargo(o));
+    riders.forEach((o, i) => {
+      if (o.hack) cancelHack(o, 'Boarding the helicopter');
+      o.openContainer = null;
+      send(o.ws, { t: 'container', closed: true });
+      const a = (i / Math.max(1, riders.length)) * Math.PI * 2;
+      placeAt(o, t.to.x + 3 + Math.cos(a) * 2, t.to.z + 3 + Math.sin(a) * 2);
+      o.protectedUntil = now + 5000;
+      o.taxiReadyAt = now + TAXI.cooldownMs;
+      toast(o, `🚁 Flew to ${t.to.name}${o === p ? ` ($${t.fare})` : ' (on your crewmate)'}`);
+      dirty(o);
+    });
+  }
+}
 function homeSpot(c) { return c.store.spawn ? { ...c.store.spawn } : c.kind === 'flag' ? { x: c.x, z: c.z + 1.6 } : { x: c.x, z: c.z + 1.2 }; }
-function callExtraction(p) {
+function callExtraction(p, flare = null) {
   if (p.dead) return;
   const now = Date.now();
-  const site = extractSite(p);
-  if (!site) return toast(p, `Call extraction within ${feet(EXTRACT.callRange)} of a Contact or landing zone`);
+  // A rescue flare calls it from right where you stand, in the open; otherwise it's a Contact or LZ.
+  const site = flare ? { x: p.x, z: p.z, name: 'a rescue flare' } : extractSite(p);
+  if (!site) return toast(p, `Call extraction within ${feet(EXTRACT.callRange)} of a Contact or landing zone (or fire a rescue flare)`);
   if (hasCargo(p)) return toast(p, 'The helicopter won\'t carry freight — deliver it by land (or river)');
   if (!claimOf(p)) return toast(p, 'You need a stash house for the helicopter to fly you to — plant a claim marker first');
+  if (flare) {
+    if (buildingAt(p.x, p.z) >= 0) return toast(p, 'Get outside: the helicopter can\'t see a flare indoors');
+    if (terrain.height(p.x, p.z) < 0.3 || p.boat) return toast(p, 'Get onto dry land to fire the flare');
+    if (now - (p.lastHit || 0) < 10_000) return toast(p, 'Not while you\'re being shot at: break contact first');
+  }
   for (const e of extractions.values()) {
     if (e.owner === p.token || (Math.hypot(e.x - site.x, e.z - site.z) < EXTRACT.radius * 2 && tokenInSquadWith(p, e.owner))) return toast(p, `Extraction already inbound — ${Math.ceil((e.arrivesAt - now) / 1000)}s. Hold the zone.`);
     if (Math.hypot(e.x - site.x, e.z - site.z) < EXTRACT.radius * 2) return toast(p, `${e.ownerName} already has a flare up here`);
   }
-  if ((p.extractReadyAt || 0) > now) return toast(p, `Pilot unavailable — try again in ${Math.ceil((p.extractReadyAt - now) / 1000)}s`);
+  if (!flare && (p.extractReadyAt || 0) > now) return toast(p, `Pilot unavailable — try again in ${Math.ceil((p.extractReadyAt - now) / 1000)}s`);
+  if (flare) { p.inv.pack.splice(p.inv.pack.indexOf(flare), 1); dirty(p); }   // one use: it's burning now
+  const hold = flare ? Math.min(FLARE.holdMs, EXTRACT_HOLD_MS * 2) : EXTRACT_HOLD_MS, alertRange = flare ? FLARE.alertRange : EXTRACT.alertRange;
   const id = uid('x');
-  extractions.set(id, { id, x: site.x, z: site.z, site: site.name, owner: p.token, ownerName: p.name, arrivesAt: now + EXTRACT_HOLD_MS });
-  toast(p, `🔴 Flare up at ${site.name}. Helicopter in ${Math.round(EXTRACT_HOLD_MS / 1000)}s — stay within ${feet(EXTRACT.radius)} of the flare. Squadmates in the zone ride along.`);
+  extractions.set(id, { id, x: site.x, z: site.z, site: site.name, owner: p.token, ownerName: p.name, arrivesAt: now + hold });
+  toast(p, `🔴 Flare up at ${site.name}. Helicopter in ${Math.round(hold / 1000)}s — stay within ${feet(EXTRACT.radius)} of the flare. Squadmates in the zone ride along.`);
   for (const o of players.values()) {
     if (o === p || o.dead) continue;
     const d = Math.hypot(o.x - site.x, o.z - site.z);
     if (sameSquad(o, p)) toast(o, `${p.name} called extraction at ${site.name} (${distText(d)} away)`);
-    else if (d < EXTRACT.alertRange) { toast(o, `🔴 Extraction flare at ${site.name}, ${distText(d)} away — someone is flying loot out`); send(o.ws, { t: 'alert', x: site.x, z: site.z, text: 'Extraction flare' }); }
+    else if (d < alertRange) { toast(o, `🔴 Extraction flare at ${site.name}, ${distText(d)} away — someone is flying loot out`); send(o.ws, { t: 'alert', x: site.x, z: site.z, text: 'Extraction flare' }); }
   }
   sendEvents();
 }
@@ -3861,6 +3940,7 @@ wss.on('connection', (ws) => {
       }
       case 'travel': return handleTravel(p, msg);
       case 'extract': return callExtraction(p);
+      case 'taxi': return taxiAction(p, msg);
       case 'gunsmith': return gunsmithAction(p, msg);
       case 'upgrade': return upgradeAction(p, msg);
       case 'acceptContract': return !p.dead && acceptContract(p, msg);
@@ -3968,7 +4048,7 @@ const loop = setInterval(() => {
   const dt = 1 / TICK_HZ;
   updateBots(dt, now);
   tickHacks(now);
-  if (tick % 5 === 0) { tickExtractions(now); tickDowned(now); }
+  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); }
   tickStuns(now);
   tickEvents(now, dt);
   if (tick % 4 === 0) tickDefenses(now);

@@ -17,6 +17,7 @@ import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
+import HELI from '/shared/data/activities.json' with { type: 'json' };
 import { BOATS, BOAT_RULES, stepBoat, seatPos } from '/shared/boats.js';
 import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
@@ -1001,6 +1002,10 @@ const send = (m) => state.ws?.readyState === 1 && state.ws.send(JSON.stringify(m
 
 function handle(m) {
   switch (m.t) {
+    case 'taxiMenu':
+      state.taxi = m;
+      openMapScreen('taxi');
+      return;
     case 'welcome':
       state.worldId = m.world; loadWaypoint();
       localStorage.setItem('dz_token', m.token);
@@ -1318,6 +1323,7 @@ function statLine(item) {
   }
   if (item.kind === 'armor') { const a = armorStats(item); return `Armor ${a.armor}${a.mobility ? ` · ${Math.round(a.mobility * 100)}% speed` : ''}`; }
   if (item.kind === 'medkit') return 'Restores 60 health and 40 armor';
+  if (item.kind === 'flare') return `Calls the helicopter home from anywhere outdoors. Hold ${HELI.rescueFlare.holdMs / 60000} min; seen ${distText(HELI.rescueFlare.alertRange)} away. One use.`;
   return '';
 }
 
@@ -1430,6 +1436,7 @@ function renderInventory() {
       for (const slot of ['primary', 'primary2']) actions.push([inv[slot] ? `${SLOT_LABEL[slot]}: swap for ${inv[slot].name}` : `Carry as ${SLOT_LABEL[slot].toLowerCase()}`, () => send({ t: 'inv', action: 'equip', itemId: it.id, slot })]);
     } else if (it.kind === 'weapon' || it.kind === 'armor') actions.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })]);
     if (it.kind === 'medkit') actions.push(['Use', () => send({ t: 'inv', action: 'use' })]);
+    if (it.kind === 'flare') actions.push(['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }]);
     if (put) actions.push(['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })]);
     if (it.kind !== 'package') actions.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })]);
     you.append(...invRow(`pk-${it.id}`, { title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions }));
@@ -1808,6 +1815,11 @@ function renderContact() {
     if (!me.claim) b.title = 'Claim a stash house first';
     row.append(b);
     qm.append(row);
+    const taxi = document.createElement('div');
+    taxi.className = 'item';
+    taxi.innerHTML = `<div class="meta"><div class="nm">🚁 Helicopter taxi</div><div class="st">Fly to any landing zone, Contact or the airstrip. $${HELI.airTaxi.baseFare} plus $${HELI.airTaxi.perMile} a mile; it lands in ${HELI.airTaxi.waitMs / 1000} seconds. Crewmates with you ride free.</div></div>`;
+    taxi.append(btn('Where to?', () => { closeContact(); send({ t: 'taxi', action: 'menu' }); }));
+    qm.append(taxi);
   }
   {
     const row = document.createElement('div');
@@ -1868,14 +1880,15 @@ function openMapScreen(mode, opts = null) {
   state.deployOpts = opts || state.deployOpts;
   $('mapscreen').hidden = false;
   document.exitPointerLock?.();
-  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 14; }   // close enough to read the street names around you
+  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 14; }
+  else if (mode === 'taxi') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 1.4; }   // most of the county, centred on you   // close enough to read the street names around you
   else { mapView.cx = 0; mapView.cz = 0; mapView.zoom = 1; }
   renderMapScreen();
 }
 function closeMapScreen() {
   state.mapOpen = false;
   $('mapscreen').hidden = true;
-  if (state.mapMode === 'view' || state.mapMode === 'travel') lockPointer();
+  if (state.mapMode === 'view' || state.mapMode === 'travel' || state.mapMode === 'taxi') lockPointer();
 }
 const HOME_ICONS = { house: '🏠', cave: '⛰', rockfort: '🪨', treehut: '🌳', boathouse: '⚓' };
 const HOME_NAMES = { house: 'Town house', cave: 'Mountain cave', rockfort: 'Rock formation', treehut: 'Giant tree hut', boathouse: 'Boathouse' };
@@ -1906,6 +1919,14 @@ function mapOptions() {
     for (const id of o.lzs || []) list.push({ label: map.landingZones[id].name, x: map.landingZones[id].x, z: map.landingZones[id].z, msg: { t: 'deploy', kind: 'lz', id }, color: '#e0e0e0' });
     return list;
   }
+  if (state.mapMode === 'taxi' && state.taxi) {
+    const t = state.taxi, list = [];
+    if (!t.from.startsWith('as')) list.push({ label: '🚁 Extraction home (free · hold the flare 90 s)', x: state.x, z: state.z, msg: { t: 'extract' }, color: '#ff7a1a', close: true });
+    for (const d of [...t.dests].sort((a, b) => a.fare - b.fare)) {
+      list.push({ label: `🚁 ${d.name} · ${d.miles} mi · $${d.fare}${t.cash < d.fare ? ' (not enough cash)' : ''}`, x: d.x, z: d.z, msg: { t: 'taxi', action: 'call', to: d.id }, color: '#e0e0e0', close: true });
+    }
+    return list;
+  }
   if (state.mapMode === 'travel') {
     const list = (state.me?.discovered || []).map((id) => ({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'travel', kind: 'contact', id }, color: '#7fd6ff' }));
     for (const m of state.squad.members) if (m.online && m.id !== state.id) list.push({ label: `Join ${m.name}`, x: m.x, z: m.z, msg: { t: 'travel', kind: 'squad', id: m.id }, color: '#7dff9a' });
@@ -1915,11 +1936,12 @@ function mapOptions() {
 }
 function renderMapScreen() {
   if (!state.mapOpen || !state.map) return;
-  const titles = { first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
+  const titles = { taxi: state.taxi ? `Helicopter from ${state.taxi.fromName}` : 'Helicopter', first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
     first: 'Pick where to start. Then find a place to call home and plant your claim marker in it: a town house or apartment room, a limestone cave, rock outcrop, hollow cypress, river fish camp, an abandoned RV, bus, box truck or houseboat — or plant it as a claim flag on open ground.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
+    taxi: `Pick where to fly. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
     view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
@@ -1927,7 +1949,7 @@ function renderMapScreen() {
   const list = $('mapList'); list.innerHTML = '';
   const opts = mapOptions();
   for (const o of opts) {
-    const b = btn(o.label, () => send(o.msg));
+    const b = btn(o.label, () => { send(o.msg); if (o.close) closeMapScreen(); });
     b.className = 'gsweapon';
     b.onmouseenter = () => { state.mapHover = o; drawMapCanvas(); };
     list.append(b);
@@ -1940,7 +1962,7 @@ function renderMapScreen() {
     list.append(wb, pb);
     if (state.waypoint) list.append(btn('Clear waypoint', () => setWaypoint(null), 'gsweapon'), btn('Show waypoint', () => { mapView.cx = state.waypoint.x; mapView.cz = state.waypoint.z; drawMapCanvas(); }, 'gsweapon'));
   }
-  if (state.mapMode === 'view' || state.mapMode === 'travel') list.append(btn('Close', closeMapScreen));
+  if (state.mapMode === 'view' || state.mapMode === 'travel' || state.mapMode === 'taxi') list.append(btn('Close', closeMapScreen));
   drawMapCanvas();
 }
 function drawMapCanvas() {

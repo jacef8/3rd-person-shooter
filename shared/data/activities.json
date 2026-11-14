@@ -410,5 +410,23 @@
       "drop",
       "datahack"
     ]
+  },
+  "rescueFlare": {
+    "_about": "A one-use flare that calls the extraction helicopter from anywhere in the open county (not indoors, not in water, not while you've been shot in the last 10 s, not with freight). Longer to hold and seen from further away than a landing-zone flare. Lamar sells them; supply drops and Lieutenants sometimes carry one.",
+    "holdMs": 120000,
+    "alertRange": 1600,
+    "price": 600,
+    "dropChance": 0.15,
+    "lieutenantChance": 0.25
+  },
+  "airTaxi": {
+    "_about": "The helicopter taxi: from any landing zone, Contact or the airstrip to any other one. Pay the fare (base + per mile), wait at the pad for it to land (leave or go down and it turns back, no charge), then you and any crewmates on the pad fly there. Not in combat, not with freight.",
+    "waitMs": 20000,
+    "radius": 25,
+    "pickupRange": 20,
+    "airstripRange": 70,
+    "baseFare": 10,
+    "perMile": 6,
+    "cooldownMs": 120000
   }
 }

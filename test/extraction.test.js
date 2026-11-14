@@ -98,8 +98,10 @@ test('extraction: a held pickup flies you home with everything you carry', async
   send({ t: 'join', name: 'Pilot', token: TOK });
   await until(() => you && !you.dead);
   const xp0 = you.xp;
-  // E at the landing zone calls it too.
+  // E at the landing zone opens the helicopter menu; "Extraction home" is on it.
   send({ t: 'interact' });
+  await until(() => msgs.find((m) => m.t === 'taxiMenu'));
+  send({ t: 'extract' });
   await until(() => msgs.find((m) => m.t === 'toast' && /Flare up/.test(m.text)));
   await until(() => msgs.find((m) => m.t === 'extracted'), 6000);
   // The server moves you with a forced position correction.
