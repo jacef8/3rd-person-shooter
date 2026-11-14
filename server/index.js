@@ -952,6 +952,8 @@ function leaveBoat(p, force = false) {
   if (!spot) { toast(p, 'Steer in to the bank to get out'); return false; }
   unseat(p);
   placeAt(p, spot.x, spot.z);
+  // Stepping off at a landing hands over any freight bound for it (no need to find the post).
+  for (const d of map.docks) if (mooredAt(b, d)) deliverRiverFreight(p, d);
   return true;
 }
 /** Driver input: the client predicts the boat; the server keeps it on the water and in speed. */

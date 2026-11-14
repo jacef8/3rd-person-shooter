@@ -508,3 +508,55 @@ input { min-height: 44px; border-radius: 10px; }
 .lb-codebig { margin: 6px 0 10px; padding: 12px; text-align: center; font: 800 34px/1 var(--font-display); letter-spacing: 0.3em; color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); font-variant-numeric: tabular-nums; }
 .lb-code { flex: 0 0 130px !important; text-transform: uppercase; letter-spacing: 0.15em; }
 .lb-wide { width: 100%; margin-top: 8px; }
+
+/* ==== Phones (touch controls): small, see-through thumb buttons in one corner; nothing stacked on
+   top of anything else. Later rules here override the older touch layout above. ==== */
+body.touchui .tbtn { background: rgba(20, 24, 30, 0.35); border: 1.5px solid rgba(255, 255, 255, 0.35); font-size: 12px; }
+body.touchui .tbtn.on { background: rgba(255, 138, 42, 0.55); border-color: var(--accent); }
+body.touchui .tbtn.fire { background: rgba(170, 30, 30, 0.42); }
+body.touchui .tbtn.big { width: 68px; height: 68px; right: calc(14px + env(safe-area-inset-right)); bottom: 16px; font-size: 13px; }
+body.touchui .tbtn.mid { width: 52px; height: 52px; }
+body.touchui .tbtn.sm { width: 48px; height: 48px; }
+body.touchui .tbtn.aim { right: calc(92px + env(safe-area-inset-right)); bottom: 8px; }
+body.touchui .tbtn.use { right: calc(22px + env(safe-area-inset-right)); bottom: 94px; }
+body.touchui .tbtn.r1 { right: calc(90px + env(safe-area-inset-right)); bottom: 70px; }    /* reload */
+body.touchui .tbtn.r2 { right: calc(152px + env(safe-area-inset-right)); bottom: 8px; }    /* crouch (hold: prone) */
+body.touchui .tbtn.r6 { right: calc(148px + env(safe-area-inset-right)); bottom: 66px; }   /* heal */
+body.touchui .tbtn.r4 { right: calc(84px + env(safe-area-inset-right)); bottom: 128px; }   /* grenade */
+body.touchui .tbtn.r5 { right: calc(22px + env(safe-area-inset-right)); bottom: 156px; }   /* tag */
+/* Top left: MAP, BAG and ⋯; the ⋯ drawer opens under them. */
+body.touchui .ttop { top: 6px; left: calc(8px + env(safe-area-inset-left)); transform: none; gap: 6px; }
+body.touchui .tbtn.tiny { height: 44px; min-height: 44px; padding: 0 12px; font-size: 12px; border-radius: 10px; }
+.tmore { position: absolute; top: 56px; left: calc(8px + env(safe-area-inset-left)); display: flex; flex-wrap: wrap; gap: 6px; max-width: 70vw; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.tmore[hidden] { display: none; }
+.tmore .tbtn.tiny { position: static; }
+body.touchui #feed { top: 58px; left: calc(8px + env(safe-area-inset-left)); max-width: 42vw; font-size: 12px; }
+body.touchui #feed div:nth-child(n+3) { display: none; }   /* two lines at most */
+body.touchui #where { top: 6px; right: auto; left: 50%; transform: translateX(-50%); width: auto; max-width: 40vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 4px 10px; font-size: 13px; }
+body.touchui #where b, body.touchui #where span { display: inline; }
+body.touchui #where span:not(:empty)::before { content: ' · '; }
+body.touchui #stance { top: 44px; bottom: auto; padding: 3px 9px; }
+body.touchui #stance.standing, body.touchui #stance span { display: none; }
+body.touchui #housestatus, body.touchui #resources { display: none; }   /* in the bag instead */
+body.touchui #minimap { width: 100px; height: 100px; top: 6px; }
+body.touchui #weapon { bottom: 6px; padding: 3px 6px; gap: 6px; }
+body.touchui #wslots span { padding: 0 9px; }
+/* Held upright in the game: ask to turn it sideways. */
+#rotate { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(10, 13, 18, 0.94); text-align: center; padding: 24px; }
+#rotate[hidden] { display: none; }
+#rotate b { display: block; font: 800 24px/1.2 var(--font-display); color: var(--ink); }
+#rotate span { display: block; margin-top: 8px; font-size: 16px; color: var(--ink-2); }
+
+/* ==== Lobby: the whole page scrolls (no box scrolling inside a box). ==== */
+#login.lobby2 { overflow-y: auto; overflow-x: hidden; display: block; -webkit-overflow-scrolling: touch; }
+#lobbyfx { position: fixed; }
+.lb-shell { min-height: auto; }
+.lb-card { max-height: none; overflow: visible; }
+@media (max-width: 860px) { .lb-shell { display: block; } .lb-brand { margin-bottom: 18px; } }
+/* Phones and tablets: the phone help line; the controller help once a controller has been used; no keyboard help. */
+.lb-help .touchonly { display: none; }
+@media (pointer: coarse) {
+  .lb-help .kbonly { display: none; }
+  body:not(.padseen) .lb-help .touchonly { display: inline-block; }
+  body:not(.padseen) #padhint { display: none; }
+}

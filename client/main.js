@@ -149,6 +149,7 @@ function initWorld(m) {
     const label = makeLabel(`⚓ ${d.name}`, 0.006, '#7fd6ff');
     label.position.y = 2.8;
     g.add(post, sign, label);
+    g.userData.label = label;
     g.position.set(d.x, ground(d.x, d.z), d.z);
     g.rotation.y = Math.atan2(d.nx, d.nz);
     scene.add(g);
@@ -159,6 +160,7 @@ function initWorld(m) {
     const label = makeLabel(`🏕 ${c.name} · no fighting`, 0.009, '#9fe39f');
     label.position.y = 7;
     g.add(label);
+    g.userData.label = label;
     g.position.set(c.x, ground(c.x, c.z), c.z);
     scene.add(g);
     state.contactMeshes.push(g);
@@ -1195,9 +1197,13 @@ function stanceNote() {
   if (!el || !state.me) return;
   const st = state.sprint ? 'sprint' : state.prone ? 'prone' : state.crouch ? 'crouch' : 'stand';
   const pad = state.inputMode === 'pad';
-  const hint = pad ? 'Ⓑ crouch · hold Ⓑ prone · L3 sprint' : MOBILE && !pad ? 'CROUCH · PRONE · SPRINT buttons' : 'C crouch · hold C prone · Shift sprint';
+  const hint = pad ? 'Ⓑ crouch · hold Ⓑ prone · L3 sprint' : MOBILE && !pad ? 'tap CROUCH · hold it to go prone' : 'C crouch · hold C prone · Shift sprint';
   el.innerHTML = `<b>${STANCE_TEXT[st]}</b><span>${hint}</span>`;
   el.hidden = !!state.me.dead || !!state.me.boat;
+  el.classList.toggle('standing', st === 'stand');
+  // Phones are played sideways: say so if it's held upright in the game.
+  const upright = document.body.classList.contains('touchui') && innerHeight > innerWidth * 1.1 && !state.me.dead;
+  if ($('rotate').hidden === upright) $('rotate').hidden = !upright;
 }
 setInterval(stanceNote, 250);
 function updateHud() {
@@ -2780,6 +2786,7 @@ function setInputMode(m) {
   if (state.inputMode === m) return;
   state.inputMode = m;
   document.body.classList.toggle('pad', m === 'pad');
+  if (m === 'pad') document.body.classList.add('padseen');   // the lobby shows controller help from now on
   // Back on touch or a real keyboard: text boxes may raise the phone's keyboard again.
   if (m !== 'pad') for (const i of document.querySelectorAll('input[inputmode="none"]')) i.removeAttribute('inputmode');
   if (m === 'pad') document.exitPointerLock?.();
@@ -3418,7 +3425,11 @@ function frame(now) {
   // Hide stash labels you're standing right under.
   for (const [id, v] of houseVis) { const h = state.map.houses[id]; v.label.visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; }
   state.view.update(state.x, state.z);
-  for (const g of state.contactMeshes) g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
+  for (const g of state.contactMeshes) {
+    g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
+    // Name tags float at a fixed size: up close they'd fill the screen, so they hide within 7 m.
+    if (g.visible && g.userData.label) g.userData.label.visible = camera.position.distanceTo(g.position) > 7;
+  }
   for (const g of dropVis.values()) {
     // Falling crate until it lands.
     const left = g.userData.drop.landsAt - Date.now();
@@ -3456,16 +3467,20 @@ window.__dz = { state, send, boatVis, structVis };
 // on the right to look, and buttons for everything else. Hidden while a controller is in use.
 const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null };
 const TOUCH_BTNS = [
-  // [label, action, class]   'fire' is held; 'aim' toggles
+  // [label, action, class]   'fire' is held; 'aim' toggles; CROUCH held is prone. Sprint is the
+  // stick pushed to its edge; guns switch by tapping them at the bottom.
   ['FIRE', 'fire', 'big fire'], ['AIM', 'aim', 'mid aim'], ['USE', 'interact', 'mid use'], ['RELOAD', 'reload', 'sm r1'],
-  ['CROUCH', 'crouch', 'sm r2'], ['PRONE', 'prone', 'sm r7'], ['SPRINT', 'sprint', 'sm r8'], ['SWAP', 'swap', 'sm r3'], ['GRENADE', 'sensor', 'sm r4'], ['TAG', 'tag', 'sm r5'], ['HEAL', 'heal', 'sm r6'],
+  ['CROUCH', 'crouch', 'sm r2'], ['NADE', 'sensor', 'sm r4'], ['TAG', 'tag', 'sm r5'], ['HEAL', 'heal', 'sm r6'],
 ];
-const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ NADE', 'switchGrenade'], ['BUILD', 'build']];
+// Top left: the map and bag, and ⋯ for the rest.
+const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['⋯', 'touchMore']];
+const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div>' +
     TOUCH_BTNS.map(([l, a, c]) => `<button class="tbtn ${c}" data-act="${a}">${l}</button>`).join('') +
-    `<div class="ttop">${TOUCH_TOP.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>`;
+    `<div class="ttop">${TOUCH_TOP.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>` +
+    `<div class="tmore" hidden>${TOUCH_MORE.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>`;
   for (const b of ui.querySelectorAll('.tbtn')) {
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -3477,8 +3492,16 @@ function buildTouchUI() {
         return;
       }
       if (a === 'aim') { state.aiming = !state.aiming; b.classList.toggle('on', state.aiming); return; }
+      if (a === 'touchMore') { const m = ui.querySelector('.tmore'); m.hidden = !m.hidden; b.classList.toggle('on', !m.hidden); return; }
+      if (b.closest('.tmore')) { ui.querySelector('.tmore').hidden = true; ui.querySelector('[data-act=touchMore]').classList.remove('on'); }
+      if (a === 'crouch') {   // tap: crouch / stand; hold: prone
+        b.setPointerCapture(e.pointerId);
+        b.holdTimer = setTimeout(() => { b.holdTimer = null; doAction('prone'); }, 450);
+        return;
+      }
       doAction(a);
     });
+    if (b.dataset.act === 'crouch') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.holdTimer) { clearTimeout(b.holdTimer); b.holdTimer = null; doAction('crouch'); } });
     if (b.dataset.act === 'fire') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { state.mouseDown = false; b.classList.remove('on'); });
   }
   const knob = $('tknob'), base = $('tstick');

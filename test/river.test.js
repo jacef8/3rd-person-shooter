@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import { generateMap } from '../shared/world.js';
 import { makeWeapon, xpForLevel } from '../shared/items.js';
 import { floats, stepBoat, BOATS } from '../shared/boats.js';
+import { DEEP_WATER } from '../shared/terrain.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 8000) {
@@ -51,17 +52,17 @@ function conn(port, name, token) {
   return new Promise((r) => ws.on('open', () => { c.send({ t: 'join', name, token }); r(c); }));
 }
 /** Press E until something happens (a stray loot item at your feet can take the first press). */
-async function press(c, done, ms = 9000) {
+async function press(c, done, ms = 9000, what = '') {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     c.send({ t: 'interact' });
     for (let k = 0; k < 28; k++) { const v = done(); if (v) return v; await sleep(25); }
   }
-  throw new Error('timed out pressing E');
+  throw new Error(`timed out pressing E${what ? ` (${what})` : ''}`);
 }
 /** A dry spot right by a landing's mooring, to step into a boat from. */
-/** The first dry ground from a landing's mooring toward its bank (where you'd stand to step aboard). */
-const bankBy = (d) => { let k = 3; while (k < 6.5 && map.terrain.height(d.wx + d.nx * k, d.wz + d.nz * k) < 0.3) k += 0.5; return { x: d.wx + d.nx * k, z: d.wz + d.nz * k }; };
+/** Where you'd stand to step aboard: the first spot toward the bank shallow enough to wade in. */
+const bankBy = (d) => { let k = 2; while (k < 6 && map.terrain.height(d.wx + d.nx * k, d.wz + d.nz * k) < DEEP_WATER + 0.3) k += 0.5; return { x: d.wx + d.nx * k, z: d.wz + d.nz * k }; };
 const myBoat = (c) => c.snap?.boats?.find((b) => b.mine);
 
 test("a boat can't sail off the edge of the map", () => {
@@ -103,7 +104,7 @@ test('buy a boat, drive it, haul river freight landing to landing', async (t) =>
   const a = await conn(srv.port, 'Skipper', A);
   await until(() => a.you);
   // The landing post: boats for sale, freight on offer.
-  const view = await press(a, () => a.dock);
+  const view = await press(a, () => a.dock, 9000, 'open the landing');
   assert.equal(view.name, 'Bristol Landing');
   assert.ok(view.shop.some((s) => s.type === 'jonboat') && view.shop.some((s) => s.type === 'airboat'));
   assert.ok(view.freight.length >= 1);
@@ -119,7 +120,7 @@ test('buy a boat, drive it, haul river freight landing to landing', async (t) =>
   // Step into the boat from the bank.
   const bank = bankBy(home);
   await a.tp(bank.x, bank.z);
-  await press(a, () => a.you.boat?.id === boat.id && a.you.boat.seat === 0);
+  await press(a, () => a.you.boat?.id === boat.id && a.you.boat.seat === 0, 9000, 'step aboard');
   // The hold: bulk freight can't be carried off by hand.
   a.send({ t: 'boatHold' });
   const hold = await until(() => a.container?.kind === 'boat' && a.container);
@@ -147,11 +148,10 @@ test('buy a boat, drive it, haul river freight landing to landing', async (t) =>
   const dest = map.docks[job.to];
   a.send({ t: 'dev', boatTo: dest.id });
   await until(() => { const s = myBoat(a); return s && Math.hypot(s.x - dest.wx, s.z - dest.wz) < 1; });
-  await press(a, () => !a.you.boat);
-  await sleep(200);
+  // Stepping off at the landing hands the freight over and pays.
   const cash = a.you.cash;
-  await a.tp(dest.x, dest.z);
-  await press(a, () => a.msgs.find((m) => m.t === 'toast' && /Delivered 1 load of river freight/.test(m.text)));
+  await press(a, () => !a.you.boat, 9000, 'step off');
+  await a.toast(/Delivered 1 load of river freight/);
   await until(() => a.you.cash === cash + job.pay);
 });
 
