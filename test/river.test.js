@@ -64,6 +64,14 @@ async function press(c, done, ms = 9000) {
 const bankBy = (d) => { let k = 3; while (k < 6.5 && map.terrain.height(d.wx + d.nx * k, d.wz + d.nz * k) < 0.3) k += 0.5; return { x: d.wx + d.nx * k, z: d.wz + d.nz * k }; };
 const myBoat = (c) => c.snap?.boats?.find((b) => b.mine);
 
+test("a boat can't sail off the edge of the map", () => {
+  const t = map.terrain, rv = t.geo.rivers[0].pts.find(([x, z]) => Math.abs(z) > t.half + 100);   // the river runs off the map
+  assert.ok(rv, 'the river leaves the map');
+  const x = rv[0], z = Math.sign(rv[1]) * (t.half - 1);
+  assert.equal(floats(t, x, z), false);
+  assert.equal(floats(t, x, Math.sign(rv[1]) * (t.half + 50)), false);
+});
+
 test('the map has river landings and swamp camps on the Apalachicola', () => {
   const names = map.docks.map((d) => d.name);
   for (const n of ['Bristol Landing', 'Blountstown Landing', 'Estiffanulga Landing']) assert.ok(names.includes(n), n);

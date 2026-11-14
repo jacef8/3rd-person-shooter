@@ -7,6 +7,7 @@ export const BOAT_RULES = RIVER.rules;
 
 /** Deep enough to float a boat? The channel under a bridge counts as open water. */
 export function floats(terrain, x, z) {
+  if (Math.abs(x) > terrain.half - 3 || Math.abs(z) > terrain.half - 3) return false;   // the map's edge stops boats too
   if (terrain.height(x, z) < BOAT_RULES.minDepth) return true;
   for (const br of terrain.bridges || []) if (Math.abs(x - br.x) < br.len && Math.abs(z - br.z) < br.len && Math.hypot(x - br.x, z - br.z) < br.len - 55) return true;
   return false;
