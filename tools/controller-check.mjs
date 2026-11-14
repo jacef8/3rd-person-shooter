@@ -162,7 +162,8 @@ check('with the bar up, a tap of View still opens the bag and answers nothing', 
 await press(BTN.B);
 await sleep(300);
 await press(BTN.VIEW, 800);
-await sleep(700);
+// Opening the trade screen takes a round trip to the server: wait for it rather than a fixed time.
+await p.waitForFunction(() => !document.getElementById('tradepanel').hidden, null, { timeout: 5000 }).catch(() => {});
 check('holding View says yes: the trade screen opens', await p.evaluate(() => !document.getElementById('tradepanel').hidden && document.getElementById('invitebar').hidden && document.getElementById('inventory').hidden), other.join(' ; '));
 check('trade screen has a highlight', /\.HL:/.test(await focused()), await focused());
 await shot(p, 'controller-trade');

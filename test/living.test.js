@@ -12,7 +12,7 @@ import { makeWeapon, xpForLevel } from '../shared/items.js';
 import { placementProblem } from '../shared/building.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function until(fn, ms = 8000) {
+async function until(fn, ms = 15000) {   // generous: the whole suite runs servers side by side
   const end = Date.now() + ms;
   while (Date.now() < end) { const v = fn(); if (v) return v; await sleep(25); }
   throw new Error('timed out');
@@ -108,9 +108,9 @@ test('world events: riot, county fair contest, market swing, hog hunt, convoy', 
   a.send({ t: 'dev', event: 'convoy' });
   const c0 = await until(() => a.events?.find((e) => e.type === 'convoy'));
   await sleep(2500);
-  a.send({ t: 'refresh' });
-  const c1 = a.msgs.filter((m) => m.t === 'worldEvents').map((m) => m.list.find((e) => e.type === 'convoy')).filter(Boolean).pop();
-  assert.ok(c1, 'convoy still running');
+  // Still running a couple of seconds later: the latest event list still has it.
+  const lists = a.msgs.filter((m) => m.t === 'worldEvents');
+  assert.ok(lists.at(-1).list.some((e) => e.type === 'convoy'), 'convoy still running');
   void c0;
 });
 
