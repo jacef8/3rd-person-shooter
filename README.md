@@ -136,6 +136,10 @@ The world is built from open data for the real place, in `data/real/` (about 3.8
   and armor at half their value (more for attachments), sells at full price, and whatever players
   sell goes in his case for the next customer. He also buys and sells goods and supplies. No
   fighting inside, and it can't be claimed. Prices are in `shared/data/pawn.json`.
+- **Towns are their real downtowns:** nothing invented. Each Contact works out of an ordinary
+  commercial building near the centre ("Bristol trading post" and so on; never a courthouse, school,
+  church or emergency station), and the area-scan terminals stand on real sidewalks. Buildings dress
+  by type: brick storefronts and halls, lap-sided houses, metal barns and warehouses.
 - **Water:** the Apalachicola follows its real course, with its real width, islands and side channels,
   and 335 real lakes, ponds and reservoirs are cut in (OpenStreetMap, via Overture Maps).
 - **Roads:** every real road, 2,129 stretches of them. 1,234 carry a real name or route number

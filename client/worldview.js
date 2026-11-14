@@ -24,6 +24,7 @@ const COLORS = {
 const HOME_COLORS = [[0.9, 0.88, 0.82], [0.82, 0.8, 0.72], [0.74, 0.79, 0.82], [0.86, 0.8, 0.62], [0.64, 0.72, 0.64], [0.72, 0.62, 0.52], [0.6, 0.62, 0.65], [0.8, 0.72, 0.68], [0.68, 0.44, 0.36], [0.52, 0.58, 0.64]];
 const BARN_COLORS = [[0.55, 0.22, 0.18], [0.46, 0.4, 0.34], [0.62, 0.62, 0.6], [0.5, 0.2, 0.16], [0.38, 0.44, 0.38]];
 const WAREHOUSE_COLORS = [[0.5, 0.47, 0.42], [0.6, 0.6, 0.58], [0.45, 0.5, 0.54], [0.66, 0.6, 0.48]];
+const BRICK_COLORS = [[0.64, 0.31, 0.24], [0.56, 0.27, 0.21], [0.72, 0.43, 0.32], [0.8, 0.68, 0.54], [0.5, 0.33, 0.27], [0.62, 0.38, 0.3]];
 const CIVIC_COLORS = [[0.62, 0.36, 0.28], [0.7, 0.44, 0.33], [0.8, 0.76, 0.68], [0.56, 0.33, 0.27]];
 const ROOF_COLORS = [[0.3, 0.28, 0.27], [0.42, 0.24, 0.18], [0.36, 0.37, 0.39], [0.5, 0.5, 0.48], [0.26, 0.3, 0.34]];
 const FLOOR_COLORS = { home: [0.5, 0.38, 0.26], farmhouse: [0.5, 0.38, 0.26], barn: [0.42, 0.36, 0.28], civic: [0.56, 0.5, 0.42] };
@@ -58,6 +59,32 @@ function sidingTexture() {
   g.fillStyle = '#f4f4f4'; g.fillRect(22, 22, 20, 22);                                  // window trim
   g.fillStyle = '#4c5a66'; g.fillRect(24, 24, 16, 18);                                  // glass
   g.fillStyle = '#f4f4f4'; g.fillRect(31, 24, 2, 18); g.fillRect(24, 32, 16, 2);        // sash bars
+  return finishTexture(c);
+}
+/** A storefront or town-hall wall: running-bond brick with one framed window per 4 m bay. */
+function brickTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, 64, 64);
+  g.fillStyle = '#c8c3bd';                                                       // mortar
+  for (let y = 0; y < 64; y += 5) {
+    g.fillRect(0, y, 64, 1);
+    for (let x = (y / 5) % 2 ? 6 : 0; x < 64; x += 12) g.fillRect(x, y, 1, 5);
+  }
+  g.fillStyle = '#ece8e2'; g.fillRect(16, 20, 32, 26);                            // window surround
+  g.fillStyle = '#3e4a55'; g.fillRect(18, 22, 28, 22);                            // glass
+  g.fillStyle = '#ece8e2'; g.fillRect(31, 22, 2, 22);                             // mullion
+  return finishTexture(c);
+}
+/** A barn or warehouse wall: ribbed metal siding, no windows. */
+function metalTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, 64, 64);
+  for (let x = 0; x < 64; x += 8) { g.fillStyle = '#d9d9d9'; g.fillRect(x, 0, 2, 64); g.fillStyle = '#f2f2f2'; g.fillRect(x + 2, 0, 2, 64); }
+  g.fillStyle = '#cfcfcf'; g.fillRect(0, 62, 64, 2);                                // base trim
   return finishTexture(c);
 }
 function finishTexture(c) {
@@ -161,6 +188,8 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
 
   const texturedMat = new THREE.MeshStandardMaterial({ map: windowTexture(), vertexColors: true, roughness: 0.9 });
   const sidingMat = new THREE.MeshStandardMaterial({ map: sidingTexture(), vertexColors: true, roughness: 0.95 });
+  const brickMat = new THREE.MeshStandardMaterial({ map: brickTexture(), vertexColors: true, roughness: 0.95 });
+  const metalMat = new THREE.MeshStandardMaterial({ map: metalTexture(), vertexColors: true, roughness: 0.6, metalness: 0.25 });
   const plainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
   const roofMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide });
   const trunkGeo = new THREE.CylinderGeometry(0.25, 0.35, 1, 6);
@@ -263,7 +292,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
 
   /** Ground colour from biome, height and roads/towns. */
   function groundColor(x, z, h) {
-    for (const t of map.towns) { const r = t.rect; if (x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ) return GROUND.town; }
+    for (const t of map.towns) { const r = t.rect; if (t.paved !== false && x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ) return GROUND.town; }
     // (Roads aren't tinted into the ground any more: the ground has a point only every 8 m, so a
     // tint smeared each road two or three times its width. Roads are their own surface on top.)
     if (h < -0.3) return GROUND.mud;
@@ -458,11 +487,12 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   function paint(b) {
     const id = b.bldg ?? b.id;
     switch (b.type) {
-      case 'building': { const c = COLORS.building, v = hash(id) / 4294967296; return [[c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 'office']; }
-      case 'civic': return [pick(CIVIC_COLORS, id), 'office'];
+      // Real buildings dress by type: brick storefronts and halls, lap-sided houses, metal barns and warehouses.
+      case 'building': { if (b.real) return [pick(BRICK_COLORS, id), 'brick']; const c = COLORS.building, v = hash(id) / 4294967296; return [[c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 'office']; }
+      case 'civic': return [pick(CIVIC_COLORS, id), b.real ? 'brick' : 'office'];
       case 'home': return [pick(HOME_COLORS, id), 'siding'];
-      case 'barn': return [b.real ? pick(BARN_COLORS, id) : COLORS.barn, null];
-      case 'warehouse': return [b.real ? pick(WAREHOUSE_COLORS, id) : COLORS.warehouse, null];
+      case 'barn': return [b.real ? pick(BARN_COLORS, id) : COLORS.barn, b.real ? 'metal' : null];
+      case 'warehouse': return [b.real ? pick(WAREHOUSE_COLORS, id) : COLORS.warehouse, b.real ? 'metal' : null];
       case 'car': return [CAR_COLORS[b.id % CAR_COLORS.length], null];
       case 'vehiclebody': return [VEHICLE_COLORS[b.vtype] || COLORS.cover, null];
       case 'housewall': return [b.houseId === ownHouseId ? COLORS.ownwall : COLORS.housewall, null];
@@ -475,7 +505,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   function buildChunk(cx, cz) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
-    const office = newBuf(true), siding = newBuf(true), plain = newBuf(false), roof = newBuf(false);
+    const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), plain = newBuf(false), roof = newBuf(false);
     const trees = [], pines = [], canopies = [], tanks = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
@@ -484,7 +514,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
       if (b.type === 'canopy') { canopies.push(b); continue; }
       if (b.type === 'tank') { tanks.push(b); continue; }
       const [c, tex] = paint(b);
-      pushBox(tex === 'office' ? office : tex === 'siding' ? siding : plain, b, c, tex ? 4 : 0);
+      pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'metal' ? metal : plain, b, c, tex ? 4 : 0);
     }
     for (const r of buildingsIn.get(key(cx, cz)) || []) {
       if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
@@ -503,7 +533,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
     const roads = map.roadGrid && buildRoads(x0, z0);
     if (roads) group.add(roads);
     if (ground.wet) { const w = new THREE.Mesh(waterGeo, waterMat); w.position.set(x0 + CHUNK / 2, 0, z0 + CHUNK / 2); group.add(w); }
-    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [plain, plainMat], [roof, roofMat]]) {
+    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [metal, metalMat], [plain, plainMat], [roof, roofMat]]) {
       if (!buf.idx.length) continue;
       const m = new THREE.Mesh(toGeometry(buf), mat);
       m.castShadow = true;

@@ -27,7 +27,7 @@ function character(name, x, z, extra = {}) {
   return { name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: w, secondary: null, armor: null, pack: [] }, ammo: 300, mags: { [w.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(10), parts: 200, tech: 100, intel: 0, salvage: 200, wood: 50, stone: 50, comms: 0, field: [], discovered: [], contracts: [], ...extra };
 }
 function writeDb(file, characters, extra = {}) {
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 11, size: 30000, houses: freshHouses(), bags: [], structures: [], characters, ...extra }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: freshHouses(), bags: [], structures: [], characters, ...extra }));
 }
 async function startServer(file, env = {}) {
   const port = portBase++;

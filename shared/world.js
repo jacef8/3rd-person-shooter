@@ -406,12 +406,20 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     return best;
   };
 
-  // ---- real towns, nudged onto dry ground where the real one sits right on the water
-  // With real buildings, the game's own "town" shrinks to the Authority's compound: a small paved
-  // post (the Contact, quarters to claim, terminals, cover) set on the emptiest ground near the real
-  // centre, so the real downtown around it is left standing.
-  const realXZ = realStructs ? real.structures.map(([lat, lon]) => project(lat, lon, size)) : [];
+  // ---- towns. Without real buildings the game builds each town itself (blocks of shells, a plaza with
+  // the Contact). With real buildings nothing is invented: the town is its real downtown, the Contact
+  // works out of a real building near the centre and the terminals stand on real sidewalks (placed
+  // once the real buildings are up, below).
   for (const gt of geo.towns) {
+    if (realStructs) {
+      let x = gt.x, z = gt.z;
+      for (let k = 0; k < 60 && (waterDist(x, z) < 40 || terrain.exact(x, z) < 1); k++) { x += 30; z += 12; }   // off the river
+      const r = 70;
+      towns.push({ id: towns.length, name: gt.name, county: gt.county, x, z, blocks: 0, span: 0, city: gt.blocks >= 13, industrial: false,
+        biome: biomeName(terrain.biome(x, z)), elev: terrain.exact(x, z), real: gt.real, paved: false,
+        rect: { minX: x - r, minZ: z - r, maxX: x + r, maxZ: z + r } });
+      continue;
+    }
     const blocks = realStructs ? Math.min(gt.blocks, 3) : gt.blocks;
     const span = blocks * PITCH - STREET;
     const r = span / 2 + STREET;
@@ -440,7 +448,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     t.rect = reserve({ minX: pos.x - r, minZ: pos.z - r, maxX: pos.x + r, maxZ: pos.z + r });
     towns.push(t);
   }
-  const townFlats = towns.map((t) => ({ ...t.rect, elev: t.elev, margin: 60 }));
+  const townFlats = realStructs ? [] : towns.map((t) => ({ ...t.rect, elev: t.elev, margin: 60 }));
   terrain.setFlats(townFlats);
   // Every real building stands on a level pad cut into (or built up on) the real ground.
   const realPads = [];
@@ -625,7 +633,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       lootSpawns.push({ x: mid, z: z0t + rand() * t.span, zone: 'town' });
     }
   }
-  for (const t of towns) buildTown(t);
+  if (!realStructs) for (const t of towns) buildTown(t);
 
   // ---- landmarks: state parks (ranger stations + loot), the dam
   const landmarks = [];
@@ -701,6 +709,48 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       realBuildings.push(1);
     }
   }
+
+  /** A real building's front door: the doorway facing the nearest road. */
+  function frontDoor(b) {
+    return b.doors.reduce((a, d) => (!a || roadDist(d.x + d.out[0] * 6, d.z + d.out[1] * 6, 60) < roadDist(a.x + a.out[0] * 6, a.z + a.out[1] * 6, 60) ? d : a), null);
+  }
+  /** Real towns: each Contact works out of an ordinary commercial building near the centre (just
+   *  inside the front door; the building can't be claimed), never a courthouse, school, church or
+   *  emergency station; the area-scan terminals stand on the sidewalk outside the next few along. */
+  function placeTownPosts() {
+    for (const t of towns) {
+      const cands = buildings.filter((b) => b.real && b.doors?.length && b.type === 'building' && !b.name && !b.shop && Math.hypot(b.cx - t.x, b.cz - t.z) < 900)
+        .map((b) => ({ b, score: Math.hypot(b.cx - t.x, b.cz - t.z) }))
+        .sort((a, c) => a.score - c.score).map((e) => e.b);
+      const post = cands[0];
+      let cx = t.x, cz = t.z;
+      if (post) {
+        const d = frontDoor(post);
+        cx = d.x - d.out[0] * 2.6; cz = d.z - d.out[1] * 2.6;
+        post.shop = 'contact';
+        if (!post.name) post.name = `${t.name} trading post`;
+      }
+      contacts.push({ id: contacts.length, townId: t.id, name: `${t.name} Contact`, x: cx, z: cz, building: post ? buildings.indexOf(post) : null });
+      t.contactId = contacts.length - 1;
+      t.x = cx; t.z = cz;   // the town's heart is where its Contact is
+      // Terminals: on the sidewalk outside the next three buildings, to one side of the door.
+      let made = 0;
+      for (const b of cands.slice(1)) {
+        if (made >= 3) break;
+        const d = frontDoor(b);
+        for (const side of [2.4, -2.4]) {
+          const tx = d.x + d.out[0] * 1.8 - d.out[1] * side, tz = d.z + d.out[1] * 1.8 + d.out[0] * side;
+          if (solidAt(tx - 0.6, tz - 0.6, tx + 0.6, tz + 0.6) || terrain.exact(tx, tz) < 0.5) continue;
+          box(tx - 0.4, tz - 0.4, tx + 0.4, tz + 0.4, 1.5, 'terminal', { terminalId: terminals.length, y0: terrain.exact(tx, tz) - 0.1 });
+          terminals.push({ id: terminals.length, x: tx + d.out[0] * 0.6, z: tz + d.out[1] * 0.6, townId: t.id });
+          made++;
+          break;
+        }
+      }
+    }
+  }
+
+  if (realStructs) placeTownPosts();
 
   // ---- wrecks and abandoned vehicles along the highways
   const VT = ['rv', 'bus', 'truck'];
@@ -1059,11 +1109,10 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const shops = [];
   if (infra) for (const sh of EXTRA.shops || []) {
     const { x, z } = project(sh.lat, sh.lon, size);
-    const b = buildings.filter((q) => q.real && q.doors?.length).sort((a, c) => Math.hypot(a.cx - x, a.cz - z) - Math.hypot(c.cx - x, c.cz - z))[0];
+    const b = buildings.filter((q) => q.real && q.doors?.length && q.shop !== 'contact').sort((a, c) => Math.hypot(a.cx - x, a.cz - z) - Math.hypot(c.cx - x, c.cz - z))[0];
     if (!b || Math.hypot(b.cx - x, b.cz - z) > 40) continue;
     b.name = sh.name; b.shop = sh.kind;
-    // The front door: the one facing the nearest road.
-    const door = b.doors.reduce((a, d) => (!a || roadDist(d.x + d.out[0] * 6, d.z + d.out[1] * 6, 60) < roadDist(a.x + a.out[0] * 6, a.z + a.out[1] * 6, 60) ? d : a), null);
+    const door = frontDoor(b);
     // The counter between the door and the keeper, and a gun rack on the wall behind him.
     const ox = door.out[0], oz = door.out[1], ang = Math.atan2(oz, ox) + Math.PI / 2, fy = b.floor + 0.3;
     const at = (d, side = 0) => [door.x - ox * d - oz * side, door.z - oz * d + ox * side];

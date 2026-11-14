@@ -45,7 +45,7 @@ test("buy from Lamar's case, sell him a gun, and it's in the case for the next c
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzpawn-')), 'w.json');
   const shotgun = makeWeapon('shotgun', { barrel: 'longBarrel' });
   const A = hex('f1');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 11, size: 30000, houses: {}, bags: [], structures: [], characters: {
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: {
     [A]: { name: 'Customer', x: sh.keeper.x + sh.door.out[0] * 1.6, z: sh.keeper.z + sh.door.out[1] * 1.6, yaw: 0, hp: 100, armor: 0, inv: { primary: null, primary2: null, secondary: makeWeapon('sidearm'), armor: null, pack: [shotgun] },
       ammo: 90, mags: {}, active: 'secondary', dead: false, kills: 0, xp: xpForLevel(3), parts: 0, tech: 0, intel: 0, salvage: 0, wood: 0, stone: 0, comms: 0, cash: 500, food: 90, corn: 10, field: [], discovered: [], contracts: [] },
   } }));

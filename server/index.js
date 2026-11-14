@@ -55,7 +55,7 @@ const PACK_SIZE = COMBAT.packSize;
 const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
-const DB_VERSION = 11;   // 11: USGS lidar ground with taller hills (the house list changed under every save)
+const DB_VERSION = 12;   // 12: real towns have no made-up compound (the stash-house list changed; v11 saves carry over, see loadDb)
 const SQUAD_MAX = COMBAT.crewMax;
 const GOODS = Object.keys(HOMESTEAD.goods);   // cash, seeds, crops, fish, meat, meals
 const RESOURCES = ['ammo', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone', ...GOODS];   // carried; all drop on death, all stealable
@@ -97,6 +97,14 @@ function freshDb() {
 function loadDb() {
   try {
     const db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    // 11 -> 12: the towns' made-up compounds went, so the stash-house list was renumbered. Characters,
+    // crews, claimed real buildings, boats and Lamar's case carry over; only house claims reset.
+    if (db.seed === SEED && db.size === WORLD_SIZE && db.version === 11 && DB_VERSION === 12) {
+      db.houses = {};
+      for (const c of Object.values(db.characters || {})) c.needsDeploy = true;
+      db.version = 12;
+      console.log('Save moved to version 12: characters kept, stash houses reset');
+    }
     if (db.seed !== SEED || db.version !== DB_VERSION || db.size !== WORLD_SIZE) throw new Error('incompatible save');
     return db;
   } catch {

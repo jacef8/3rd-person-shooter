@@ -104,7 +104,7 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   }
   for (const a of map.airstrips || []) { g.strokeStyle = '#d9dccf'; g.lineWidth = Math.max(3, a.width * k); g.beginPath(); g.moveTo(X(a.x1), Z(a.z1)); g.lineTo(X(a.x2), Z(a.z2)); g.stroke(); }
   g.lineCap = 'round';
-  for (const t of map.towns) { g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
+  for (const t of map.towns) { if (t.paved === false) continue; g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {
     if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
     if (HIDDEN.has(b.type)) continue;
