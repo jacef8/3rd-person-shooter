@@ -15,7 +15,11 @@ export const MAX_STEP_SLOPE = 1.1;  // rise/run a character can climb (~48°)
 export const PAD_LEVEL = 8.5;       // how far past a building's walls its level pad runs before grading out
 export const PAD_MARGIN = 15;       // …and where the grading ends
 export const BRIDGE_DECK = 2.5;     // height of a bridge's road deck over the water
-export const BRIDGE_HALF_WIDTH = 16; // how far either side of a bridge's centreline the walking height is the deck's.
+export const BRIDGE_HALF_WIDTH = 16;
+// Real ground is drawn taller than life. Liberty County's relief is gentle (Bristol sits on a plateau
+// ~40 m over the river, the Torreya bluffs rise ~70 m), and at true scale from a shoulder camera it
+// reads as flat. The broad lie of the land above the river is multiplied by this; water stays put.
+export const RELIEF = 2.5; // how far either side of a bridge's centreline the walking height is the deck's.
 //   Much wider than the deck itself (its railings keep you on it): the ground is sampled every 8 m,
 //   and this keeps every sample around the deck at deck height, so you don't sink as you cross.
 const DECK_HALF_WIDTH = 4.8;        // the solid deck, for bullets
@@ -184,17 +188,53 @@ export function createTerrain(seed, size, elevation = null) {
 
   /** Real ground, bilinear between the 30 m elevation samples. */
   const dem = elevation;
-  function demAt(x, z) {
+  // The ground as the game draws it, worked out once from the real elevation:
+  // 1. Only the broad lie of the land (the elevation blurred over a few hundred metres) is made
+  //    taller (RELIEF), so hills and valleys stand out without every small bump turning into a spike.
+  // 2. Then no 30 m cell may rise more than MAX_RISE over its neighbour, so the banks of ponds and the
+  //    walls of ravines stay steep but climbable: nobody gets trapped at the bottom of one.
+  // Plain + - * / and Math.min/max only, so the server and every browser get the same numbers.
+  const MAX_RISE = 16;
+  let ground = null;
+  if (dem) {
+    const N = dem.n, R = 6, a = new Float32Array(N * N), b = new Float32Array(N * N);
+    for (let k = 0; k < N * N; k++) a[k] = Math.max(0, dem.data[k] / 10);
+    for (let pass = 0; pass < 2; pass++) {
+      for (let j = 0; j < N; j++) { let sum = 0; const row = j * N; for (let i = -R; i <= R; i++) sum += a[row + Math.min(N - 1, Math.max(0, i))];
+        for (let i = 0; i < N; i++) { b[row + i] = sum / (2 * R + 1); sum += a[row + Math.min(N - 1, i + R + 1)] - a[row + Math.max(0, i - R)]; } }
+      for (let i = 0; i < N; i++) { let sum = 0; for (let j = -R; j <= R; j++) sum += b[Math.min(N - 1, Math.max(0, j)) * N + i];
+        for (let j = 0; j < N; j++) { a[j * N + i] = sum / (2 * R + 1); sum += b[Math.min(N - 1, j + R + 1) * N + i] - b[Math.max(0, j - R) * N + i]; } }
+    }
+    const g = new Float32Array(N * N);
+    for (let k = 0; k < N * N; k++) { const e = dem.data[k] / 10; g[k] = e > 0 ? e + (RELIEF - 1) * Math.min(e, a[k]) : e; }
+    const D = MAX_RISE * 1.4142;
+    for (let rep = 0; rep < 2; rep++) {
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        const k = j * N + i; let v = g[k];
+        if (i > 0) v = Math.min(v, g[k - 1] + MAX_RISE);
+        if (j > 0) { v = Math.min(v, g[k - N] + MAX_RISE); if (i > 0) v = Math.min(v, g[k - N - 1] + D); if (i < N - 1) v = Math.min(v, g[k - N + 1] + D); }
+        g[k] = v;
+      }
+      for (let j = N - 1; j >= 0; j--) for (let i = N - 1; i >= 0; i--) {
+        const k = j * N + i; let v = g[k];
+        if (i < N - 1) v = Math.min(v, g[k + 1] + MAX_RISE);
+        if (j < N - 1) { v = Math.min(v, g[k + N] + MAX_RISE); if (i < N - 1) v = Math.min(v, g[k + N + 1] + D); if (i > 0) v = Math.min(v, g[k + N - 1] + D); }
+        g[k] = v;
+      }
+    }
+    ground = g;
+  }
+  function groundAt(x, z) {
     const fx = Math.max(0, Math.min(dem.n - 1.001, (x - dem.ox) / dem.step)), fz = Math.max(0, Math.min(dem.n - 1.001, (z - dem.oz) / dem.step));
-    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, n = dem.n, d = dem.data;
+    const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, n = dem.n, d = ground;
     const a = d[j * n + i], b = d[j * n + i + 1], c = d[(j + 1) * n + i], e = d[(j + 1) * n + i + 1];
-    return (a + (b - a) * u + (c - a) * v + (a - b - c + e) * u * v) / 10;
+    return a + (b - a) * u + (c - a) * v + (a - b - c + e) * u * v;
   }
 
   /** Unflattened, unsampled height (used during world generation). */
   function raw(x, z, noBridge = false) {
     const w = waterInfo(x, z);
-    if (dem) return carveWater(x, z, w, demAt(x, z) + 0.6 * (fbm(x / 40, z / 40, s0 + 21, 2) - 0.5), noBridge);
+    if (dem) return carveWater(x, z, w, groundAt(x, z) + 1.2 * (fbm(x / 40, z / 40, s0 + 21, 2) - 0.5), noBridge);
     const b = biomeW(x, z, w);
     const plainsH = 9 + 10 * fbm(x / 500, z / 500, s0 + 1);
     const forestH = 6 + 6 * fbm(x / 400, z / 400, s0 + 2);
@@ -216,10 +256,18 @@ export function createTerrain(seed, size, elevation = null) {
   function carveWater(x, z, w, h, noBridge) {
     if (!noBridge && w.river < w.riverW / 2 + 60 && bridgeAt(x, z)) return Math.max(h, BRIDGE_DECK);
     const hw = w.riverW / 2;
+    // Banks: low within 40 m of the water, then a slope up to the land that's no steeper than a
+    // bank you can walk up (the taller the land beside the water, the further out the slope runs).
+    const bank = (d, floor) => {
+      if (d < 40) return floor + (Math.min(h, 3) - floor) * smooth(d / 40);
+      if (h <= 3) return h;
+      const band = (h - 3) * 2.2;
+      return d < 40 + band ? 3 + (h - 3) * smooth((d - 40) / band) : h;
+    };
     if (w.river < hw) h = -4 - fbm(x / 60, z / 60, s0 + 11, 1);
-    else if (w.river < hw + 40) h = -4 + (Math.min(h, 3) + 4) * smooth((w.river - hw) / 40);
+    else if (w.river < hw + 40 + Math.max(0, h - 3) * 2.2) h = bank(w.river - hw, -4);
     if (w.lake > 0) h = Math.min(h, -3 - Math.min(w.lake, 200) * 0.03);
-    else if (w.lake > -40) h = Math.min(h, -3 + (Math.min(h, 3) + 3) * smooth((w.lake + 40) / 40));
+    else if (w.lake > -40 - Math.max(0, h - 3) * 2.2) h = Math.min(h, bank(-w.lake, -3));
     return h;
   }
   function flattened(x, z, noBridge = false) {

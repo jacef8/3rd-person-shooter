@@ -3,7 +3,7 @@ import zlib from 'node:zlib';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateMap, mapChecksum, moveWithCollision, rayBox, rayAgainstBoxes, circleOverlapsBox, PLAYER_RADIUS } from '../shared/world.js';
-import { biomeName, DEEP_WATER, parseElevation } from '../shared/terrain.js';
+import { biomeName, DEEP_WATER, parseElevation, RELIEF } from '../shared/terrain.js';
 import { PIECES, placementProblem, pieceBox, investedCost } from '../shared/building.js';
 import { makeWeapon, weaponStats, levelFromXp, xpForLevel, unlocksAt, PARTS, ARCHETYPES, MAX_LEVEL, partFits, UPGRADES, CONTRACT_TYPES, isUnlocked } from '../shared/items.js';
 
@@ -249,7 +249,7 @@ test('terrain blocks deep water and cliffs, and stops bullets', () => {
   // Real ground: Bristol sits well above the river, Blountstown down on the floodplain.
   const rm = generateMap(1337, 30000, { elevation });
   const elev = (n) => rm.towns.find((q) => q.name === n).elev;
-  assert.ok(elev('Bristol') > 25 && elev('Blountstown') < 15, `Bristol ${elev('Bristol')}, Blountstown ${elev('Blountstown')}`);
+  assert.ok(elev('Bristol') > 25 * RELIEF && elev('Blountstown') < 15 * RELIEF && elev('Bristol') > 3 * elev('Blountstown'), `Bristol ${elev('Bristol')}, Blountstown ${elev('Blountstown')}`);
 });
 
 test('building rules: frames on open ground, not in towns, water or on top of things', () => {

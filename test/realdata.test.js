@@ -9,7 +9,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import WebSocket from 'ws';
 import { generateMap, mapChecksum, moveWithCollision, PLAYER_RADIUS } from '../shared/world.js';
-import { parseElevation, DEEP_WATER, BRIDGE_DECK } from '../shared/terrain.js';
+import { parseElevation, DEEP_WATER, BRIDGE_DECK, RELIEF } from '../shared/terrain.js';
 import { floats } from '../shared/boats.js';
 
 const REAL = new URL('../data/real/', import.meta.url);
@@ -29,7 +29,7 @@ test('the real-world map: ground, river, bridge, buildings and roads all line up
 
   // Real ground: Bristol stands on the bluff side well above the river, Blountstown on the floodplain.
   const elev = (n) => map.towns.find((t) => t.name === n).elev;
-  assert.ok(elev('Bristol') > 25 && elev('Blountstown') < 15, `Bristol ${elev('Bristol')}, Blountstown ${elev('Blountstown')}`);
+  assert.ok(elev('Bristol') > 25 * RELIEF && elev('Blountstown') < 15 * RELIEF && elev('Bristol') > 3 * elev('Blountstown'), `Bristol ${elev('Bristol')}, Blountstown ${elev('Blountstown')}`);
 
   // Real buildings: thousands, mostly houses, each one enterable and on level ground.
   const built = map.buildings.filter((b) => b.real);

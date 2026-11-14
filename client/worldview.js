@@ -140,6 +140,7 @@ const newBuf = (uv) => ({ pos: [], nor: [], col: [], idx: [], ...(uv ? { uv: [] 
  * `land` is the coarse whole-map sampling from mapview.sampleLand (heights + land colours).
  * `farRange` is how far out buildings and trees are drawn as simple stand-ins.
  */
+const CLAY = [0.52, 0.34, 0.22];
 export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, mobile = false, land = null } = {}) {
   const chunks = new Map();      // near: full detail
   const farChunks = new Map();   // far: stand-ins (null where a chunk has nothing to show)
@@ -178,9 +179,9 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
   // ------------------------------------------------------------------ the far scene
   const far = new THREE.Scene();
   far.fog = new THREE.Fog(SKY_HORIZON, 4000, 70000);   // only a trace of haze where the land meets the sky
-  far.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 1.1));
-  const farSun = new THREE.DirectionalLight(0xfff1dc, 1.6);
-  farSun.position.set(40, 80, 25);
+  far.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 0.85));
+  const farSun = new THREE.DirectionalLight(0xfff1dc, 2.0);
+  farSun.position.set(62, 46, 38);
   far.add(farSun);
   const farMat = new THREE.MeshLambertMaterial({ vertexColors: true });
   const farRoofMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
@@ -319,7 +320,10 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
       const h = terrain.drawn(x, z);
       if (h < 0.15) wet = true;
       pos.push(x, h, z);
-      const c = groundColor(x, z, h);
+      let c = groundColor(x, z, h);
+      // Slopes: bare red clay on the steep faces (bluffs, ravines, river banks), as in the real county.
+      const sl = Math.hypot(terrain.drawn(x + STEP, z) - terrain.drawn(x - STEP, z), terrain.drawn(x, z + STEP) - terrain.drawn(x, z - STEP)) / (2 * STEP);
+      if (h > 0.4 && sl > 0.18) { const k = Math.min(1, (sl - 0.18) / 0.4) * 0.7; c = [c[0] + (CLAY[0] - c[0]) * k, c[1] + (CLAY[1] - c[1]) * k, c[2] + (CLAY[2] - c[2]) * k]; }
       const v = 0.94 + (((i * 7 + j * 13) % 5) / 40);
       col.push(c[0] * v, c[1] * v, c[2] * v);
     }

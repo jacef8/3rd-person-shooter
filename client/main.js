@@ -57,8 +57,8 @@ function renderWorld() {
   }
   renderer.render(scene, camera);
 }
-scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 1.1));
-const sun = new THREE.DirectionalLight(0xfff1dc, 1.6);
+scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 0.85));
+const sun = new THREE.DirectionalLight(0xfff1dc, 2.0);
 sun.castShadow = true;
 sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 70, bottom: -70, near: 1, far: 220 });
@@ -3321,7 +3321,7 @@ function frame(now) {
   animateExtracts();
   for (const g of lzVis) g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
   const gy0 = ground(state.x, state.z);
-  sun.position.set(state.x + 40, gy0 + 80, state.z + 25);
+  sun.position.set(state.x + 62, gy0 + 46, state.z + 38);   // a lower sun, so slopes read as light and shade
   sun.target.position.set(state.x, gy0, state.z);
 
   for (let i = tracers.length - 1; i >= 0; i--) {
