@@ -486,23 +486,71 @@ function boatHud() {
   return `🚤 ${BOATS[v.data.type].name}${me.boat.seat === 0 ? ` · ${mph} mph` : ' · passenger'} · hull ${v.data.hp}/${v.data.max} <small>${me.boat.seat === 0 ? (state.inputMode === 'pad' ? 'Left stick: throttle and steer · ' : 'W/S throttle · A/D steer · ') : ''}${glyph('Tab')} hold · steer to the bank and ${glyph('E')} to get out</small>`;
 }
 
+// ------------------------------------------------------------------ characters
+// A low-poly person: legs with knees and boots, jacket, vest, belt, backpack, a head with a hat, and
+// both hands on the gun. Clothes, skin and hat come from the name, so everyone looks a bit different;
+// the vest colour says who they are (you blue, other players rust, rogues dark with a red visor band,
+// contacts teal). Parts hang from joints so the walk, crouch, seat and prone poses can bend them.
+const CHAR_GEO = new Map(), CHAR_MAT = new Map();
+const cbox = (w, h, d) => { const k = `${w},${h},${d}`; if (!CHAR_GEO.has(k)) CHAR_GEO.set(k, new THREE.BoxGeometry(w, h, d)); return CHAR_GEO.get(k); };
+const cmat = (color, basic = false) => { const k = `${color}${basic ? 'b' : ''}`; if (!CHAR_MAT.has(k)) CHAR_MAT.set(k, basic ? new THREE.MeshBasicMaterial({ color }) : new THREE.MeshStandardMaterial({ color, roughness: 0.85 })); return CHAR_MAT.get(k); };
+const SKIN = [0xf1c8a5, 0xd9a47c, 0xb57c55, 0x8d5a3b, 0x5f3b26];
+const JACKET = [0x4f5a3a, 0x6b5a41, 0x3e4a55, 0x5b3f33, 0x6f6a5c, 0x394236, 0x7a6248];
+const PANTS = [0x3a3f45, 0x4a4334, 0x2f3a2c, 0x55504a, 0x40362c];
+const HATS = ['cap', 'helmet', 'boonie', 'beanie', 'none'];
+const VEST = { self: 0x2f5d8c, player: 0x9a4f22, bot: 0x25202b, contact: 0x2a6f7a };
+function nameHash(s) { let h = 2166136261; for (const ch of String(s || '')) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; }
+
 function makeCharacter(kind, name) {
   const g = new THREE.Group();
-  const color = kind === 'self' ? 0x3a7bd5 : kind === 'bot' ? 0x3d2b4f : kind === 'contact' ? 0x2a6f7a : 0xd0602a;
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.33, 0.95, 4, 10), new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
-  body.position.y = 0.82;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), new THREE.MeshStandardMaterial({ color: kind === 'bot' ? 0x222222 : 0xc9a27e }));
-  head.position.y = 1.58;
-  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.07, 0.1), new THREE.MeshBasicMaterial({ color: kind === 'bot' ? 0xff2222 : 0xffa64d }));
-  visor.position.set(0, 1.6, 0.17);
-  const pack = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 0.22), new THREE.MeshStandardMaterial({ color: 0x3b3a30 }));
-  pack.position.set(0, 1.05, -0.3);
-  const gun = new THREE.Group();          // holds the gunsmith-built weapon model
-  gun.position.set(-0.25, 1.25, 0.25);
-  for (const m of [body, head, pack]) m.castShadow = true;
-  g.add(body, head, visor, pack, gun);
-  const upper = new THREE.Group();
-  g.userData = { body, head, visor, gun, pack };
+  const h = nameHash(kind === 'self' ? (localStorage.getItem('dz_name') || 'you') : name), pick = (list, n) => list[(h >>> n) % list.length];
+  const skin = cmat(kind === 'bot' ? 0x6b5848 : pick(SKIN, 3)), jacket = cmat(kind === 'bot' ? 0x2b2a2e : pick(JACKET, 7)), pants = cmat(kind === 'bot' ? 0x1f1f22 : pick(PANTS, 11));
+  const vest = cmat(VEST[kind] || VEST.player), boots = cmat(0x2a221b), dark = cmat(0x1b1d20), gear = cmat(0x3b3a30);
+  const part = (geo, mat, x, y, z, parent) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
+  const joint = (x, y, z, parent) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
+  // Hips and legs (y = 0 is the soles of the boots).
+  const hips = joint(0, 0.95, 0, g);
+  part(cbox(0.34, 0.2, 0.21), pants, 0, -0.02, 0, hips);
+  const legs = [1, -1].map((s) => {
+    const thigh = joint(s * 0.1, -0.05, 0, hips);
+    part(cbox(0.15, 0.46, 0.17), pants, 0, -0.23, 0, thigh);
+    const knee = joint(0, -0.46, 0, thigh);
+    part(cbox(0.13, 0.42, 0.15), pants, 0, -0.2, 0, knee);
+    part(cbox(0.15, 0.11, 0.27), boots, 0, -0.43, 0.04, knee);
+    return { thigh, knee };
+  });
+  // Upper body: everything above the belt leans and turns together.
+  const upper = joint(0, 0, 0, hips);
+  part(cbox(0.38, 0.06, 0.22), dark, 0, 0.07, 0, upper);                 // belt
+  part(cbox(0.4, 0.52, 0.23), jacket, 0, 0.36, 0, upper);                // jacket
+  part(cbox(0.43, 0.34, 0.27), vest, 0, 0.39, 0, upper);                 // vest
+  part(cbox(0.1, 0.12, 0.05), gear, -0.11, 0.36, 0.15, upper);           // vest pouches
+  part(cbox(0.1, 0.12, 0.05), gear, 0.11, 0.36, 0.15, upper);
+  part(cbox(0.36, 0.42, 0.18), gear, 0, 0.4, -0.21, upper);              // backpack
+  part(cbox(0.12, 0.08, 0.12), skin, 0, 0.66, 0, upper);                 // neck
+  const head = joint(0, 0.8, 0, upper);
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.135, 12, 10), skin);
+  skull.scale.set(1, 1.12, 1.02); skull.castShadow = true; head.add(skull);
+  part(cbox(0.2, 0.05, 0.04), kind === 'bot' ? cmat(0xff2a2a, true) : dark, 0, 0.02, 0.12, head);   // shades (a red visor on rogues)
+  const hat = kind === 'bot' ? 'beanie' : kind === 'contact' ? 'boonie' : pick(HATS, 17), hatMat = kind === 'self' ? vest : pick([jacket, dark, gear, pants], 19);
+  if (hat === 'cap') { part(cbox(0.27, 0.1, 0.28), hatMat, 0, 0.11, 0, head); part(cbox(0.22, 0.025, 0.12), hatMat, 0, 0.07, 0.18, head); }
+  else if (hat === 'helmet') { const hm = new THREE.Mesh(new THREE.SphereGeometry(0.165, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), hatMat); hm.position.y = 0.04; hm.castShadow = true; head.add(hm); }
+  else if (hat === 'boonie') { part(cbox(0.27, 0.1, 0.27), hatMat, 0, 0.11, 0, head); part(cbox(0.42, 0.02, 0.42), hatMat, 0, 0.07, 0, head); }
+  else if (hat === 'beanie') part(cbox(0.27, 0.14, 0.27), hatMat, 0, 0.11, -0.01, head);
+  // Arms, posed holding the gun: right hand on the grip, left hand forward on the barrel.
+  const arm = (s, sx, sz, ex) => {
+    const shoulder = joint(s * 0.25, 0.56, 0, upper);
+    shoulder.rotation.set(sx, 0, sz);
+    part(cbox(0.12, 0.3, 0.13), jacket, 0, -0.14, 0, shoulder);
+    const elbow = joint(0, -0.29, 0, shoulder);
+    elbow.rotation.x = ex;
+    part(cbox(0.1, 0.27, 0.11), jacket, 0, -0.13, 0, elbow);
+    part(cbox(0.09, 0.09, 0.1), skin, 0, -0.3, 0, elbow);
+    return shoulder;
+  };
+  const arms = [arm(-1, -0.55, 0.15, -1.25), arm(1, -1.15, -0.5, -0.45)];
+  const gun = joint(-0.13, 0.45, 0.3, upper);   // the gunsmith-built weapon model goes in here
+  g.userData = { hips, legs, upper, head, arms, gun, phase: 0, last: null, lastT: performance.now() };
   if (kind !== 'self') {
     const label = makeLabel(name, kind === 'contact' ? 0.006 : 0.0042, kind === 'bot' ? '#ff6b6b' : '#ffb27a');
     label.position.y = 2.35;
@@ -517,7 +565,6 @@ function makeCharacter(kind, name) {
     g.add(bars);
     Object.assign(g.userData, { label, bar, armorBar, bars });
   }
-  g.add(upper);
   scene.add(g);
   return g;
 }
@@ -539,14 +586,25 @@ function updateCharacterMesh(g, c, dt) {
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
-  const crouchScale = c.crouch || c.boat ? 0.68 : 1;
-  g.userData.body.scale.y += (crouchScale - g.userData.body.scale.y) * k;
-  const yShift = c.crouch || c.boat ? -0.55 : 0;
-  for (const part of ['head', 'visor', 'gun', 'pack']) {
-    const base = { head: 1.58, visor: 1.6, gun: 1.25, pack: 1.05 }[part];
-    const m = g.userData[part];
-    m.position.y += (base + yShift - m.position.y) * k;
-  }
+  // Pose: walk cycle from how fast the character is really moving, crouch, sitting in a boat.
+  const u = g.userData, now = performance.now(), adt = Math.min(0.1, (now - u.lastT) / 1000) || 0.016;
+  u.lastT = now;
+  const speed = u.last ? Math.hypot(g.position.x - u.last.x, g.position.z - u.last.z) / adt : 0;
+  u.last = { x: g.position.x, z: g.position.z };
+  u.speed = (u.speed || 0) + (Math.min(8, speed) - (u.speed || 0)) * Math.min(1, adt * 10);
+  const moving = Math.min(1, u.speed / 3) * (c.boat || c.downed ? 0 : 1);
+  u.phase += adt * (4 + u.speed * 1.6) * (moving > 0.05 ? 1 : 0);
+  const kp = Math.min(1, adt * 12), ease = (o, key, v) => { o[key] += (v - o[key]) * kp; };
+  const seated = !!c.boat, crouched = !!c.crouch && !seated;
+  ease(u.hips.position, 'y', seated ? 0.5 : crouched ? 0.62 : 0.95 + Math.abs(Math.sin(u.phase)) * 0.03 * moving);
+  ease(u.upper.rotation, 'x', crouched ? 0.28 : seated ? 0.05 : 0.08 * moving);
+  u.legs.forEach((l, i) => {
+    const s = i ? -1 : 1, swing = Math.sin(u.phase) * s;
+    const thigh = seated ? -1.5 : crouched ? -1.15 + (i ? 0.5 : 0) : swing * 0.6 * moving;
+    const knee = seated ? 1.5 : crouched ? 1.7 - (i ? 0.6 : 0) : Math.max(0, -Math.sin(u.phase + 0.6) * s) * 0.9 * moving;
+    ease(l.thigh.rotation, 'x', thigh);
+    ease(l.knee.rotation, 'x', knee);
+  });
   g.visible = !c.dead;
   // Downed: lying on the ground.
   g.rotation.order = 'YXZ';
