@@ -420,13 +420,16 @@
     "lieutenantChance": 0.25
   },
   "airTaxi": {
-    "_about": "The helicopter taxi: from any landing zone, Contact or the airstrip to any other one. Pay the fare (base + per mile), wait at the pad for it to land (leave or go down and it turns back, no charge), then you and any crewmates on the pad fly there. Not in combat, not with freight.",
+    "_about": "The helicopter taxi: from any landing zone, Contact or the airstrip to any other one. Pay the fare (base + per mile), wait at the pad for it to land (leave or go down and it turns back, no charge), then you and any crewmates on the pad fly there. Not in combat, not with freight. The pilot never sets down on the pad itself: each trip drops you at a random open spot dropMin-dropMax metres out from the stop, at least keepClear metres from anyone not in your crew, so nobody can camp a drop point.",
     "waitMs": 20000,
     "radius": 25,
     "pickupRange": 20,
     "airstripRange": 70,
     "baseFare": 10,
     "perMile": 6,
-    "cooldownMs": 120000
+    "cooldownMs": 120000,
+    "dropMin": 150,
+    "dropMax": 400,
+    "keepClear": 90
   }
 }

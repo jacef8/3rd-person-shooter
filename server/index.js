@@ -3637,6 +3637,23 @@ function taxiAction(p, msg) {
   taxis.set(p.token, { from: here, to, fare, arrivesAt: now + TAXI_WAIT_MS });
   toast(p, `🚁 Helicopter to ${to.name} lands in ${Math.round(TAXI_WAIT_MS / 1000)}s ($${fare} when you board). Stay on the pad; crewmates on it ride free.`);
 }
+const COMPASS = ['east', 'southeast', 'south', 'southwest', 'west', 'northwest', 'north', 'northeast'];
+/** A random open spot some way out from a stop: dry, outdoors, in the county, clear of strangers. */
+function taxiDrop(to, riders) {
+  const strangers = [...players.values()].filter((o) => !o.dead && !o.deploying && !riders.some((r) => r === o || sameSquad(r, o)));
+  for (let tries = 0; tries < 80; tries++) {
+    const a = Math.random() * Math.PI * 2, r = TAXI.dropMin + Math.random() * (TAXI.dropMax - TAXI.dropMin);
+    const x = to.x + Math.cos(a) * r, z = to.z + Math.sin(a) * r;
+    if (Math.abs(x) > map.half - 60 || Math.abs(z) > map.half - 60) continue;
+    if (terrain.height(x, z) < 0.6 || buildingAt(x, z) >= 0) continue;
+    if (strangers.some((o) => Math.hypot(o.x - x, o.z - z) < TAXI.keepClear)) continue;
+    const fixed = resolveCircle(x, z, PLAYER_RADIUS * 3, solidsNear(x, z, 5), terrain.height(x, z));
+    if (Math.hypot(fixed.x - x, fixed.z - z) > 0.3) continue;
+    return { x, z, dist: r, dir: COMPASS[((Math.round(Math.atan2(z - to.z, x - to.x) / (Math.PI / 4)) % 8) + 8) % 8] };
+  }
+  const near = landingSpot(to.x, to.z, 40) || { x: to.x + 3, z: to.z + 3 };
+  return { ...near, dist: 0, dir: '' };
+}
 function tickTaxis(now) {
   for (const [tok, t] of [...taxis]) {
     const p = onlineByToken(tok);
@@ -3648,15 +3665,17 @@ function tickTaxis(now) {
     if ((p.cash || 0) < t.fare) { toast(p, `You can't cover the $${t.fare} fare`); continue; }
     p.cash -= t.fare;
     const riders = [...players.values()].filter((o) => onPad(o) && (o === p || sameSquad(o, p)) && !hasCargo(o));
+    const drop = taxiDrop(t.to, riders);
+    const where = drop.dist ? `${distText(drop.dist)} ${drop.dir} of ${t.to.name}` : t.to.name;
     riders.forEach((o, i) => {
       if (o.hack) cancelHack(o, 'Boarding the helicopter');
       o.openContainer = null;
       send(o.ws, { t: 'container', closed: true });
       const a = (i / Math.max(1, riders.length)) * Math.PI * 2;
-      placeAt(o, t.to.x + 3 + Math.cos(a) * 2, t.to.z + 3 + Math.sin(a) * 2);
+      placeAt(o, drop.x + Math.cos(a) * 2.5 * (riders.length > 1), drop.z + Math.sin(a) * 2.5 * (riders.length > 1));
       o.protectedUntil = now + 5000;
       o.taxiReadyAt = now + TAXI.cooldownMs;
-      toast(o, `🚁 Flew to ${t.to.name}${o === p ? ` ($${t.fare})` : ' (on your crewmate)'}`);
+      toast(o, `🚁 Dropped ${where}${o === p ? ` ($${t.fare})` : ' (on your crewmate)'}`);
       dirty(o);
     });
   }

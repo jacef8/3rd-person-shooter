@@ -63,10 +63,14 @@ test('the helicopter taxi flies you between pads for a fare; leaving the pad sen
   a.send({ t: 'dev', x: lz.x, z: lz.z });
   await sleep(300);
   a.send({ t: 'taxi', action: 'call', to: to.id });
-  await a.toast(/Flew to/);
+  await a.toast(/Dropped .* of /);
   await until(() => a.you.cash === 500 - fare);
-  assert.ok(Math.hypot(a.at.x - dest.x, a.at.z - dest.z) < 8, 'landed at the Contact');
-  // And the pilot needs a while before the next trip.
+  // Never on the stop itself: a random open spot out from it, so nobody can camp the drop.
+  const off = Math.hypot(a.at.x - dest.x, a.at.z - dest.z);
+  assert.ok(off >= T.dropMin - 5 && off <= T.dropMax + 5, `dropped ${Math.round(off)} m out from the Contact`);
+  // Walk in to the Contact: the pilot needs a while before the next trip.
+  a.send({ t: 'dev', x: dest.x + 2, z: dest.z + 2 });
+  await sleep(300);
   a.send({ t: 'taxi', action: 'menu' });
   await until(() => a.menu.readyIn > 0);
 });
