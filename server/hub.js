@@ -144,6 +144,30 @@ function attach(ws, token) {
   for (const f of hub.accounts[token].friends) push(f);   // friends see you come online
 }
 
+// ---------------------------------------------------------------- the same callsign on another device
+// There are no passwords: a device knows you by a key it keeps. To play as yourself on a second
+// device (a phone, the Shield app, another browser), ask for a link code on the one you already use
+// and type your callsign and the code on the new one. Codes last ten minutes and work once.
+const linkCodes = new Map();   // code -> { token, expires }
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // no 0/O or 1/I to mix up
+function linkCode(token) {
+  const now = Date.now();
+  for (const [c, l] of linkCodes) if (l.expires < now || l.token === token) linkCodes.delete(c);
+  let code;
+  do code = Array.from(crypto.randomBytes(6), (b) => CODE_CHARS[b % CODE_CHARS.length]).join(''); while (linkCodes.has(code));
+  linkCodes.set(code, { token, expires: now + 10 * 60_000 });
+  sendTo(token, { t: 'linkCode', code, expires: now + 10 * 60_000 });
+}
+function linkDevice(ws, name, code) {
+  ws.linkTries = (ws.linkTries || 0) + 1;
+  if (ws.linkTries > 5) return send(ws, { t: 'error', text: 'Too many tries. Reload the page and ask for a new code.' });
+  const l = linkCodes.get(String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, ''));
+  const acc = l && l.expires > Date.now() && hub.accounts[l.token];
+  if (!acc || acc.name.toLowerCase() !== cleanName(name).toLowerCase()) return send(ws, { t: 'error', text: "That callsign and code don't match. Codes last ten minutes." });
+  for (const [c, x] of linkCodes) if (x.token === l.token) linkCodes.delete(c);
+  attach(ws, l.token);
+}
+
 function friendRequest(token, name) {
   const me = hub.accounts[token];
   const found = byName(name);
@@ -229,6 +253,7 @@ hubWss.on('connection', (ws) => {
         return send(ws, { t: 'needName', suggest: cleanName(m.name) });
       }
       if (m.t === 'register') return register(ws, m.token, m.name);
+      if (m.t === 'link') return linkDevice(ws, m.name, m.code);
       return;
     }
     const t = ws.token;
@@ -241,6 +266,7 @@ hubWss.on('connection', (ws) => {
       case 'met': return met(t, m.names);
       case 'invite': return invite(t, m);
       case 'refresh': return push(t);
+      case 'linkCode': return linkCode(t);
     }
   });
   ws.on('close', () => {

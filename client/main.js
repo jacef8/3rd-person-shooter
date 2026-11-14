@@ -664,6 +664,14 @@ function drawMinimap() {
   const X = (x) => R + (x - state.x) * k, Z = (z) => R + (z - state.z) * k;
   g.imageSmoothingEnabled = true;
   g.drawImage(mmTerrain.canvas, X(mmTerrain.x - mmTerrain.span / 2), Z(mmTerrain.z - mmTerrain.span / 2), mmTerrain.span * k, mmTerrain.span * k);
+  // Roads, as on the big map: state routes amber, main roads light, streets a shade darker, tracks brown.
+  const mmRoads = state.map.roadsNear(state.x, state.z, view * 1.42);
+  g.lineCap = 'round';
+  for (const r of [...mmRoads].sort((a, b) => (a.hw ? 1 : 0) - (b.hw ? 1 : 0))) {
+    g.strokeStyle = r.dirt ? '#b08d58' : r.hw ? '#f0b54a' : (r.width || 12) >= 8 ? '#e4ddcc' : '#c9c2b0';
+    g.lineWidth = Math.max(2.5, (r.width || 12) * k);
+    g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke();
+  }
   for (const b of state.map.grid.near(state.x, state.z, view * 1.42)) {
     g.fillStyle = b.type === 'housewall' && b.houseId === state.houseId ? '#4fbf6a' : MM_COLORS[b.type] || '#3a3f44';
     fillBox(g, b, X, Z, 1.5);
@@ -692,6 +700,33 @@ function drawMinimap() {
   const hp0 = homePos();
   if (hp0) edge(hp0.x, hp0.z, '#4fbf6a', 7);
   if (state.waypoint) edge(state.waypoint.x, state.waypoint.z, '#ff7a1a', 9);
+  // Road names: the two nearest named roads, on solid chips.
+  const named = new Map();
+  for (const r of mmRoads) {
+    if (!r.name) continue;
+    const d = distToSeg(state.x, state.z, r);
+    if (!named.has(r.name) || d < named.get(r.name).d) named.set(r.name, { d, r });
+  }
+  g.font = "700 12px 'Atkinson Hyperlegible', Segoe UI, sans-serif";
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  const placed = [];
+  for (const [name, { r }] of [...named].sort((a, b) => a[1].d - b[1].d).slice(0, 2)) {
+    // On the road, at the point of it nearest the middle of the minimap (kept inside the circle).
+    const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
+    const t = Math.max(0.1, Math.min(0.9, ((state.x - r.x1) * dx + (state.z - r.z1) * dz) / l2));
+    let lx = X(r.x1 + dx * t), ly = Z(r.z1 + dz * t);
+    const off = Math.hypot(lx - R, ly - R);
+    if (off > R - 30) { lx = R + (lx - R) * (R - 30) / off; ly = R + (ly - R) * (R - 30) / off; }
+    if (placed.some((q) => Math.abs(q - ly) < 22)) ly += 24;
+    placed.push(ly);
+    const w = Math.min(176, g.measureText(name).width + 12);
+    // Keep the whole chip inside the circle.
+    const room = Math.sqrt(Math.max(0, (R - 4) ** 2 - (ly - R) ** 2)) - w / 2;
+    lx = Math.max(R - room, Math.min(R + room, lx));
+    g.fillStyle = '#161a22'; g.beginPath(); g.roundRect(lx - w / 2, ly - 10, w, 20, 6); g.fill();
+    g.fillStyle = '#ffffff'; g.fillText(name, lx, ly + 1, 166);
+  }
+  g.textBaseline = 'alphabetic';
   g.translate(R, R);
   g.rotate(-state.yaw + Math.PI);
   g.fillStyle = '#5aa8ff';
@@ -1605,7 +1640,7 @@ function openMapScreen(mode, opts = null) {
   state.deployOpts = opts || state.deployOpts;
   $('mapscreen').hidden = false;
   document.exitPointerLock?.();
-  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 6; }
+  if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 14; }   // close enough to read the street names around you
   else { mapView.cx = 0; mapView.cz = 0; mapView.zoom = 1; }
   renderMapScreen();
 }
@@ -1713,7 +1748,9 @@ function drawMapCanvas() {
   for (const o of mapOptions()) { const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
   if (state.waypoint) markers.push({ x: state.waypoint.x, z: state.waypoint.z, kind: 'diamond', color: '#ff7a1a', size: 8, label: `Waypoint · ${distText(Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z))}` });
   if (state.me && !state.me.dead) markers.push({ x: state.x, z: state.z, kind: 'player', yaw: state.yaw, color: '#5aa8ff', size: 7 });
-  state.mapProj = drawMap(cv, map, state.mapBase, mapView, markers);
+  // The road you're on is always named on the map, whatever the zoom.
+  const here = state.me && !state.me.dead ? state.map.roadsNear(state.x, state.z, 25).filter((r) => r.name).sort((a, b) => distToSeg(state.x, state.z, a) - distToSeg(state.x, state.z, b))[0] : null;
+  state.mapProj = drawMap(cv, map, state.mapBase, mapView, markers, here ? here.name : null);
   if (state.mapMode === 'view') {
     // The pointer for the controller: waypoints and pings go where the cross is.
     const g = cv.getContext('2d'), cx = cv.width / 2, cy = cv.height / 2;
@@ -3435,6 +3472,7 @@ function hubConnect() {
         if (state.panelOpen && !typingIn($('squadpanel'))) redraw($('squadpanel'), () => renderFriends($('sqFriends'), true));
         break;
       case 'search': lobby.results = m.results; redraw($('login'), renderLobby); if (state.panelOpen) renderSquadPanel(); break;
+      case 'linkCode': lobby.link = m; renderLobby(); break;
       case 'invite': showInvite(m); break;
       case 'note': toast(m.text); break;
       case 'error': toast(`⚠ ${m.text}`); break;
@@ -3442,6 +3480,8 @@ function hubConnect() {
   };
 }
 $('register').onclick = () => hubSend({ t: 'register', name: $('name').value, token: localStorage.getItem('dz_token') });
+// Your callsign on this device too: callsign + the code from the device you already play on.
+$('linkGo').onclick = () => hubSend({ t: 'link', name: $('linkName').value, code: $('linkCode').value });
 $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('register').click(); });
 function playWorld(id, ticket = null) {
   if (!lobby.account) return;
@@ -3465,6 +3505,18 @@ function renderLobby() {
     wl.append(card);
   }
   renderFriends($('lbFriends'), false);
+  // Play as yourself on a phone, the Shield app or another browser.
+  const lk = document.createElement('div');
+  lk.className = 'lb-link';
+  if (lobby.link && lobby.link.expires > Date.now()) {
+    lk.innerHTML = `<h2>Play on another device</h2><p class="lb-note">On the other device, choose <b>Already playing on another device?</b> and enter your callsign <b>${lobby.account?.name || ''}</b> and this code:</p><div class="lb-codebig">${lobby.link.code}</div><p class="lb-note">Good for ten minutes, once. Your level, home and gear come with you.</p>`;
+  } else {
+    lk.innerHTML = '<h2>Play on another device</h2><p class="lb-note">Use the same callsign, level and home on your phone, the Shield app or another browser.</p>';
+    const b = btn('Get a code for another device', () => hubSend({ t: 'linkCode' }));
+    b.dataset.pad = 'getcode';
+    lk.append(b);
+  }
+  wl.append(lk);
 }
 /** Friends list, requests, search and recent players. `inGame` adds invite-to-this-world buttons. */
 function renderFriends(el, inGame) {

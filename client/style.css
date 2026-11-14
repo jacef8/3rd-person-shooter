@@ -489,3 +489,10 @@ input { min-height: 44px; border-radius: 10px; }
 }
 /* The map dims under the name, so the title and its line stay sharp against it. */
 #login.lobby2::after { content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none; background: linear-gradient(90deg, rgba(7, 9, 13, 0.85) 0%, rgba(7, 9, 13, 0.55) 28%, rgba(7, 9, 13, 0) 46%); }
+
+/* Linking another device: the code big and clear. */
+.lb-link { margin-top: 14px; }
+.lb-link button { width: 100%; }
+.lb-codebig { margin: 6px 0 10px; padding: 12px; text-align: center; font: 800 34px/1 var(--font-display); letter-spacing: 0.3em; color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); font-variant-numeric: tabular-nums; }
+.lb-code { flex: 0 0 130px !important; text-transform: uppercase; letter-spacing: 0.15em; }
+.lb-wide { width: 100%; margin-top: 8px; }

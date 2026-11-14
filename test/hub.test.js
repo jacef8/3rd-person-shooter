@@ -58,6 +58,21 @@ test('lobby: callsigns, friends, presence, invites into your world and crew, dep
   // Coming back with your token logs you straight in.
   const a2 = await hubConn(a.account.token);
   await until(() => a2.account?.name === 'Ava');
+  // A second device: a link code from a signed-in one, then callsign + code on the new one.
+  a2.send({ t: 'linkCode' });
+  const lc = await a2.got((m) => m.t === 'linkCode');
+  const dev = await hubConn(null);
+  await dev.got((m) => m.t === 'needName');
+  dev.send({ t: 'link', name: 'Ben', code: lc.code });
+  await dev.got((m) => m.t === 'error' && /don't match/.test(m.text));
+  dev.send({ t: 'link', name: 'ava', code: lc.code.toLowerCase() });
+  await until(() => dev.account?.name === 'Ava');
+  assert.equal(dev.account.token, a.account.token, 'the new device plays as the same character');
+  const dev2 = await hubConn(null);
+  await dev2.got((m) => m.t === 'needName');
+  dev2.send({ t: 'link', name: 'Ava', code: lc.code });
+  await dev2.got((m) => m.t === 'error');   // a code works once
+  dev.ws.close(); dev2.ws.close();
   a2.ws.close();
 
   // Friends: search, request, accept.

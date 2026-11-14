@@ -124,24 +124,26 @@ function drawNames(g, map, roads, v) {
   };
   // Tier 0: state routes. 1: main roads (zoomed in a little). 2: every named street (zoomed in close).
   const tierOf = (r) => (r.hw || /^(SR|US|CR|I)[ -]\d/.test(r.name) ? 0 : (r.width || 0) >= 8 ? 1 : 2);
-  const minK = [0, 0.05, 0.3];
+  const minK = [0, 0.04, 0.12];   // routes always; main roads a little in; every street once you're in on a town
   const cell = [260, 300, 340];   // one label per this many pixels of road
   const best = new Map();
   for (const r of roads) {
     if (!r.name) continue;
-    const tier = tierOf(r);
-    if (v.k < minK[tier]) continue;
+    const tier = r.name === v.hereRoad ? -1 : tierOf(r);   // the road you're on comes first
+    if (tier >= 0 && v.k < minK[tier]) continue;
     const x1 = v.sx(r.x1), y1 = v.sz(r.z1), x2 = v.sx(r.x2), y2 = v.sz(r.z2);
     const len = Math.hypot(x2 - x1, y2 - y1), mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
     if (mx < 0 || my < 0 || mx > v.W || my > v.H) continue;
-    if (len < (tier === 0 ? 4 : 24)) continue;
-    const key = `${r.name}|${Math.floor(mx / cell[tier])}|${Math.floor(my / cell[tier])}`;
+    if (len < (tier <= 0 ? 4 : 24)) continue;
+    const key = `${r.name}|${Math.floor(mx / cell[Math.max(0, tier)])}|${Math.floor(my / cell[Math.max(0, tier)])}`;
     const e = best.get(key);
-    if (!e || len > e.len) best.set(key, { name: r.name, tier, len, x: mx, y: my });
+    // The road you're on: its label sits just below the centre cross rather than under it.
+    const nearCentre = tier === -1 && Math.abs(mx - v.W / 2) < 60 && Math.abs(my - v.H / 2) < 24;
+    if (!e || len > e.len) best.set(key, { name: r.name, tier, len, x: mx, y: nearCentre ? v.H / 2 + 30 : my });
   }
   const list = [...best.values()].sort((a, b) => a.tier - b.tier || b.len - a.len);
   let placed = 0;
-  for (const e of list) { if (placed >= 70) break; if (chip(e.name, e.x, e.y, e.tier === 0 ? '#ffffff' : e.tier === 1 ? CHIP.road : CHIP.ink, e.tier === 0)) placed++; }
+  for (const e of list) { if (placed >= 70) break; if (chip(e.name, e.x, e.y, e.tier === -1 ? '#ffc53d' : e.tier === 0 ? '#ffffff' : e.tier === 1 ? CHIP.road : CHIP.ink, e.tier === 0)) placed++; }
   // Landmarks once you're in close enough to find them.
   if (v.k > 0.12) for (const b of map.buildings) if (b.name && b.maxX > v.minX && b.minX < v.maxX && b.maxZ > v.minZ && b.minZ < v.maxZ) chip(b.name, v.sx((b.minX + b.maxX) / 2), v.sz(b.minZ) - 12, CHIP.place);
 }
@@ -151,7 +153,7 @@ function drawNames(g, map, roads, v) {
  * markers: [{ x, z, kind, label, color, size, highlight }]
  */
 const detail = { key: null, canvas: null };
-export function drawMap(canvas, map, base, view, markers) {
+export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
   const g = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const span = map.size / view.zoom;               // metres across the shorter side
@@ -196,7 +198,7 @@ export function drawMap(canvas, map, base, view, markers) {
       fillBox(g, b, sx, sz);
     }
   }
-  drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H });
+  drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H, hereRoad });
   g.textAlign = 'center';
   for (const m of markers) {
     const x = sx(m.x), y = sz(m.z);

@@ -35,6 +35,10 @@
           <h2>Pick your callsign</h2>
           <p class="lb-note">It's how friends find you. It's yours in every world.</p>
           <div class="lb-namerow"><input id="name" maxlength="16" placeholder="Callsign" autocomplete="off" /><button id="register">Create callsign</button></div>
+          <h2>Already playing on another device?</h2>
+          <p class="lb-note">On that device, pick <b>Play on another device</b> in the lobby to get a code. Then enter your callsign and the code here.</p>
+          <div class="lb-namerow"><input id="linkName" maxlength="16" placeholder="Your callsign" autocomplete="off" /><input id="linkCode" maxlength="8" placeholder="Code" autocomplete="off" class="lb-code" /></div>
+          <button id="linkGo" class="ghost lb-wide">Use my callsign on this device</button>
         </div>
         <div id="lbMain" hidden>
           <p class="lb-who">Signed in as <b id="lbWho"></b></p>

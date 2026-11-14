@@ -225,16 +225,8 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
   /** Ground colour from biome, height and roads/towns. */
   function groundColor(x, z, h) {
     for (const t of map.towns) { const r = t.rect; if (x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ) return GROUND.town; }
-    let dirt = false;
-    for (const r of map.roadsNear(x, z, 8)) {
-      const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
-      const t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2));
-      const px = r.x1 + dx * t - x, pz = r.z1 + dz * t - z, hw = (r.width || 12) / 2;
-      if (px * px + pz * pz >= hw * hw) continue;
-      if (!r.dirt) return GROUND.road;
-      dirt = true;
-    }
-    if (dirt) return GROUND.dirt;
+    // (Roads aren't tinted into the ground any more: the ground has a point only every 8 m, so a
+    // tint smeared each road two or three times its width. Roads are their own surface on top.)
     if (h < -0.3) return GROUND.mud;
     const b = terrain.biome(x, z);
     if (h < 0.7 && b.sea < 0.5) return GROUND.sand;
