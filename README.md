@@ -214,6 +214,16 @@ Choose one:
 Then press any button on the controller; browsers only expose a controller after a button press.
 For full screen on iPhone, use Share → **Add to Home Screen** and launch it from there.
 
+## Apps
+
+- **Phones and computers** can install the game from the browser: it's a web app (manifest, icons,
+  service worker). The lobby shows how.
+- **Android TV (NVIDIA Shield) and Android phones:** `android/` is a small app that opens the live game
+  full screen, shows on the TV home row, and lets sound play without a tap. GitHub builds it
+  (`.github/workflows/android.yml`) whenever `android/` changes, and puts it on the game's site at
+  `/apk/deadzone.apk`. It's signed with a test key kept in the repo, so each build installs over the
+  last; a store release would need a private key.
+
 ## Tests
 
 ```bash

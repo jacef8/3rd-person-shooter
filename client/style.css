@@ -378,3 +378,9 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
 #inventory .upgrades .item[data-navrow] { display: flex; gap: 8px; align-items: center; }
 @media (max-width: 700px) { .invcols { grid-template-columns: 1fr; } }
 @media (max-height: 520px) { .invcol { max-height: calc(94vh - 100px); } .irow { min-height: 46px; padding: 5px 10px; } .imeta b { font-size: 15px; } .imeta small { font-size: 13px; } }
+
+/* Lobby: get the app. */
+.getapp { margin-top: 12px; }
+.getapp h2 { margin: 6px 0; }
+.getapp button { min-height: 44px; font-size: 15px; }
+.getapp .sub { text-align: left; font-size: 14px; line-height: 1.4; }

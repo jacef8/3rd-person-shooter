@@ -1,11 +1,18 @@
 {
+  "id": "/",
   "name": "Deadzone",
   "short_name": "Deadzone",
-  "description": "Persistent always-PvP third-person shooter prototype",
+  "description": "A persistent, always-PvP third-person shooter set in Liberty County, Florida",
   "start_url": "/",
+  "scope": "/",
   "display": "fullscreen",
   "orientation": "landscape",
   "background_color": "#0b0d10",
   "theme_color": "#0b0d10",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }

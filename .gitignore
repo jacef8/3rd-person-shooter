@@ -1,3 +1,9 @@
 node_modules/
 data/*.json
 data/*.pem
+
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

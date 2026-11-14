@@ -3534,6 +3534,28 @@ setInterval(() => {
 // Start talking to the lobby once everything above exists.
 hubConnect();
 
+// ------------------------------------------------------------------ install as an app
+// Phones and computers: the browser's own "Install" (Chrome / Edge) or Add to Home Screen (iPhone).
+// Android TV (Shield) has no browser to install from, so there's an app file to download.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+let installPrompt = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; renderGetApp(); });
+function renderGetApp() {
+  const box = $('getApp');
+  if (!box) return;
+  const app = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches || /DeadzoneApp/.test(navigator.userAgent);
+  if (app) { box.hidden = true; return; }
+  const ios = /iPhone|iPad/.test(navigator.userAgent);
+  box.innerHTML = '<h2>Get the app</h2>';
+  if (installPrompt) box.append(btn('Install Deadzone on this device', async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; renderGetApp(); }, ''));
+  const p = document.createElement('p');
+  p.className = 'sub';
+  p.innerHTML = ios ? 'iPhone: tap Share, then <b>Add to Home Screen</b>.'
+    : `${installPrompt ? '' : 'Phone: open the browser menu and pick <b>Install app</b> or <b>Add to Home screen</b>. '}Android TV and Shield: install the free <b>Downloader</b> app, then enter <b>${location.host}/apk/deadzone.apk</b>.`;
+  box.append(p);
+}
+renderGetApp();
+
 // ------------------------------------------------------------------ face-to-face trading
 // Both players put up goods, items or cash; both confirm; it swaps at once. Any change un-confirms.
 const ptrade = { open: false, offer: { res: {}, items: [] } };

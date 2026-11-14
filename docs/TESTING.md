@@ -22,6 +22,16 @@ that, so everyone starts fresh: new character, no home yet.**
 
 On iPhone, Share → **Add to Home Screen** and open it from there to get the full screen.
 
+**Install it as an app**
+
+- **NVIDIA Shield / Android TV:** install the free **Downloader** app from the Play Store, open it and
+  enter `deadzone-server-production-c9ff7400.up.railway.app/apk/deadzone.apk`. Allow Downloader to
+  install apps when it asks. Deadzone then shows on the TV home row. In the app, Ⓑ crouches instead
+  of backing out; press Home to leave.
+- **Android phone:** the same file works, or in Chrome open the game and pick **Install app** (it also
+  shows on the lobby screen).
+- **iPhone:** in Safari, Share → **Add to Home Screen**.
+
 **Other ways**
 
 - **Computer:** open the link, enter a callsign, pick a town. Click the game to capture the mouse.

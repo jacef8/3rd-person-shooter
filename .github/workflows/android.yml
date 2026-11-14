@@ -1,0 +1,39 @@
+# Builds the Deadzone Android app (phones and Android TV / NVIDIA Shield) and puts it on the game's
+# own site at /apk/deadzone.apk, so it can be installed with the Downloader app on a TV.
+name: Android app
+on:
+  push:
+    branches: [ccr-0f91b1bc-crkbxy]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build the app
+        run: gradle -p android assembleRelease --no-daemon
+      - name: Keep a copy with this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: deadzone-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+      - name: Put it on the game's site
+        run: |
+          mkdir -p client/apk
+          cp android/app/build/outputs/apk/release/app-release.apk client/apk/deadzone.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add client/apk/deadzone.apk
+          git commit -m "Android app, build ${GITHUB_RUN_NUMBER}" || exit 0
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

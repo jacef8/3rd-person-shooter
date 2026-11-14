@@ -1,0 +1,39 @@
+// The Deadzone app for Android phones and Android TV (NVIDIA Shield): a full-screen window onto the
+// live game. Built by .github/workflows/android.yml; nothing to install on your computer.
+plugins {
+    id 'com.android.application'
+}
+
+def build = Integer.parseInt(System.getenv('GITHUB_RUN_NUMBER') ?: '1')
+
+android {
+    namespace 'com.deadzone.game'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'com.deadzone.game'
+        minSdk 24
+        targetSdk 34
+        versionCode build
+        versionName "0.1.${build}"
+    }
+    // A test signing key kept with the code, so every new build installs over the last one.
+    // (Fine for testing with friends; a store release would use a private key instead.)
+    signingConfigs {
+        test {
+            storeFile file('../deadzone-test.keystore')
+            storePassword 'deadzone'
+            keyAlias 'deadzone'
+            keyPassword 'deadzone'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.test
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
