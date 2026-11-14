@@ -44,6 +44,22 @@ const scene = new THREE.Scene();
 // see worldview.js) drawn first through a long-range camera; the near world is drawn over it.
 renderer.autoClear = false;
 renderer.setClearColor(SKY_HORIZON);
+// Graphics: Fast for phones (and older computers), Full for desktops; changed in the crew panel.
+const GFX = {
+  fast: { label: 'Fast', pixel: 1, view: 200, far: 600, shadows: false, about: 'Shorter view, no shadows: smooth on phones.' },
+  balanced: { label: 'Balanced', pixel: 1.25, view: 260, far: 1000, shadows: true, about: 'Middle ground.' },
+  full: { label: 'Full', pixel: 2, view: 320, far: 1500, shadows: true, about: 'Everything: long views and shadows.' },
+};
+let gfxMode = (() => { try { const v = localStorage.getItem('dz_gfx'); if (GFX[v]) return v; } catch { /* private mode */ } return MOBILE ? 'fast' : 'full'; })();
+function applyGfx(mode = gfxMode) {
+  gfxMode = mode;
+  try { localStorage.setItem('dz_gfx', mode); } catch { /* private mode */ }
+  const g = GFX[mode];
+  renderer.setPixelRatio(Math.min(devicePixelRatio, g.pixel));
+  sun.castShadow = g.shadows;
+  state.view?.setRanges(g.view, g.far);
+  dispatchEvent(new Event('resize'));
+}
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 800);
 const farCamera = new THREE.PerspectiveCamera(70, 1, 20, 130000);
 function renderWorld() {
@@ -125,7 +141,8 @@ function initWorld(m) {
   state.map = map;
   // One coarse pass over the whole county, shared by the far landscape and the map screen.
   const land = sampleLand(map, MOBILE ? 120 : 75);
-  state.view = createWorldView(scene, map, { viewRange: MOBILE ? 230 : 320, farRange: MOBILE ? 700 : 1500, mobile: MOBILE, land });
+  state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: MOBILE, land });
+  applyGfx();
   state.view.setOwnHouse(m.houseId);
   state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000, land);
   state.landmarks = map.buildings.filter((b) => b.name);
@@ -2792,7 +2809,14 @@ function renderPadSettings() {
   const louder = btn('Louder', () => { sfx.setVolume(+(sfx.getVolume() + 0.1).toFixed(1)); sfx.click(true); save(); });
   quieter.dataset.pad = 'quieter'; louder.dataset.pad = 'louder';
   row4.append(quieter, louder);
-  box.append(row, row2, row3, row4);
+  const row5 = document.createElement('div'); row5.className = 'item';
+  row5.innerHTML = `<div class="meta"><div class="nm">Graphics: ${GFX[gfxMode].label}</div><div class="st">${GFX[gfxMode].about}</div></div>`;
+  for (const m of Object.keys(GFX)) {
+    const b = btn(GFX[m].label, () => { applyGfx(m); renderPadSettings(); }, m === gfxMode ? '' : 'ghost');
+    b.dataset.pad = `gfx-${m}`;
+    row5.append(b);
+  }
+  box.append(row5, row, row2, row3, row4);
   if (keep) { const el = box.querySelector(`[data-pad="${keep}"]`); if (el && state.inputMode === 'pad') padFocus(el); }
 }
 

@@ -144,7 +144,8 @@ const newBuf = (uv) => ({ pos: [], nor: [], col: [], idx: [], ...(uv ? { uv: [] 
  * `farRange` is how far out buildings and trees are drawn as simple stand-ins.
  */
 const CLAY = [0.52, 0.34, 0.22];
-export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, mobile = false, land = null } = {}) {
+export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: far0 = 1500, mobile = false, land = null } = {}) {
+  let viewRange = view0, farRange = far0;   // changeable while playing (the Graphics setting)
   const chunks = new Map();      // near: full detail
   const farChunks = new Map();   // far: stand-ins (null where a chunk has nothing to show)
   const terrain = map.terrain;
@@ -644,6 +645,8 @@ export function createWorldView(scene, map, { viewRange = 300, farRange = 1500, 
       }
       for (const [k, g] of farChunks) if (!wantFar.has(k)) { if (g) dispose(g, far); farChunks.delete(k); }
     },
+    /** Graphics setting: how far full detail and the far stand-ins reach. Chunks outside go next frame. */
+    setRanges(view, farR) { viewRange = view; farRange = farR; },
     get chunkCount() { return chunks.size; },
     get farChunkCount() { return farChunks.size; },
   };
