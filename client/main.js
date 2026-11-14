@@ -827,6 +827,35 @@ function drawMinimap() {
   const hp0 = homePos();
   if (hp0) edge(hp0.x, hp0.z, '#4fbf6a', 7);
   if (state.waypoint) edge(state.waypoint.x, state.waypoint.z, '#ff7a1a', 9);
+  // Crewmates: a green dot when they're in view; further off, a green arrow on the rim pointing at
+  // them, with their name and how far. Live position when they're near, else the crew update (5 s).
+  const crewChips = [];
+  for (const m of state.squad.members || []) {
+    if (!m.online || m.id === state.id || m.x == null) continue;
+    const live = state.players.get(m.id)?.data, x = live ? live.x : m.x, z = live ? live.z : m.z;
+    const dx = x - state.x, dz = z - state.z, d = Math.hypot(dx, dz);
+    if (d * k < R - 8) { dot(x, z, '#7dff9a', 6); continue; }
+    const ux = dx / d, uz = dz / d, ex = R + ux * (R - 9), ez = R + uz * (R - 9);
+    g.save(); g.translate(ex, ez); g.rotate(Math.atan2(uz, ux));
+    g.fillStyle = '#7dff9a'; g.strokeStyle = '#0f1218'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(7, 0); g.lineTo(-7, -7); g.lineTo(-3, 0); g.lineTo(-7, 7); g.closePath(); g.fill(); g.stroke();
+    g.restore();
+    crewChips.push({ text: `${m.name.slice(0, 8)} ${distText(d)}`, x: R + ux * (R - 40), y: R + uz * (R - 34) });
+  }
+  g.font = "700 11px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const chipBoxes = [];
+  for (const cc of crewChips) {
+    const w = g.measureText(cc.text).width + 10, h = 16;
+    let y0 = Math.max(14, Math.min(200 - 14 - h, cc.y - h / 2));
+    for (let n = 0; n < 4 && chipBoxes.some((b) => cc.x - w / 2 < b[0] + b[2] && cc.x + w / 2 > b[0] && y0 < b[1] + b[3] && y0 + h > b[1]); n++) y0 += y0 > R ? -h - 2 : h + 2;   // step clear of another chip
+    // Kept whole inside the round minimap: as wide as the circle allows at that height.
+    const far = Math.max(Math.abs(y0 - R), Math.abs(y0 + h - R)), half = Math.sqrt(Math.max(0, R * R - far * far)) - 3;
+    const x0 = Math.max(R - half, Math.min(R + half - w, cc.x - w / 2));
+    chipBoxes.push([x0, y0, w, h]);
+    g.fillStyle = '#0f1218'; g.beginPath(); g.roundRect(x0, y0, w, h, 5); g.fill();
+    g.strokeStyle = '#7dff9a'; g.lineWidth = 1; g.stroke();
+    g.fillStyle = '#ffffff'; g.fillText(cc.text, x0 + w / 2, y0 + h / 2 + 0.5);
+  }
   // Road names: the two nearest named roads, on solid chips.
   const named = new Map();
   for (const r of mmRoads) {
