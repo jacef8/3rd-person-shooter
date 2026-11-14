@@ -350,3 +350,31 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
 
 /* Map screen: the note on how to place waypoints and pings. */
 .mapnote { margin: 4px 0 8px; font-size: 14px; line-height: 1.35; color: var(--hud-ink-2); }
+
+/* Inventory: two columns of full-width lines, one button each, so the controller moves predictably. */
+#inventory { display: flex; flex-direction: column; gap: 8px; }
+#inventory[hidden] { display: none; }
+.invtop { display: flex; gap: 8px; align-items: center; }
+.invtop button { min-height: 44px; font-size: 15px; }
+.invsum { margin-left: auto; font-size: 14px; color: var(--hud-ink-2); font-variant-numeric: tabular-nums; }
+.invcols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; min-height: 0; }
+.invcol { min-height: 0; max-height: calc(88vh - 120px); overflow: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 6px; }
+.invcol h2 { margin: 8px 0 2px; font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--hud-accent); }
+.irow { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 12px; text-align: left; background: var(--hud-surface); color: var(--hud-ink); border: 1px solid var(--hud-line); border-left: 5px solid var(--bar, #5a5f68); border-radius: 12px; cursor: pointer; }
+.irow:hover { border-color: #3a404c; border-left-color: var(--bar, #5a5f68); }
+.irow:focus-visible, .irow.padfocus { outline: 3px solid #ffc53d; outline-offset: 1px; }
+.imeta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.imeta b { font-size: 16px; font-weight: 700; }
+.imeta small { font-size: 14px; color: var(--hud-ink-2); }
+.imeta small.at { color: #ffd27a; }
+.iact { flex: 0 0 auto; max-width: 42%; font-size: 14px; font-weight: 700; color: var(--hud-accent); text-align: right; }
+.iact.none { color: var(--hud-ink-2); font-weight: 600; }
+.imenu { display: flex; flex-direction: column; gap: 6px; margin: 0 0 4px 22px; }
+.imbtn { min-height: 46px; font-size: 15px; font-weight: 700; text-align: left; padding: 0 14px; border-radius: 10px; }
+.invtabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.invtab { min-height: 44px; font-size: 15px; padding: 0 14px; border-radius: 10px; background: var(--hud-surface); color: var(--hud-ink-2); border: 1px solid var(--hud-line); }
+.invtab.on { color: #111; background: var(--hud-accent); border-color: var(--hud-accent); font-weight: 700; }
+#inventory .upgrades { margin: 0; }
+#inventory .upgrades .item[data-navrow] { display: flex; gap: 8px; align-items: center; }
+@media (max-width: 700px) { .invcols { grid-template-columns: 1fr; } }
+@media (max-height: 520px) { .invcol { max-height: calc(94vh - 100px); } .irow { min-height: 46px; padding: 5px 10px; } .imeta b { font-size: 15px; } .imeta small { font-size: 13px; } }

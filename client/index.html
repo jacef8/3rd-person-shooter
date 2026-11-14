@@ -79,21 +79,13 @@
     <div id="resources"></div>
   </div>
 
-  <div id="inventory" class="panel" hidden>
-    <div class="cols">
-      <section>
-        <div class="gsentry"><button class="ghost" id="openSquadBtn">Squad &amp; leaderboard</button><button class="ghost" id="openMapBtn">Map</button></div>
-        <h2>Equipped</h2>
-        <div id="equipped"></div>
-        <h2>Backpack <small id="packcount"></small></h2>
-        <div id="pack"></div>
-      </section>
-      <section id="containerCol" hidden>
-        <h2 id="containerTitle"></h2>
-        <div id="container"></div>
-      </section>
+  <div id="inventory" class="panel" data-nav="lists" hidden>
+    <div class="invtop" data-navcol="top" data-navrow="1"><button class="ghost" id="openSquadBtn">Crew</button><button class="ghost" id="openMapBtn">Map</button><span class="invsum" id="packcount"></span></div>
+    <div class="invcols">
+      <section class="invcol" id="youCol" data-navcol="you"></section>
+      <section class="invcol" id="containerCol" data-navcol="here" hidden></section>
     </div>
-    <div class="hint"><span class="kbonly">Tab / Esc to close</span><span class="padonly">Ⓑ back · View (⧉) closes</span></div>
+    <div class="hint"><span class="kbonly">Click a line to see what you can do with it · Tab or Esc to close</span><span class="padonly">Ⓐ choose · Ⓑ back · ◀ ▶ switch side · ⧉ close</span></div>
   </div>
 
   <div id="gunsmith" class="panel" hidden>

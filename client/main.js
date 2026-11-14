@@ -1147,105 +1147,160 @@ function equippedFor(item) {
   return undefined;
 }
 
+// ------------------------------------------------------------------ inventory
+// Every line is one button, in one of two columns: you (left) and the stash, bag or body beside you
+// (right). Ⓐ on a line does its only action, or opens a short list of what you can do with it right
+// under it. Up and down go along the column; left and right switch sides.
+const invUi = { tab: 'contents', menuFor: null, kind: null };
+const RES_USE = {
+  cash: 'Buy and sell at trading posts', parts: 'Build guns and armor at your gunsmith', tech: 'Powers gadgets and lock bypass',
+  salvage: 'Stash house upgrades', ammo: 'Rounds for every gun', wood: 'Building (chop trees with a hatchet)', stone: 'Building (mine rocks with a pickaxe)',
+  intel: 'Upload at your stash for XP. Lost if you die carrying it.', seeds: 'Plant in a farm plot',
+};
+/** One line: a full-width button. `actions` is [[label, fn], ...]; `why` says why there's nothing to do. */
+function invRow(key, { title, detail = '', extra = '', color = '#5a5f68', actions = [], why = '' }) {
+  const row = document.createElement('button');
+  row.className = 'irow';
+  row.dataset.pad = key;   // so the highlight finds this line again after a redraw
+  row.style.setProperty('--bar', color);
+  const act = actions.length ? actions.map((a) => a[0]).join(' · ') : why;
+  row.innerHTML = `<span class="imeta"><b>${title}</b>${detail ? `<small>${detail}</small>` : ''}${extra ? `<small class="at">${extra}</small>` : ''}</span><span class="iact${actions.length ? '' : ' none'}">${act}</span>`;
+  row.onclick = () => {
+    if (!actions.length) { if (why) toast(why); return; }
+    if (actions.length === 1) { invUi.menuFor = null; actions[0][1](); return; }
+    invUi.menuFor = invUi.menuFor === key ? null : key;
+    renderInventory();
+    const first = document.querySelector('#inventory .imenu button');
+    if (first) { if (state.inputMode === 'pad') padFocus(first); else first.focus(); }
+  };
+  if (invUi.menuFor !== key) return [row];
+  // The choices, right under the line.
+  const menu = document.createElement('div');
+  menu.className = 'imenu';
+  actions.forEach(([label, fn], i) => menu.append(btn(label, () => { invUi.menuFor = null; fn(); renderInventory(); }, i ? 'imbtn ghost' : 'imbtn')));
+  menu.append(btn('Cancel', () => closeInvMenu(), 'imbtn ghost'));
+  return [row, menu];
+}
+function closeInvMenu() {
+  const key = invUi.menuFor;
+  invUi.menuFor = null;
+  renderInventory();
+  const row = key && document.querySelector(`#inventory .irow[data-pad="${key}"]`);
+  if (row) { if (state.inputMode === 'pad') padFocus(row); else row.focus(); }
+}
+const head = (text) => Object.assign(document.createElement('h2'), { textContent: text });
+
 function renderInventory() {
   const me = state.me;
   if (!me) return;
-  const inv = me.inv;
-  const eq = $('equipped'); eq.innerHTML = '';
+  const inv = me.inv, c = state.container;
+  if ((c?.kind || null) !== invUi.kind) { invUi.kind = c?.kind || null; invUi.tab = 'contents'; invUi.menuFor = null; }
+  const put = !!c?.canPut;
+  // ---- you
+  const you = $('youCol'); you.innerHTML = '';
+  you.append(head('Equipped'));
   for (const slot of ['primary', 'secondary', 'armor']) {
-    eq.append(itemCard(inv[slot], { slot, buttons: inv[slot] ? [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [] }));
+    const it = inv[slot], label = { primary: 'Main gun', secondary: 'Sidearm', armor: 'Armor' }[slot];
+    you.append(...invRow(`eq-${slot}`, it
+      ? { title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
+      : { title: `${label}: empty`, detail: 'Equip one from your backpack', why: 'Empty' }));
   }
-  const pack = $('pack'); pack.innerHTML = '';
-  // Supplies: food (tap to eat), crops and cash.
-  const sup = RES_UI.filter((r) => GOODS[r] && me[r]);
-  if (sup.length) {
-    const row = document.createElement('div');
-    row.className = 'gsentry';
-    for (const r of sup) {
-      const b = document.createElement('button');
-      b.className = 'ghost';
-      b.textContent = `${GOODS[r].icon} ${resText(r, me[r])}${GOODS[r].food ? ` · eat (+${GOODS[r].food})` : ''}`;
-      b.disabled = !GOODS[r].food;
-      b.onclick = () => send({ t: 'inv', action: 'eat', good: r });
-      row.append(b);
-    }
-    pack.append(row);
+  you.append(head(`Backpack · ${inv.pack.length} of ${state.packSize} slots`));
+  if (!inv.pack.length) you.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
+  inv.pack.forEach((it) => {
+    const actions = [];
+    if (it.kind === 'weapon' || it.kind === 'armor') actions.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })]);
+    if (it.kind === 'medkit') actions.push(['Use', () => send({ t: 'inv', action: 'use' })]);
+    if (put) actions.push(['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })]);
+    if (it.kind !== 'package') actions.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })]);
+    you.append(...invRow(`pk-${it.id}`, { title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions }));
+  });
+  const carried = RES_UI.filter((r) => me[r]);
+  you.append(head('Supplies'));
+  if (!carried.length) you.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No supplies.' }));
+  for (const r of carried) {
+    const actions = [];
+    if (GOODS[r]?.food) actions.push([`Eat (+${GOODS[r].food} food)`, () => send({ t: 'inv', action: 'eat', good: r })]);
+    if (put && r !== 'intel') actions.push(['Put in stash', () => send({ t: 'container', action: 'put', res: r })]);
+    you.append(...invRow(`rs-${r}`, { title: resText(r, me[r]), detail: GOODS[r]?.food ? `Food: +${GOODS[r].food} each` : RES_USE[r] || (GOODS[r] ? 'Sell at a trading post' : ''), color: '#3f4650', actions, why: c ? '' : 'Carried' }));
   }
-  $('packcount').textContent = `(${inv.pack.length}/${state.packSize}) · ammo ${me.ammo} · parts ${me.parts}`;
-  const c = state.container;
-  if (!inv.pack.length) pack.innerHTML = '<div class="empty">Empty</div>';
-  for (const item of inv.pack) {
-    const buttons = [];
-    if (item.kind === 'weapon' || item.kind === 'armor') buttons.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: item.id })]);
-    if (item.kind === 'medkit') buttons.push(['Use', () => send({ t: 'inv', action: 'use' })]);
-    if (c?.canPut) buttons.push(['Stash →', () => send({ t: 'container', action: 'put', itemId: item.id })]);
-    buttons.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: item.id })]);
-    pack.append(itemCard(item, { buttons }));
+  $('packcount').textContent = `Carrying ${inv.pack.length} of ${state.packSize} · ${me.ammo} rounds`;
+  // ---- the stash, bag or body beside you
+  const col = $('containerCol');
+  col.hidden = !c;
+  if (!c) return;
+  col.innerHTML = '';
+  col.append(head(`${c.title}${c.cap ? ` · ${c.items.length} of ${c.cap}` : ''}`));
+  const own = !!c.gunsmith;
+  if (own) {
+    const tabs = document.createElement('div');
+    tabs.className = 'invtabs'; tabs.dataset.navrow = '1';
+    for (const [k, label] of [['contents', 'Stash'], ['upgrades', 'Upgrades'], ['craft', 'Craft'], ['home', 'Home & raids']]) {
+      const b = btn(label, () => { invUi.tab = k; invUi.menuFor = null; renderInventory(); }, `invtab${invUi.tab === k ? ' on' : ''}`);
+      b.dataset.pad = `tab-${k}`;
+      tabs.append(b);
+    }
+    col.append(tabs);
   }
-  $('containerCol').hidden = !c;
-  if (c) {
-    $('containerTitle').textContent = `${c.title}${c.cap ? ` (${c.items.length}/${c.cap})` : ''}`;
-    const box = $('container'); box.innerHTML = '';
-    if (c.gunsmith) {
-      const bar = document.createElement('div');
-      bar.className = 'gsentry';
-      bar.innerHTML = `<button id="openGs">Open Gunsmith</button><button id="bankIntel" ${me.intel + (c.intel || 0) ? '' : 'disabled'}>Upload ${me.intel + (c.intel || 0)} intel (+${(me.intel + (c.intel || 0)) * 40} XP)</button>`;
-      box.append(bar);
-      bar.querySelector('#openGs').onclick = openGunsmith;
-      bar.querySelector('#bankIntel').onclick = () => send({ t: 'container', action: 'bank' });
+  const tab = own ? invUi.tab : 'contents';
+  if (tab === 'contents') {
+    if (own) {
+      const n = me.intel + (c.intel || 0);
+      col.append(...invRow('gunsmith', { title: 'Gunsmith', detail: 'Change parts, build guns and armor', color: '#ff7a1a', actions: [['Open', openGunsmith]] }));
+      col.append(...invRow('intel', { title: `Upload intel: ${n}`, detail: n ? `+${n * 40} XP` : 'Bring intel home from terminals and Rogues', color: '#ff7a1a', actions: n ? [['Upload', () => send({ t: 'container', action: 'bank' })]] : [], why: 'No intel' }));
+      col.append(...invRow('travel', { title: 'Fast travel', detail: 'To a Contact you have found, or your crew', color: '#ff7a1a', actions: [['Choose where', () => { closeInventory(); openMapScreen('travel'); }]] }));
     }
-    if (c.gunsmith) {
-      const tr = document.createElement('div');
-      tr.className = 'gsentry';
-      tr.append(btn('Fast travel…', () => { closeInventory(); openMapScreen('travel'); }));
-      box.append(tr);
+    if (c.raid) col.append(raidPanel(c));
+    if (c.ruin) col.append(...invRow('ruin', { title: 'Rebuild this stash house', detail: `It's a ruin. Needs a hammer and ${costText(c.ruin.cost)} carried.`, color: '#ff6b6b', actions: [['Rebuild', () => send({ t: 'rebuild' })]] }));
+    const takeable = !c.raid?.sealed && (RES_UI.some((r) => c[r]) || c.items.length);
+    if ((c.kind === 'bag' || c.raid) && takeable) {
+      col.append(...invRow('takeall', { title: 'Take everything', detail: c.raid ? 'As much as one raid can carry off' : 'Into your backpack and supplies', color: '#7dff9a', actions: [['Take everything', () => {
+        for (const r of RES_UI) if (c[r]) send({ t: 'container', action: 'take', res: r });
+        for (const it of c.items) send({ t: 'container', action: 'take', itemId: it.id });
+      }]] }));
     }
-    if (c.raid) box.append(raidPanel(c));
-    if (c.ruin) {
-      const bar = document.createElement('div');
-      bar.className = 'gsentry';
-      bar.append(Object.assign(document.createElement('span'), { className: 'note', textContent: `This stash house is a ruin. Rebuild it to lock it again (needs a hammer and ${costText(c.ruin.cost)} carried).` }), btn('Rebuild', () => send({ t: 'rebuild' }), ''));
-      box.append(bar);
+    if (put && carried.some((r) => r !== 'intel')) {
+      col.append(...invRow('putall', { title: 'Put all supplies in the stash', detail: carried.filter((r) => r !== 'intel').map((r) => resText(r, me[r])).join(' · '), color: '#7dff9a', actions: [['Put them all in', () => { for (const r of carried) if (r !== 'intel') send({ t: 'container', action: 'put', res: r }); }]] }));
     }
-    if (c.home) box.append(homePanel(c));
-    if (c.home?.raid) box.append(raidWindowPanel(c.home));
-    if (c.upg) box.append(upgradePanel(c));
-    if (c.craft) box.append(craftPanel(c));
-    if (c.canPut) {
-      const dep = document.createElement('div');
-      dep.className = 'gsentry';
-      for (const r of RES_UI.filter((x) => x !== 'intel')) {
-        if (!me[r]) continue;
-        const b = document.createElement('button');
-        b.className = 'ghost'; b.textContent = `Deposit ${resText(r, me[r])}`;
-        b.onclick = () => send({ t: 'container', action: 'put', res: r });
-        dep.append(b);
-      }
-      if (dep.children.length) box.append(dep);
-    }
-    if (c.kind === 'bag' || c.raid) {
-      const anything = RES_UI.some((r) => c[r]) || c.items.length;
-      if (anything && !c.raid?.sealed) {
-        const bar = document.createElement('div'); bar.className = 'gsentry';
-        bar.append(btn('Take everything', () => {
-          for (const r of RES_UI) if (c[r]) send({ t: 'container', action: 'take', res: r });
-          for (const it of c.items) send({ t: 'container', action: 'take', itemId: it.id });
-        }, ''));
-        box.append(bar);
-      }
-    }
-    for (const r of RES_UI) {
-      if (!c[r]) continue;
-      // Someone else's stash: one raid carries off only a share of each supply.
+    const res = RES_UI.filter((r) => c[r]);
+    if (!c.items.length && !res.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty.' }));
+    for (const r of res) {
       const can = c.raid ? Math.min(c[r], c.raid.res[r] || 0) : c[r];
-      box.append(itemCard({ kind: r, name: c.raid ? `${resText(r, c[r])} · you can take ${can}` : resText(r, c[r]) }, { buttons: can > 0 && !c.raid?.sealed ? [['← Take', () => send({ t: 'container', action: 'take', res: r })]] : [] }));
+      col.append(...invRow(`cr-${r}`, { title: resText(r, c[r]), detail: c.raid ? `You can take ${can}` : RES_USE[r] || '', color: '#3f4650', actions: can > 0 && !c.raid?.sealed ? [[`Take ${can}`, () => send({ t: 'container', action: 'take', res: r })]] : [], why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
     }
-    if (!c.items.length && !RES_UI.some((r) => c[r])) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty' }));
-    for (const item of c.items) box.append(itemCard(item, { buttons: c.raid && (c.raid.sealed || c.raid.items <= 0) ? [] : [['← Take', () => send({ t: 'container', action: 'take', itemId: item.id })]] }));
+    const blocked = c.raid && (c.raid.sealed || c.raid.items <= 0);
+    for (const it of c.items) {
+      const actions = blocked ? [] : [['Take', () => send({ t: 'container', action: 'take', itemId: it.id })]];
+      if (!blocked && (it.kind === 'weapon' || it.kind === 'armor')) actions.push(['Take and equip', () => { send({ t: 'container', action: 'take', itemId: it.id }); send({ t: 'inv', action: 'equip', itemId: it.id }); }]);
+      col.append(...invRow(`ci-${it.id}`, { title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions, why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
+    }
+  } else if (tab === 'upgrades') {
+    const hl = c.home?.level ?? 1, have = (k) => (k === 'comms' ? me.comms : (me[k] || 0) + (c[k] || 0));
+    for (const [key, u] of Object.entries(UPGRADES)) {
+      const tier = c.upg[key] || 0, next = u.tiers[tier + 1];
+      const lack = next && (hl < next.home ? `Needs home level ${next.home}` : !Object.entries(next.cost).every(([k, v]) => have(k) >= v) ? `Needs ${costText(next.cost)}` : '');
+      col.append(...invRow(`up-${key}`, { title: `${u.name}: ${u.tiers[tier].label}`, detail: u.desc, extra: next ? `Next: ${next.label} · ${costText(next.cost)}` : 'Fully upgraded', color: '#ffc53d', actions: next && !lack ? [[`Install ${next.label}`, () => send({ t: 'upgrade', track: key })]] : [], why: next ? lack : 'Done' }));
+    }
+  } else if (tab === 'craft') {
+    const have = (k) => (me[k] || 0) + (c[k] || 0);
+    for (const [key, d] of Object.entries(CRAFTS)) {
+      const lack = me.level < d.level ? `Needs level ${d.level}` : !Object.entries(d.cost).every(([k, v]) => have(k) >= v) ? `Needs ${Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(', ')}` : '';
+      col.append(...invRow(`cf-${key}`, { title: d.name, detail: TOOLS[key]?.desc || d.desc || '', extra: Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(' · '), color: '#9fe39f', actions: lack ? [] : [['Craft', () => send({ t: 'craft', item: key })]], why: lack }));
+    }
+  } else if (tab === 'home' && c.home) {
+    const h = c.home;
+    const lo = HOME_LEVEL_XP[h.level - 1], hi = HOME_LEVEL_XP[h.level] ?? lo;
+    const info = document.createElement('div');
+    info.className = 'raidnote';
+    info.innerHTML = `<b>${h.name} · home level ${h.level}</b>${h.level >= MAX_HOME_LEVEL ? 'Top level.' : `${h.xp - lo} of ${hi - lo} home XP to level ${h.level + 1} (${HOME_LEVEL_TEXT[h.level]}).`} Now: +${h.perks.storage} slots, door ×${h.perks.doorMul.toFixed(2)}, ${feet(h.perks.radius)} claim, ${h.perks.buildCap} structures. Home XP comes from upgrades, building inside your claim, uploading intel here, and holding it.`;
+    col.append(info);
+    if (h.raid) col.append(raidWindowPanel(h));
+    col.append(...invRow('abandon', { title: 'Abandon this stash house', detail: 'Anything left inside can be taken by anyone', color: '#ff6b6b', actions: [['Yes, abandon it', () => send({ t: 'abandon' })], ['Keep it', () => {}]] }));
   }
 }
 
 function openInventory() {
+  invUi.menuFor = null;
   state.invOpen = true;
   $('inventory').hidden = false;
   document.exitPointerLock?.();
@@ -1281,48 +1336,11 @@ function raidWindowPanel(h) {
   const row = document.createElement('div');
   row.className = 'item';
   const label = Object.assign(document.createElement('div'), { className: 'meta', innerHTML: `<div class="nm">Start at ${hourLabel(pick)}</div><div class="st">${windowText(pick)}</div>` });
-  row.append(label, btn('Earlier', () => send({ t: 'raidWindow', start: (pick + 23) % 24 })), btn('Later', () => send({ t: 'raidWindow', start: (pick + 1) % 24 })));
+  const earlier = btn('Earlier', () => send({ t: 'raidWindow', start: (pick + 23) % 24 })), later = btn('Later', () => send({ t: 'raidWindow', start: (pick + 1) % 24 }));
+  earlier.dataset.pad = 'rw-earlier'; later.dataset.pad = 'rw-later';
+  row.dataset.navrow = '1';
+  row.append(label, earlier, later);
   wrap.append(row);
-  return wrap;
-}
-/** Stash house level: XP bar, current perks, what the next level unlocks, abandon. */
-function homePanel(c) {
-  const h = c.home;
-  const wrap = document.createElement('div');
-  wrap.className = 'upgrades';
-  const lo = HOME_LEVEL_XP[h.level - 1], hi = HOME_LEVEL_XP[h.level] ?? lo;
-  const pct = h.level >= MAX_HOME_LEVEL ? 100 : ((h.xp - lo) / (hi - lo)) * 100;
-  const next = homePerks(Math.min(MAX_HOME_LEVEL, h.level + 1));
-  wrap.innerHTML = `<h2>${h.name} — home level ${h.level}</h2>
-    <div class="bar homexp"><div class="fill xpfill" style="width:${pct}%"></div><span>${h.level >= MAX_HOME_LEVEL ? 'Max level' : `${h.xp - lo} / ${hi - lo} home XP`}</span></div>
-    <div class="st" style="margin:6px 0">Now: +${h.perks.storage} slots · door ×${h.perks.doorMul.toFixed(2)} · ${feet(h.perks.radius)} claim · ${h.perks.buildCap} structures.
-    ${h.level < MAX_HOME_LEVEL ? `<br>Level ${h.level + 1}: ${HOME_LEVEL_TEXT[h.level]} · +${next.storage} slots · ${feet(next.radius)} claim.` : ''}
-    <br><small style="color:#888">Home XP: install upgrades, build inside your claim radius, upload intel here, and just hold it over time.</small></div>`;
-  const ab = btn('Abandon this stash house', () => { if (confirm('Abandon your stash house? Anything left inside can be taken by anyone.')) send({ t: 'abandon' }); });
-  wrap.append(ab);
-  return wrap;
-}
-function upgradePanel(c) {
-  const me = state.me;
-  const wrap = document.createElement('div');
-  wrap.className = 'upgrades';
-  wrap.innerHTML = '<h2>Stash house upgrades</h2>';
-  const have = (k) => (k === 'comms' ? me.comms : (me[k] || 0) + (c[k] || 0));
-  for (const [key, u] of Object.entries(UPGRADES)) {
-    const tier = c.upg[key] || 0;
-    const next = u.tiers[tier + 1];
-    const row = document.createElement('div');
-    row.className = 'item';
-    const hl = c.home?.level ?? 1;
-    row.innerHTML = `<div class="meta"><div class="nm">${u.name} <small style="color:#888">${u.tiers[tier].label}</small></div><div class="st">${u.desc}</div>${next ? `<div class="at">Next: ${next.label} — ${costText(next.cost)}${hl < next.home ? ` · needs home level ${next.home}` : ''}</div>` : '<div class="at">Maxed</div>'}</div>`;
-    if (next) {
-      const ok = hl >= next.home && Object.entries(next.cost).every(([k, v]) => have(k) >= v);
-      const b = btn('Install', () => send({ t: 'upgrade', track: key }));
-      b.disabled = !ok;
-      row.append(b);
-    }
-    wrap.append(row);
-  }
   return wrap;
 }
 
@@ -2040,6 +2058,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && state.panelOpen) { closeSquadPanel(); return; }
   if (e.code === 'Tab' || e.code === 'KeyI') { e.preventDefault(); doAction('inventory'); return; }
   if (e.code === 'Escape' && state.gunsmithOpen) { closeGunsmith(); return; }
+  if (e.code === 'Escape' && state.invOpen && invUi.menuFor) { closeInvMenu(); return; }
   if (e.code === 'Escape' && state.invOpen) { closeInventory(); return; }
   state.keys.add(e.code);
   if (e.repeat) return;
@@ -2653,10 +2672,38 @@ function padFocus(el) {
   el.dispatchEvent(new MouseEvent('mouseenter'));   // drives gunsmith previews and map highlights
 }
 /** Spatial menu navigation: move to the nearest control in the pushed direction. */
+/**
+ * Lists: up and down go along the column, left and right switch columns. Buttons that sit in one
+ * row (data-navrow, like tabs or Earlier / Later) take left and right first.
+ */
+function moveInLists(root, cur, dx, dy) {
+  const cols = [...root.querySelectorAll('[data-navcol]')].filter((c) => c.offsetParent !== null && focusables(c).length);
+  const colOf = (el) => cols.find((c) => c.contains(el));
+  const col = colOf(cur);
+  if (!col) return false;
+  const list = focusables(col), row = cur.closest('[data-navrow]');
+  const nearestIn = (els) => { const a = cur.getBoundingClientRect(), y = a.top + a.height / 2, x = a.left + a.width / 2; return els.reduce((best, el) => { const b = el.getBoundingClientRect(), d = Math.abs(b.top + b.height / 2 - y) * 3 + Math.abs(b.left + b.width / 2 - x); return !best || d < best.d ? { el, d } : best; }, null)?.el; };
+  if (dx) {
+    if (row) { const rl = focusables(row), k = rl.indexOf(cur) + dx; if (k >= 0 && k < rl.length) { padFocus(rl[k]); return true; } }
+    const side = cols.filter((c) => c !== col && c.dataset.navcol !== 'top').sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+    const target = side.find((c) => (dx > 0 ? c.getBoundingClientRect().left > col.getBoundingClientRect().left : c.getBoundingClientRect().left < col.getBoundingClientRect().left));
+    if (target) { padFocus(nearestIn(focusables(target))); return true; }
+    return true;   // nothing that way: stay put
+  }
+  // Up and down: the next line in this column (skipping the rest of a row of buttons).
+  let k = list.indexOf(cur);
+  do k += dy; while (k >= 0 && k < list.length && row && row.contains(list[k]));
+  if (k >= 0 && k < list.length) { padFocus(list[k]); return true; }
+  const top = cols.find((c) => c.dataset.navcol === 'top');
+  if (dy < 0 && top && col !== top) { padFocus(nearestIn(focusables(top))); return true; }
+  if (dy > 0 && col === top) { const first = cols.filter((c) => c !== top).map((c) => focusables(c)[0]).filter(Boolean); if (first.length) padFocus(nearestIn(first)); return true; }
+  return true;
+}
 function moveFocus(root, dx, dy) {
   const list = focusables(root);
   if (!list.length) return;
   sfx.click();
+  if (root.dataset.nav === 'lists' && list.includes(document.activeElement) && moveInLists(root, document.activeElement, dx, dy)) return;
   const cur = document.activeElement;
   // Start on the first button rather than a text box, so the phone keyboard doesn't pop up.
   if (!list.includes(cur)) return padFocus(list.find((el) => el.tagName === 'BUTTON') || list[0]);
@@ -2691,6 +2738,7 @@ function regainFocus(panel) {
 }
 function padBack() {
   if (osk.input) return closeOsk(false);
+  if (state.invOpen && invUi.menuFor) return closeInvMenu();
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.mapOpen) { if (state.mapMode === 'view' || state.mapMode === 'travel') closeMapScreen(); }
   else if (state.contactOpen) closeContact();
@@ -2760,8 +2808,8 @@ function pollPad(dt, now) {
       else if (el && panel.contains(el) && el.tagName === 'BUTTON') {
         const idx = focusables(panel).indexOf(el);
         el.click();
-        // Panels re-render after most actions; put focus back where it was.
-        setTimeout(() => { const p = topPanel(); if (!p) return; const l = focusables(p); if (l.length && !l.includes(document.activeElement)) padFocus(l[Math.min(idx, l.length - 1)]); }, 150);
+        // Panels re-render after most actions; put the highlight back on the same control (or near where it was).
+        setTimeout(() => { const p = topPanel(); if (!p) return; const l = focusables(p); if (l.length && !l.includes(document.activeElement)) { if (pad.mark?.panel === p.id) regainFocus(p); else padFocus(l[Math.min(idx, l.length - 1)]); } }, 150);
       } else if (!el || !panel.contains(el)) moveFocus(panel, 0, 1);
     }
     if (just(BTN.B)) padBack();
@@ -2817,7 +2865,8 @@ function pollPad(dt, now) {
 new MutationObserver(() => {
   if (state.inputMode !== 'pad') return;
   const p = topPanel();
-  if (p && !p.contains(document.activeElement)) { const l = focusables(p); if (l.length) padFocus(l.find((el) => el.tagName === 'BUTTON') || l[0]); }
+  // (A screen that redrew itself gets the same control back, not its first button.)
+  if (p && !p.contains(document.activeElement)) { const l = focusables(p); if (l.length) { if (pad.mark?.panel === p.id) regainFocus(p); else padFocus(l.find((el) => el.tagName === 'BUTTON') || l[0]); } }
 }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
 
 $('openSquadBtn').onclick = () => { closeInventory(); openSquadPanel(); };
@@ -3092,23 +3141,6 @@ function dismantleAimed() {
     if (d < bd) { bd = d; best = sv.data; }
   }
   if (best) send({ t: 'dismantle', id: best.id }); else toast('Stand next to one of your structures to dismantle it');
-}
-function craftPanel(c) {
-  const me = state.me;
-  const wrap = document.createElement('div');
-  wrap.className = 'upgrades';
-  wrap.innerHTML = '<h2>Craft tools</h2>';
-  const have = (k) => (me[k] || 0) + (c[k] || 0);
-  for (const [key, d] of Object.entries(CRAFTS)) {
-    const row = document.createElement('div');
-    row.className = 'item';
-    row.innerHTML = `<div class="meta"><div class="nm">${d.name}</div><div class="st">${TOOLS[key]?.desc || d.desc || ''}</div><div class="at">${Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(' · ')}${me.level < d.level ? ` · needs level ${d.level}` : ''}</div></div>`;
-    const b = btn('Craft', () => send({ t: 'craft', item: key }));
-    b.disabled = me.level < d.level || !Object.entries(d.cost).every(([k, v]) => have(k) >= v);
-    row.append(b);
-    wrap.append(row);
-  }
-  return wrap;
 }
 
 // ------------------------------------------------------------------ main loop
