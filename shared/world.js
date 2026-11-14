@@ -1054,6 +1054,25 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     box(wx - 0.08, wz - 0.08, wx + 0.08, wz + 0.08, 6.5, 'pole', { y0: wy });
     box(wx - 0.3, wz - 1.6, wx + 0.3, wz, 0.6, 'windsock', { y0: wy + 5.6 });
   }
+  // Shops in real buildings (hand-placed, shared/data/real-extra.json): the building takes the shop's
+  // name; the keeper stands inside the front door and a sign hangs over it.
+  const shops = [];
+  if (infra) for (const sh of EXTRA.shops || []) {
+    const { x, z } = project(sh.lat, sh.lon, size);
+    const b = buildings.filter((q) => q.real && q.doors?.length).sort((a, c) => Math.hypot(a.cx - x, a.cz - z) - Math.hypot(c.cx - x, c.cz - z))[0];
+    if (!b || Math.hypot(b.cx - x, b.cz - z) > 40) continue;
+    b.name = sh.name; b.shop = sh.kind;
+    // The front door: the one facing the nearest road.
+    const door = b.doors.reduce((a, d) => (!a || roadDist(d.x + d.out[0] * 6, d.z + d.out[1] * 6, 60) < roadDist(a.x + a.out[0] * 6, a.z + a.out[1] * 6, 60) ? d : a), null);
+    // The counter between the door and the keeper, and a gun rack on the wall behind him.
+    const ox = door.out[0], oz = door.out[1], ang = Math.atan2(oz, ox) + Math.PI / 2, fy = b.floor + 0.3;
+    const at = (d, side = 0) => [door.x - ox * d - oz * side, door.z - oz * d + ox * side];
+    { const [cx, cz] = at(2.2); const c = orientedBox(cx, cz, 1.6, 0.35, ang, { id: boxes.length, h: 1.0, y0: fy, type: 'counter' }); boxes.push(c); grid.insert(c); }
+    { const [cx, cz] = at(5.2); const r = orientedBox(cx, cz, 1.8, 0.15, ang, { id: boxes.length, h: 2.0, y0: fy, type: 'rack' }); boxes.push(r); grid.insert(r); }
+    shops.push({ id: shops.length, kind: sh.kind, name: sh.name, building: buildings.indexOf(b), x: b.cx, z: b.cz,
+      keeper: { x: door.x - door.out[0] * 3.2, z: door.z - door.out[1] * 3.2, yaw: Math.atan2(door.out[0], door.out[1]) },
+      door: { x: door.x, z: door.z, out: door.out, y: b.floor } });
+  }
   const nearStrip = (x, z) => airstrips.some((a) => segDist(x, z, a.x1, a.z1, a.x2, a.z2).d < a.width / 2 + 10);
   const nearRail = (x, z, r) => railGrid.near(x, z, r).some((s) => segDist(x, z, s.x1, s.z1, s.x2, s.z2).d < r) || nearStrip(x, z);
 
@@ -1160,11 +1179,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
     ...(infra?.places || []).filter(([lat, lon, kind]) => kind !== 'landing').map(([lat, lon, kind, text]) => ({ ...project(lat, lon, size), text, kind: 'place', place: kind })).filter(onMap),
     ...airstrips.map((a) => ({ text: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, kind: 'place', place: 'airstrip' })),
+    ...shops.map((sh) => ({ text: sh.name, x: sh.x, z: sh.z, kind: 'place', place: sh.kind })),
   ];
   return {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
-    docks, camps, river: river ? river.pts : null, powerLines, rails, airstrips,
+    docks, camps, river: river ? river.pts : null, powerLines, rails, airstrips, shops,
     /** The trees in one 128 m countryside tile, for drawing far-off woods without loading them into the world. */
     natureTile: (tx, tz) => natureTile(tx, tz, terrain.exact).filter((b) => b.type === 'tree' || b.type === 'pine'), natureTileSize: NATURE_TILE,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },

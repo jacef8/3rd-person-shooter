@@ -1,0 +1,17 @@
+{
+  "_about": "Lamar's Pawn (10508 FL-20, Bristol): buys and sells guns, armor and goods. A gun's value is its base value plus a share for each part that isn't the factory one; Lamar pays 'pays' of that and sells at 'sells' of it. Whatever players sell him goes in his case for anyone to buy; he restocks from 'stockStart' while the case is low. No fighting inside the shop.",
+  "name": "Lamar's Pawn",
+  "keeper": "Lamar",
+  "gunValue": { "sidearm": 90, "smg": 220, "carbine": 300, "shotgun": 240, "dmr": 380, "lmg": 450 },
+  "armorValue": { "light": 80, "medium": 200, "field": 260, "heavy": 340 },
+  "attachmentBonus": 0.12,
+  "pays": 0.5,
+  "sells": 1.0,
+  "goodsPays": 0.8,
+  "goodsMarkup": 1.25,
+  "stockStart": ["sidearm", "sidearm", "shotgun", "smg", "carbine", "dmr", "light", "medium"],
+  "minStock": 6,
+  "maxStock": 18,
+  "restockMinutes": 20,
+  "safeRadius": 22
+}

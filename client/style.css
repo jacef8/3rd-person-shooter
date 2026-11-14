@@ -560,3 +560,9 @@ body.touchui #wslots span { padding: 0 9px; }
   body:not(.padseen) .lb-help .touchonly { display: inline-block; }
   body:not(.padseen) #padhint { display: none; }
 }
+
+/* One-trader screens (Lamar, merchants, landings, stalls): one wide column, not a third of the panel. */
+#contactpanel.solo { width: min(860px, 96vw); }
+#contactpanel.solo .cols { grid-template-columns: 1fr; }
+.pawncols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 700px) { .pawncols { grid-template-columns: 1fr; } }

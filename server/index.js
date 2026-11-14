@@ -22,7 +22,7 @@ import {
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
 } from '../shared/world.js';
 import {
-  makeWeapon, makeArmor, makeConsumable, weaponStats, armorStats, worldSupply, partFits, isUnlocked,
+  makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
   levelFromXp, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
@@ -37,6 +37,7 @@ import HOMESTEAD from '../shared/data/homestead.json' with { type: 'json' };
 import ECONOMY from '../shared/data/economy.json' with { type: 'json' };
 import LIVING from '../shared/data/world.json' with { type: 'json' };
 import RIVER_DATA from '../shared/data/river.json' with { type: 'json' };
+import PAWN from '../shared/data/pawn.json' with { type: 'json' };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -582,6 +583,7 @@ function buildingClaimant(idx) { for (const st of structs.values()) if (PIECES[s
 // Loot spots inside a claimed building stop restocking: it's someone's home now.
 const spawnBuilding = map.lootSpawns.map((sp) => (sp.indoor ? buildingAt(sp.x, sp.z) : -1));
 function startClaimBuilding(p, idx) {
+  if (map.buildings[idx]?.shop) return toast(p, `${map.buildings[idx].name} is open for business, not for claiming`);
   const held = buildingClaimant(idx);
   if (held) return toast(p, `${storeOwnerLabel(held)} holds this building — break in through a door`);
   if (claimOf(p)) return toast(p, squadOf(p) ? 'Your crew already has a stash house' : 'You already have a stash house. Abandon it before claiming another.');
@@ -876,7 +878,82 @@ function npcDown(b, attacker) {
   }
 }
 /** What a friendly NPC buys and sells. Merchants pay near the best price anywhere; settlers sell their produce cheap. */
-function npcTradeView(b) {
+// ---- Lamar's Pawn: guns, armor and goods bought and sold. What players sell goes in the case.
+function pawnValue(it) {
+  if (it.kind === 'weapon') {
+    const extra = Object.entries(it.parts || {}).filter(([k, v]) => v && DEFAULT_PARTS[k] !== v).length;
+    return Math.round((PAWN.gunValue[it.archetype] || 150) * (1 + PAWN.attachmentBonus * extra));
+  }
+  if (it.kind === 'armor') return PAWN.armorValue[it.type] || 100;
+  return 0;
+}
+function pawnCase(now = Date.now()) {
+  if (!db.pawn) db.pawn = { stock: [], restockAt: 0 };
+  const P = db.pawn;
+  // Low on stock: a new piece comes in every so often (a fresh shop opens with the full starting case).
+  if (P.stock.length < PAWN.minStock && now >= (P.restockAt || 0)) {
+    const have = P.stock.length;
+    for (let i = have; i < (have ? have + 1 : PAWN.stockStart.length); i++) {
+      const k = PAWN.stockStart[(i + Math.floor(now / 60000)) % PAWN.stockStart.length];
+      P.stock.push(PAWN.armorValue[k] ? makeArmor(k) : makeWeapon(k));
+    }
+    P.restockAt = now + PAWN.restockMinutes * 60000;
+  }
+  return P.stock;
+}
+const pawnPrice = (it) => Math.max(1, Math.round(pawnValue(it) * PAWN.sells));
+const pawnPays = (it) => Math.max(1, Math.round(pawnValue(it) * PAWN.pays));
+/** Everything a player could sell Lamar: guns and armor carried, worn or in the backpack. */
+function pawnSellable(p) {
+  const out = [];
+  for (const slot of [...GUN_SLOTS, 'armor']) if (p.inv[slot]) out.push({ item: p.inv[slot], slot });
+  for (const it of p.inv.pack) if (it.kind === 'weapon' || it.kind === 'armor') out.push({ item: it, slot: 'pack' });
+  return out;
+}
+function pawnView(p) {
+  const G = (g) => HOMESTEAD.goods[g]?.name || g;
+  return { town: PAWN.name, who: PAWN.keeper, pawn: true,
+    sells: Object.keys(ECONOMY.prices).map((g) => ({ good: g, pays: Math.max(1, Math.floor(ECONOMY.prices[g] * PAWN.goodsPays)), name: G(g) })),
+    shop: Object.entries(ECONOMY.shop).filter(([k]) => !k.startsWith('_')).map(([k, it]) => ({ id: k, name: it.name || G(k), price: it.kind === 'good' && ECONOMY.prices[k] ? Math.max(it.price, Math.round(ECONOMY.prices[k] * PAWN.goodsMarkup)) : it.price, qty: it.qty || 1 })),
+    case: pawnCase().map((it) => ({ ...it, price: pawnPrice(it) })),
+    offers: p ? pawnSellable(p).map(({ item, slot }) => ({ id: item.id, name: item.name, kind: item.kind, archetype: item.archetype, type: item.type, parts: item.parts, paint: item.paint, slot, pays: pawnPays(item) })) : [] };
+}
+function pawnTrade(p, b, msg) {
+  if (msg.action === 'buyItem') {
+    const stock = pawnCase(), i = stock.findIndex((x) => x.id === msg.itemId);
+    if (i < 0) return toast(p, 'Somebody bought that one already'), true;
+    const it = stock[i], price = pawnPrice(it);
+    if ((p.cash || 0) < price) return toast(p, `That costs $${price}. You have $${p.cash || 0}`), true;
+    if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full'), true;
+    stock.splice(i, 1);
+    p.cash -= price;
+    p.inv.pack.push(it);
+    if (it.kind === 'weapon') p.mags[it.id] = p.mags[it.id] ?? 0;
+    toast(p, `Bought ${it.name} for $${price}. It's in your backpack: equip it from the bag.`);
+    return true;
+  }
+  if (msg.action === 'sellItem') {
+    const found = pawnSellable(p).find((x) => x.item.id === msg.itemId);
+    if (!found) return true;
+    const { item, slot } = found, pays = pawnPays(item);
+    if (slot === 'pack') p.inv.pack.splice(p.inv.pack.indexOf(item), 1);
+    else {
+      p.inv[slot] = null;
+      if (slot === p.active) p.active = GUN_SLOTS.find((s2) => p.inv[s2]) || 'secondary';
+      if (slot === 'armor') p.armor = Math.min(p.armor, maxArmor(p));
+    }
+    delete p.mags[item.id];
+    p.cash = (p.cash || 0) + pays;
+    const stock = pawnCase();
+    stock.push(item);
+    if (stock.length > PAWN.maxStock) stock.shift();   // the oldest piece goes out the back
+    toast(p, `Lamar gave you $${pays} for your ${item.name}`);
+    return true;
+  }
+  return false;
+}
+function npcTradeView(b, p) {
+  if (b.kind === 'pawn') return pawnView(p);
   if (b.kind === 'trader') return traderView(b);
   const best = (g) => Math.max(...map.contacts.map((c) => priceAt(c.id, g)));
   if (b.kind === 'merchant') {
@@ -890,11 +967,11 @@ function npcTradeView(b) {
     shop: produce.map((g) => ({ id: g, name: HOMESTEAD.goods[g].name, price: Math.max(1, Math.round((ECONOMY.prices[g] || 3) * NPC.settler.sellRate * ECONOMY.buyMarkup)), qty: 1 })) };
 }
 function friendlyNpcNear(p) {
-  for (const b of bots.values()) if (b.npc && !b.dead && (b.kind === 'merchant' || b.kind === 'settler' || b.kind === 'trader') && Math.hypot(b.x - p.x, b.z - p.z) < 2.6) return b;
+  for (const b of bots.values()) if (b.npc && !b.dead && (b.kind === 'merchant' || b.kind === 'settler' || b.kind === 'trader' || b.kind === 'pawn') && Math.hypot(b.x - p.x, b.z - p.z) < (b.kind === 'pawn' ? 3.2 : 2.6)) return b;
   return null;
 }
 function npcView(p, b) {
-  return { t: 'contact', id: null, npc: b.id, name: b.name, offers: [], active: [], comms: p.comms, trade: npcTradeView(b) };
+  return { t: 'contact', id: null, npc: b.id, name: b.kind === 'pawn' ? `${PAWN.keeper} · ${PAWN.name}` : b.name, offers: [], active: [], comms: p.comms, trade: npcTradeView(b, p) };
 }
 
 
@@ -906,7 +983,11 @@ const boatById = (id) => db.boats.find((b) => b.id === id);
 const canUseBoat = (p, b) => !!b.owner && tokenInSquadWith(p, b.owner);
 const boatName = (b) => `${b.ownerName ? `${b.ownerName}'s ` : ''}${BOATS[b.type].name.toLowerCase()}`;
 const boatOccupants = (b) => rtOf(b).seats.map((id) => id && players.get(id)).filter(Boolean);
-function inCamp(x, z) { for (const c of map.camps) if (Math.hypot(x - c.x, z - c.z) <= c.radius) return c; return null; }
+function inCamp(x, z) {
+  for (const c of map.camps) if (Math.hypot(x - c.x, z - c.z) <= c.radius) return c;
+  for (const sh of map.shops || []) if (Math.hypot(x - sh.x, z - sh.z) <= PAWN.safeRadius) return sh;   // no fighting at Lamar's
+  return null;
+}
 function newBoat(type, x, z, yaw, owner) {
   const b = { id: `boat${crypto.randomBytes(4).toString('hex')}`, type, owner: owner?.token || null, ownerName: owner?.name || null, x, z, yaw, hp: BOATS[type].hp, items: [] };
   db.boats.push(b);
@@ -1137,6 +1218,17 @@ const traderPosts = map.docks.map((d) => {
 });
 function keepTraders() {
   const alive = [...players.values()].filter((p) => !p.dead && !p.deploying);
+  // Lamar minds the shop whenever anyone's nearby.
+  for (const sh of map.shops || []) {
+    const b = sh.bot && bots.get(sh.bot), k = sh.keeper;
+    const near = (r) => alive.some((p) => Math.abs(p.x - k.x) < r && Math.abs(p.z - k.z) < r);
+    if (b && !near(600)) { bots.delete(b.id); sh.bot = null; }
+    else if (!b && near(400)) {
+      const n = { id: uid('pw'), name: PAWN.keeper, isBot: true, npc: true, kind: 'pawn', shop: sh.id, serial: botSerial++, x: k.x, z: k.z, homeX: k.x, homeZ: k.z, yaw: k.yaw, hp: 500, maxHp: 500, dead: false };
+      bots.set(n.id, n);
+      sh.bot = n.id;
+    }
+  }
   traderPosts.forEach((t, i) => {
     const b = t.bot && bots.get(t.bot);
     const near = (r) => alive.some((p) => Math.abs(p.x - t.x) < r && Math.abs(p.z - t.z) < r);
@@ -1801,7 +1893,8 @@ function finishFishing(p) {
 function tradeNpc(p, msg) {
   const b = bots.get(msg.npcId);
   if (!b || b.dead || !b.npc || Math.hypot(b.x - p.x, b.z - p.z) > 4) return toast(p, 'They\'ve moved on');
-  const view = npcTradeView(b);
+  if (b.kind === 'pawn' && pawnTrade(p, b, msg)) { dirty(p); return send(p.ws, npcView(p, b)); }
+  const view = npcTradeView(b, p);
   if (msg.action === 'sell') {
     const row = view.sells.find((x) => x.good === msg.good);
     const have = p[msg.good] || 0;
@@ -2252,7 +2345,7 @@ function tickDowned(now) {
 function applyDamage(target, amount, attacker, isBot, headshot = false, ammo = null) {
   if (target.dead) return;
   if (!isBot && attacker && !attacker.isBot && (inFair(target.x, target.z) || inFair(attacker.x, attacker.z) || inCamp(target.x, target.z) || inCamp(attacker.x, attacker.z))) return;   // the fairgrounds and swamp camps are safe zones
-  if (target.npc && target.kind === 'trader') return;   // river traders are left alone by everyone
+  if (target.npc && (target.kind === 'trader' || target.kind === 'pawn')) return;   // traders and Lamar are left alone by everyone
   if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
   if (!isBot && !pvpAllowed(attacker, target)) return;
   if (!isBot && target.downed) {

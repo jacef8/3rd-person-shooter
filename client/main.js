@@ -155,6 +155,24 @@ function initWorld(m) {
     scene.add(g);
     state.contactMeshes.push(g);
   }
+  // Shop signs over the front door (Lamar's Pawn).
+  for (const sh of map.shops || []) {
+    const c = document.createElement('canvas');
+    c.width = 1024; c.height = 256;
+    const g2 = c.getContext('2d');
+    g2.fillStyle = '#14161b'; g2.fillRect(0, 0, 1024, 256);
+    g2.strokeStyle = '#ffd27a'; g2.lineWidth = 12; g2.strokeRect(14, 14, 996, 228);
+    g2.fillStyle = '#ffd27a'; g2.textAlign = 'center'; g2.textBaseline = 'middle';
+    g2.font = '800 112px Archivo, Arial Black, sans-serif'; g2.fillText(sh.name.toUpperCase(), 512, 112);
+    g2.fillStyle = '#ffffff'; g2.font = '700 46px Atkinson Hyperlegible, Arial, sans-serif'; g2.fillText(sh.kind === 'pawn' ? 'GUNS · GOODS · BUY & SELL' : '', 512, 200);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 1.4), new THREE.MeshBasicMaterial({ map: tex }));
+    const d = sh.door;
+    sign.position.set(d.x + d.out[0] * 0.32, ground(d.x + d.out[0] * 2, d.z + d.out[1] * 2) + 3.3, d.z + d.out[1] * 0.32);
+    sign.rotation.y = Math.atan2(d.out[0], d.out[1]);
+    scene.add(sign);
+  }
   for (const c of map.camps) {
     const g = new THREE.Group();
     const label = makeLabel(`🏕 ${c.name} · no fighting`, 0.009, '#9fe39f');
@@ -957,10 +975,10 @@ function handle(m) {
       for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
         let rec = state.bots.get(b.id);
-        if (!rec && (b.kind === 'merchant' || b.kind === 'settler' || b.kind === 'trader')) {
+        if (!rec && (b.kind === 'merchant' || b.kind === 'settler' || b.kind === 'trader' || b.kind === 'pawn')) {
           rec = { mesh: makeCharacter('contact', b.name) };
           rec.mesh.position.set(b.x, ground(b.x, b.z), b.z);
-          setLabel(rec.mesh.userData.label, `${b.kind === 'merchant' ? '🛒' : b.kind === 'trader' ? (b.name === 'Dockhand' ? '⚓' : '🏕') : '🌾'} ${b.name}`, '#9fe39f');
+          setLabel(rec.mesh.userData.label, b.kind === 'pawn' ? `$ ${b.name} · buys & sells guns` : `${b.kind === 'merchant' ? '🛒' : b.kind === 'trader' ? (b.name === 'Dockhand' ? '⚓' : '🏕') : '🌾'} ${b.name}`, b.kind === 'pawn' ? '#ffd27a' : '#9fe39f');
           state.bots.set(b.id, rec);
         }
         if (!rec && b.kind === 'convoy') {
@@ -1505,13 +1523,61 @@ function closeContact() {
   $('contactpanel').hidden = true;
   lockPointer();
 }
+/** Lamar's Pawn: his case of guns and armor, what he'd pay for yours, and goods both ways. */
+function renderPawn(c, me, box) {
+  const t = c.trade, tsend = (m) => send({ t: 'trade', npcId: c.npc, ...m });
+  const row = (title, detail, extra, color, button) => {
+    const r = document.createElement('div');
+    r.className = 'item';
+    r.innerHTML = `<div class="meta"><div class="nm"><span class="swatch" style="background:${color}"></span>${esc(title)}</div><div class="st">${detail}</div>${extra ? `<div class="st">${extra}</div>` : ''}</div>`;
+    r.append(button);
+    col.append(r);
+  };
+  const head = (text) => { const h = document.createElement('h3'); h.textContent = text; col.append(h); };
+  box.innerHTML = `<p class="sub" style="text-align:left">You have <b>$${me.cash || 0}</b>. Lamar buys guns and armor at half what they're worth (more for good attachments) and sells at full price. Whatever anyone sells him goes in his case. No fighting in the shop.</p><div class="pawncols"><div></div><div></div></div>`;
+  const [left, right] = box.querySelectorAll('.pawncols > div');
+  let col = left;   // the case on the left; selling and supplies on the right
+  head(`In the case · ${t.case.length}`);
+  if (!t.case.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'The case is empty. New pieces come in through the day.' }));
+  for (const it of t.case) {
+    const b = btn(`Buy $${it.price}`, () => tsend({ action: 'buyItem', itemId: it.id }), '');
+    b.disabled = (me.cash || 0) < it.price || me.inv.pack.length >= state.packSize;
+    row(it.name, statLine(it), it.kind === 'weapon' ? attachmentLine(it) : '', it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', b);
+  }
+  col = right;
+  head('Sell to Lamar');
+  if (!t.offers.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'You have no guns or armor to sell.' }));
+  for (const o of t.offers) {
+    const where = o.slot === 'pack' ? 'in your backpack' : o.slot === 'armor' ? 'you are wearing it' : o.slot === me.active ? 'in your hands' : `carried (${SLOT_LABEL[o.slot].toLowerCase()})`;
+    row(o.name, `${statLine(o)} · ${where}`, '', o.kind === 'weapon' ? (PAINTS[o.paint]?.color || '#888') : '#5aa8ff', btn(`Sell for $${o.pays}`, () => tsend({ action: 'sellItem', itemId: o.id }), ''));
+  }
+  const sellable = t.sells.filter((x) => me[x.good] > 0);
+  if (sellable.length) {
+    head('Sell goods');
+    for (const x of sellable) {
+      const r = document.createElement('div');
+      r.className = 'item';
+      r.innerHTML = `<div class="meta"><div class="nm">${GOODS[x.good]?.icon || ''} ${resText(x.good, me[x.good])}</div><div class="st">pays $${x.pays} each</div></div>`;
+      r.append(btn('Sell 1', () => tsend({ action: 'sell', good: x.good, qty: 1 })), btn(`Sell all ($${x.pays * me[x.good]})`, () => tsend({ action: 'sell', good: x.good, qty: 'all' }), ''));
+      col.append(r);
+    }
+  }
+  head('Supplies');
+  for (const it of t.shop) {
+    const b = btn(`$${it.price}`, () => tsend({ action: 'buy', item: it.id }), '');
+    b.disabled = (me.cash || 0) < it.price;
+    row(`${it.name}${it.qty > 1 ? ` ×${it.qty}` : ''}`, '', '', '#5a5f68', b);
+  }
+}
 function renderTrade(c, me) {
   const box = $('ctTrade');
   if (!box) return;
   const solo = !!(c.npc || c.stall || c.dock);
   $('ctColContracts').hidden = solo; $('ctColQm').hidden = solo;
+  $('contactpanel').classList.toggle('solo', solo);
   $('ctTradeTitle').textContent = c.dock ? 'Landing' : c.stall ? 'Stall' : c.npc ? 'Trade' : 'Trading post';
   if (c.dock) return renderDock(c, me, box);
+  if (c.trade?.pawn) return renderPawn(c, me, box);
   if (c.stall) return renderStall(c, me, box);
   if (!c.trade) return;
   const tsend = (m) => send({ t: 'trade', contactId: c.id, npcId: c.npc || undefined, ...m });
