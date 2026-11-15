@@ -79,6 +79,29 @@ export function sampleLand(map, step) {
   return { n, step, h, rgb };
 }
 
+/** sampleLand a slice at a time (about 12 ms a go), so a fine sample doesn't stall the game. */
+export function sampleLandAsync(map, step) {
+  const n = Math.round(map.size / step) + 1, t = map.terrain;
+  const h = new Float32Array(n * n), rgb = new Uint8Array(n * n * 3);
+  let j = 0;
+  return new Promise((done) => {
+    const slice = () => {
+      const until = performance.now() + 12;
+      while (j < n && performance.now() < until) {
+        for (let i = 0; i < n; i++) {
+          const x = -map.half + i * step, z = -map.half + j * step, k = j * n + i;
+          const y = h[k] = t.exact(x, z);
+          const c = landColor(t, x, z, y);
+          rgb[k * 3] = c[0]; rgb[k * 3 + 1] = c[1]; rgb[k * 3 + 2] = c[2];
+        }
+        j++;
+      }
+      if (j < n) setTimeout(slice, 0); else done({ n, step, h, rgb });
+    };
+    slice();
+  });
+}
+
 /** Draw the static world once into an offscreen canvas. */
 export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / Math.round(px / 6))) {
   const c = document.createElement('canvas');
@@ -205,7 +228,11 @@ function drawNames(g, map, roads, v, extra = []) {
 const detail = { k: 0, minX: 0, maxX: 0, minZ: 0, maxZ: 0, canvas: null };
 export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
   const g = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
+  // Drawn in screen points, at the screen's own pixel density (sharp on phones).
+  const dpr = canvas._dpr || 1;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  const W = canvas.width / dpr, H = canvas.height / dpr;
   const span = map.size / view.zoom;               // metres across the shorter side
   const k = Math.min(W, H) / span;
   // Keep the view inside the world (no black margins at the map edge).

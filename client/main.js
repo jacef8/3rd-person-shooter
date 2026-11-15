@@ -10,7 +10,7 @@ import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
-import { buildMapBase, drawMap, mapGroundColor, sampleLand, fillBox } from '/mapview.js';
+import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, placementProblem } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS, hourLabel, windowText } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
@@ -163,6 +163,8 @@ function initWorld(m) {
   applyGfx();
   state.view.setOwnHouse(m.houseId);
   state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000, land);
+  // A sharper county picture (30 m samples), worked out a slice at a time once you're in.
+  setTimeout(() => sampleLandAsync(map, 30).then((fine) => { if (state.map !== map) return; state.mapBase = buildMapBase(map, 2400, fine); if (state.mapOpen) drawMapCanvas(); }), 3000);
   state.landmarks = map.buildings.filter((b) => b.name);
   buildLandingPads();
   // Contacts: friendly NPCs standing in each town square.
@@ -2092,6 +2094,13 @@ function renderMapScreen() {
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
+  if (state.mapMode === 'view') {
+    $('mapNote').textContent = '';
+    const key = document.createElement('details');
+    key.className = 'mapkey';
+    key.innerHTML = `<summary>Map key</summary><div>${notes.view}</div>`;
+    $('mapNote').append(key);
+  }
   if (state.mapMode === 'first' || state.mapMode === 'redeploy') $('mapNote').textContent += ' Tap a spot on the map to pick it.';
   if (state.mapMode === 'redeploy') {
     const rs = respawnLeft();
@@ -2119,7 +2128,8 @@ function renderMapScreen() {
   }
   if (state.mapMode === 'view') {
     const pad = state.inputMode === 'pad';
-    list.append(Object.assign(document.createElement('div'), { className: 'mapnote', textContent: pad ? 'The cross in the middle is your pointer: slide the map with the right stick, zoom with LT / RT.' : 'Click the map to set a waypoint, right-click to ping your crew. Drag to move, wheel to zoom.' }));
+    const touchy = document.body.classList.contains('touchui');
+    list.append(Object.assign(document.createElement('div'), { className: 'mapnote', textContent: pad ? 'The cross in the middle is your pointer: slide the map with the right stick, zoom with LT / RT.' : touchy ? 'Tap to set a waypoint. Drag to move, + and − to zoom.' : 'Click the map to set a waypoint, right-click to ping your crew. Drag to move, wheel to zoom.' }));
     const wb = btn(`Set waypoint here${pad ? ' (Ⓧ)' : ''}`, () => setWaypoint(mapView.cx, mapView.cz), 'gsweapon');
     const pb = btn(`Ping crew here${pad ? ' (Ⓨ)' : ''}`, () => mapPing(mapView.cx, mapView.cz), 'gsweapon');
     list.append(wb, pb);
@@ -2139,8 +2149,9 @@ setInterval(() => {
 }, 1000);
 function drawMapCanvas() {
   const cv = $('mapcanvas');
-  const w = cv.clientWidth, h = cv.clientHeight;
-  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const w = cv.clientWidth, h = cv.clientHeight, dpr = Math.min(devicePixelRatio || 1, 2.5);
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  cv._dpr = dpr;
   const map = state.map, markers = [];
   const dim = new Set(state.me?.discovered || []);
   for (const c of map.contacts) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: dim.has(c.id) ? '#7fd6ff' : '#3a5560', size: 5 });
@@ -2184,7 +2195,7 @@ function drawMapCanvas() {
   state.mapProj = drawMap(cv, map, state.mapBase, mapView, markers, here ? here.name : null);
   if (state.mapMode === 'view') {
     // The pointer for the controller: waypoints and pings go where the cross is.
-    const g = cv.getContext('2d'), cx = cv.width / 2, cy = cv.height / 2;
+    const g = cv.getContext('2d'), cx = cv.clientWidth / 2, cy = cv.clientHeight / 2;
     g.strokeStyle = '#000'; g.lineWidth = 4; g.beginPath(); g.moveTo(cx - 12, cy); g.lineTo(cx + 12, cy); g.moveTo(cx, cy - 12); g.lineTo(cx, cy + 12); g.stroke();
     g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath(); g.moveTo(cx - 11, cy); g.lineTo(cx + 11, cy); g.moveTo(cx, cy - 11); g.lineTo(cx, cy + 11); g.stroke();
   }
@@ -3290,7 +3301,7 @@ function pollPad(dt, now) {
     // (The on-screen keyboard is exempt: you opened it yourself, and its first letter must not be lost.)
     if (pad.panelId !== panel.id) { pad.panelId = panel.id; pad.armAt = panel.id === 'osk' ? 0 : now + 300; if (pad.mark && pad.mark.panel !== panel.id) pad.mark = null; }
     pad.moveX = pad.moveY = 0;
-    state.mouseDown = false; state.aiming = false;
+    if (state.inputMode === 'pad') { state.mouseDown = false; state.aiming = false; }
     const sx = deadzone(ax[0], 0.5), sy = deadzone(ax[1], 0.5);
     const dir = b(BTN.UP) || sy < 0 ? [0, -1] : b(BTN.DOWN) || sy > 0 ? [0, 1] : b(BTN.LEFT) || sx < 0 ? [-1, 0] : b(BTN.RIGHT) || sx > 0 ? [1, 0] : null;
     const navPressed = [BTN.UP, BTN.DOWN, BTN.LEFT, BTN.RIGHT].some(just);
@@ -3353,10 +3364,12 @@ function pollPad(dt, now) {
     const speed = pad.settings.lookSpeed * zoomScale * slow;
     state.yaw -= lx * speed * dt;
     state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - ly * speed * 0.75 * dt * (pad.settings.invertY ? -1 : 1)));
-    state.aiming = val(BTN.LT) > 0.35;
-    const firing = val(BTN.RT) > 0.35;
-    if (firing && !state.mouseDown) state.firedThisPress = false;
-    state.mouseDown = firing;
+    if (state.inputMode === 'pad') {   // a controller that's connected but idle leaves touch AIM / FIRE alone
+      state.aiming = val(BTN.LT) > 0.35;
+      const firing = val(BTN.RT) > 0.35;
+      if (firing && !state.mouseDown) state.firedThisPress = false;
+      state.mouseDown = firing;
+    }
     for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B].includes(Number(i)) && just(Number(i))) doAction(action);
     // Ⓑ: tap to crouch, hold to go prone (while downed, Ⓑ does nothing).
     const bb = b(BTN.B);
@@ -3780,8 +3793,14 @@ function frame(now) {
   // Recoil recovers smoothly.
   if (state.recoil > 0) {
     const kick = Math.min(state.recoil, dt * 0.6);
+    const before = state.pitch;
     state.pitch = Math.min(1.2, state.pitch + kick * 0.9);
+    state.recoilBank = (state.recoilBank || 0) + (state.pitch - before);
     state.recoil -= kick;
+  } else if (state.recoilBank > 0 && performance.now() - state.lastShot > 120) {
+    // A moment after the last shot the gun comes back down onto your target.
+    const back = Math.min(state.recoilBank, dt * Math.max(0.35, state.recoilBank * 6));
+    state.pitch -= back; state.recoilBank -= back;
   }
 
   // Self mesh.
@@ -3805,8 +3824,9 @@ function frame(now) {
   const right = new THREE.Vector3(-Math.cos(state.yaw), 0, Math.sin(state.yaw));
   const aim = state.aiming && alive;
   const afloat = !!me?.boat;
-  const dist = aim ? 1.8 : afloat ? 6.5 : state.air ? 7.5 : 4.2, shoulder = aim ? 0.6 : afloat ? 0.3 : 0.85;
-  const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.2 : afloat ? 0.9 : 0.45), state.z).addScaledVector(right, shoulder);
+  const dist = aim ? 0.05 : afloat ? 6.5 : state.air ? 7.5 : 4.2, shoulder = aim ? 0 : afloat ? 0.3 : 0.85;
+  const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.02 : afloat ? 0.9 : 0.45), state.z).addScaledVector(right, shoulder);
+  selfMesh.visible = alive && !aim;   // looking down the sights: your own back isn't in the way
   const want = pivot.clone().addScaledVector(d, -dist);
   const toCam = want.clone().sub(pivot);
   const tl = toCam.length();
@@ -3820,7 +3840,7 @@ function frame(now) {
   sfx.setListener(camera.position.x, camera.position.y, camera.position.z, state.yaw);
   // Optic zoom sets ADS field of view; handling sets how fast you get there.
   const ws = me && weaponStats(me.inv[me.active]);
-  const fov = aim && ws ? 70 / (ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : 70;
+  const fov = aim && ws ? 70 / Math.max(1.4, ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : 70;
   updateSight(aim ? ws : null, now);
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
@@ -3890,8 +3910,9 @@ window.__dz = { state, send, boatVis, structVis };
 // on the right to look, and buttons for everything else. Hidden while a controller is in use.
 const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null, autoRun: false };
 // Phone settings (this device): button layout, size and see-through, the left fire button, gyro aim.
-const tset = { pos: {}, scale: 1, alpha: 1, leftFire: true, gyro: 'off' };
+const tset = { pos: {}, scale: 1, alpha: 1, leftFire: false, gyro: 'off' };
 try { Object.assign(tset, JSON.parse(localStorage.getItem('dz_touch') || '{}')); } catch { /* keep the defaults */ }
+if (!tset.lf2) { tset.leftFire = false; tset.lf2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }   // the left FIRE button starts off once (turn it on in Settings)
 const saveTset = () => { try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } };
 const TOUCH_BTNS = [
   // [label, action, class, key]   Both FIRE buttons are held, and dragging on one aims while you shoot.

@@ -648,3 +648,19 @@ body.touchui .tbtn.r5 { right: calc(156px + env(safe-area-inset-right)); bottom:
 /* The gun's line is blocked short of the crosshair: red, with an X. */
 #crosshair.blocked i { background: #ff4d4d; }
 #crosshair.blocked::after { content: '✕'; position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); color: #ff4d4d; font: 700 18px/1 var(--font-text); }
+
+/* Phone buttons, final layout: four short columns right of the weapon strip, nothing higher than the
+   bottom of the minimap. (Moved buttons from the layout editor still win.) */
+body.touchui .tbtn.big.fire { right: calc(14px + env(safe-area-inset-right)); bottom: 16px; }
+body.touchui .tbtn.r1 { right: calc(24px + env(safe-area-inset-right)); bottom: 96px; }    /* reload */
+body.touchui .tbtn.aim { right: calc(92px + env(safe-area-inset-right)); bottom: 12px; }
+body.touchui .tbtn.jump { right: calc(92px + env(safe-area-inset-right)); bottom: 70px; }
+body.touchui .tbtn.r4 { right: calc(92px + env(safe-area-inset-right)); bottom: 128px; }   /* grenade */
+body.touchui .tbtn.r7 { right: calc(150px + env(safe-area-inset-right)); bottom: 12px; }   /* prone */
+body.touchui .tbtn.r2 { right: calc(150px + env(safe-area-inset-right)); bottom: 70px; }   /* crouch */
+body.touchui .tbtn.r5 { right: calc(150px + env(safe-area-inset-right)); bottom: 128px; }  /* tag */
+body.touchui .tbtn.r6 { right: calc(208px + env(safe-area-inset-right)); bottom: 12px; }   /* heal */
+body.touchui .tbtn.use { right: calc(208px + env(safe-area-inset-right)); bottom: 70px; width: 52px; height: 52px; }
+body.touchui .tbtn.aim, body.touchui .tbtn.jump, body.touchui .tbtn.r4, body.touchui .tbtn.r5, body.touchui .tbtn.r2, body.touchui .tbtn.r7, body.touchui .tbtn.r6 { width: 52px; height: 52px; }
+.mapkey summary { cursor: pointer; font-weight: 700; color: var(--accent); min-height: 44px; display: flex; align-items: center; }
+.mapkey div { font-size: 14px; color: var(--ink-2, #c9ced6); }
