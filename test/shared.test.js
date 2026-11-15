@@ -233,7 +233,7 @@ test('terrain blocks deep water and cliffs, and stops bullets', () => {
   // The SR 20 bridge between Bristol and Blountstown lets you cross.
   const br = m.bridges.find((b) => b.road === 'SR 20' && b.river === 'Apalachicola River');
   assert.ok(br, 'SR 20 bridge exists');
-  assert.ok(t.height(br.x, br.z) > 1, 'bridge deck is above water');
+  assert.ok(br.pts.some((q) => q[2] > 1) && t.standY(br.x, br.z, br.pts.reduce((a, q) => Math.max(a, q[2]), 0)) > 1, 'bridge deck is above water');
   // Torreya bluffs, from the real elevation data: steep ground east of the river, north of Bristol.
   const elevation = parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('../data/real/elevation.bin.gz', import.meta.url))));
   assert.ok(elevation && elevation.n > 500, 'real elevation loads');

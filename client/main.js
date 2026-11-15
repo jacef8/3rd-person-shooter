@@ -644,7 +644,7 @@ function updateCharacterMesh(g, c, dt) {
   const k = Math.min(1, dt * 12);
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
-  g.position.y = c.boat ? 0.15 : ground(g.position.x, g.position.z) + (c.alt || 0);
+  g.position.y = c.boat ? 0.15 : (c.y ?? ground(g.position.x, g.position.z)) + (c.alt || 0);
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
@@ -1159,6 +1159,7 @@ function handle(m) {
       break;
     case 'correct':
       state.x = m.x; state.z = m.z;
+      if (m.y != null) { state.y = m.y; state.yx = m.x; state.yz = m.z; }
       if (m.force) { state.tp = m.tp || 0; selfMesh.position.set(m.x, ground(m.x, m.z), m.z); state.view?.update(m.x, m.z); }
       break;
     case 'shot': {
@@ -2530,7 +2531,9 @@ function lookDir() {
   return new THREE.Vector3(Math.sin(state.yaw) * Math.cos(state.pitch), Math.sin(state.pitch), Math.cos(state.yaw) * Math.cos(state.pitch));
 }
 
-function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : ground(state.x, state.z) + (state.air ? state.air.alt : 0) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
+/** Where you stand: up on a bridge deck (tracked as you walk) or the ground. */
+function myY() { return state.y !== undefined && state.yx === state.x && state.yz === state.z ? state.y : ground(state.x, state.z); }
+function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : myY() + (state.air ? state.air.alt : 0) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
 
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
@@ -3707,8 +3710,8 @@ function frame(now) {
     }
     if (len > 0.05 && !stunnedNow) {
       if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
-      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain);
-      state.x = p.x; state.z = p.z;
+      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, myY());
+      state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
     }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
     else if (state.mouseDown && !me.downed && !stunnedNow) tryFire(now); else state.firedThisPress = false;
@@ -3726,7 +3729,7 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt }, 1);
+  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);

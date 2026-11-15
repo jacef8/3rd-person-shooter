@@ -92,7 +92,10 @@ const terrain = map.terrain;
 const own = (table, key) => (typeof key === 'string' && key[0] !== '_' && Object.hasOwn(table, key) ? table[key] : undefined);
 /** An entry of a list by an index a client sent: whole numbers only. */
 const nth = (list, i) => { const k = typeof i === 'string' && /^\d+$/.test(i) ? Number(i) : i; return Number.isInteger(k) && k >= 0 && k < list.length ? list[k] : undefined; };
-const gy = (c) => (c.boat ? 0.25 : terrain.height(c.x, c.z) + (c.air ? c.air.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
+/** Where a character stands: a boat deck, a bridge deck (its tracked height, while it's still where it was
+ *  measured), or the ground; plus how high it is on a jump. */
+const standing = (c) => (c.y !== undefined && c.yx === c.x && c.yz === c.z ? c.y : terrain.height(c.x, c.z));
+const gy = (c) => (c.boat ? 0.25 : standing(c) + (c.air ? c.air.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
 const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
@@ -3944,7 +3947,7 @@ function handleState(p, msg) {
   const maxStep = isStunned(p, now) ? 0.05 : p.prone ? PRONE_SPEED * dt * 1.5 + 0.15 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
-  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain);
+  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain, standing(p));
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
   if (p.speed > 0.5) p.lastActive = now;
   p.x = np.x; p.z = np.z;
@@ -3953,7 +3956,8 @@ function handleState(p, msg) {
   p.crouch = (!!msg.crouch && !p.prone) || !!p.downed;
   p.aiming = !!msg.aim;
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
-  if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z });
+  p.y = np.y; p.yx = p.x; p.yz = p.z;
+  if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z, y: +p.y.toFixed(2) });
   if (p.openContainer && !nearContainer(p, p.openContainer.kind, p.openContainer.id)) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
 }
 /** Steering a jump: no walls up there, just how fast this part of the fall lets you move. */
@@ -4285,6 +4289,7 @@ const loop = setInterval(() => {
       crouch: p.crouch, prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : undefined,
+      y: !p.boat && standing(p) > terrain.height(p.x, p.z) + 0.8 ? +standing(p).toFixed(2) : undefined,   // up on a bridge deck
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),

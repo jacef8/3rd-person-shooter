@@ -5,7 +5,6 @@
 //        and trees out to about a mile. main.js draws the far scene first and the near world over
 //        it (the depth buffer is cleared in between), so the two can never fight over depth.
 import * as THREE from 'three';
-import { BRIDGE_DECK } from '/shared/terrain.js';
 import { coverColor } from './mapview.js';
 
 const CHUNK = 160;
@@ -348,7 +347,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
       const runs = [];
       for (let k = 0; k < n; k++) {
         const t0 = k / n - (k === 0 ? ext : 0), t1 = (k + 1) / n + (k === n - 1 ? ext : 0), [mx, mz] = pt((t0 + t1) / 2);
-        const inside = mx >= x0 && mx < x0 + CHUNK && mz >= z0 && mz < z0 + CHUNK && terrain.drawn(mx, mz) > 0.15;
+        const inside = mx >= x0 && mx < x0 + CHUNK && mz >= z0 && mz < z0 + CHUNK && terrain.drawn(mx, mz) > 0.15 && !terrain.underDeck(mx, mz, 6);
         if (!inside) { flush(); continue; }
         if (!run.length) run.push(pt(t0));
         run.push(pt(t1));
@@ -449,37 +448,64 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
     return { mesh: m, wet };
   }
 
-  // Highway bridges: a deck with railings on piers, following the road from bank to bank. It goes
-  // in both scenes, so you see it from across the county and stand on it up close.
+  // Bridges: each deck follows its road line from bank to bank, a level above the ground, on concrete
+  // bents over the swamp and big piers in the river. The Trammell Bridge's 1938 span carries a steel
+  // through-truss over the channel; the 1998 span is a plain concrete high-rise. Drawn with instanced
+  // boxes (a handful of draw calls for 6 km of bridge), in both scenes.
   {
-    const deckMat = new THREE.MeshStandardMaterial({ color: 0x7a7c80, roughness: 0.9 });
-    const railMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.6, metalness: 0.4 });
-    for (const br of map.bridges || []) {
-      const g = new THREE.Group();
-      for (let i = 0; i < br.path.length - 1; i++) {
-        const [x1, z1] = br.path[i], [x2, z2] = br.path[i + 1], len = Math.hypot(x2 - x1, z2 - z1);
+    const unit = new THREE.BoxGeometry(1, 1, 1);
+    const mats = {
+      deck: new THREE.MeshStandardMaterial({ color: 0x9b9d9f, roughness: 0.9 }),
+      old: new THREE.MeshStandardMaterial({ color: 0x84878a, roughness: 0.95 }),
+      parapet: new THREE.MeshStandardMaterial({ color: 0xc6c7c4, roughness: 0.85 }),
+      pier: new THREE.MeshStandardMaterial({ color: 0x8e908f, roughness: 0.95 }),
+      steel: new THREE.MeshStandardMaterial({ color: 0x5f6d63, roughness: 0.6, metalness: 0.4 }),
+    };
+    const parts = { deck: [], old: [], parapet: [], pier: [], steel: [] };
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ'), v = new THREE.Vector3(), sc = new THREE.Vector3();
+    /** A box from its centre, size (w across, h tall, l along) and heading/slope. */
+    const put = (list, x, y, z, w, h, l, yaw, pitch = 0) => { e.set(pitch, yaw, 0); q.setFromEuler(e); list.push(m4.compose(v.set(x, y, z), q, sc.set(w, h, l)).clone()); };
+    for (const d of map.bridges || []) {
+      const P = d.pts, truss = d.style === 'truss';
+      for (let i = 0; i < P.length - 1; i++) {
+        const [x1, z1, y1] = P[i], [x2, z2, y2] = P[i + 1], len = Math.hypot(x2 - x1, z2 - z1);
         if (len < 0.5) continue;
-        const span = new THREE.Group();
-        const deck = new THREE.Mesh(new THREE.BoxGeometry(9.4, 0.7, len + 0.6), deckMat);
-        deck.position.y = -0.33;
-        span.add(deck);
-        for (const sx of [-4.55, 4.55]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.05, len + 0.6), railMat); rail.position.set(sx, 0.55, 0); span.add(rail); }
-        // Piers stand wherever the deck is over the river or its banks.
-        for (let k = 8; k < len - 2; k += 16) {
-          const px = x1 + (x2 - x1) * k / len, pz = z1 + (z2 - z1) * k / len, bed = terrain.exact(px, pz, true);
-          if (bed > BRIDGE_DECK - 1.5) continue;
-          const hgt = BRIDGE_DECK - 0.6 - (bed - 0.5);
-          const pier = new THREE.Mesh(new THREE.BoxGeometry(7, hgt, 1.2), deckMat);
-          pier.position.set(0, -0.6 - hgt / 2, k - len / 2);
-          span.add(pier);
+        const yaw = Math.atan2(x2 - x1, z2 - z1), pitch = -Math.atan2(y2 - y1, len), ux = (x2 - x1) / len, uz = (z2 - z1) / len;
+        const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2, my = (y1 + y2) / 2, L = Math.hypot(len, y2 - y1) + 0.15;
+        put(truss ? parts.old : parts.deck, mx, my - 0.42, mz, 9.6, 0.85, L, yaw, pitch);
+        for (const sd of [-1, 1]) put(truss ? parts.steel : parts.parapet, mx - uz * sd * 4.75, my + (truss ? 0.45 : 0.5), mz + ux * sd * 4.75, truss ? 0.18 : 0.4, truss ? 0.9 : 1.0, L, yaw, pitch);
+        // A bent every 30 m where the deck stands clear of the ground: two columns and a cap.
+        const gnd = terrain.height(mx, mz), clear = my - gnd;
+        const sC = (i - d.sC) * 10, channel = Math.abs(sC) < 200 && gnd < 1;
+        if (clear > 1.6 && i % (channel ? 6 : 3) === 0) {
+          const foot = Math.min(gnd, 0) - 1.5, colH = my - 0.85 - foot;
+          for (const sd of channel ? [0] : [-1, 1]) put(parts.pier, mx - uz * sd * 3.1, foot + colH / 2, mz + ux * sd * 3.1, channel ? 8.5 : 1.1, colH, channel ? 2.4 : 1.1, yaw);
+          if (!channel) put(parts.pier, mx, my - 1.15, mz, 9.2, 0.8, 1.4, yaw);
         }
-        span.position.set((x1 + x2) / 2, BRIDGE_DECK + 0.02, (z1 + z2) / 2);
-        span.rotation.y = Math.atan2(x2 - x1, z2 - z1);
-        g.add(span);
+        // The old span's through-truss over the river: top chords, posts and bracing every 10 m.
+        if (truss && Math.abs(sC) < 170) {
+          const H = 7;
+          for (const sd of [-1, 1]) {
+            const ox = -uz * sd * 4.95, oz = ux * sd * 4.95;
+            put(parts.steel, mx + ox, my + H, mz + oz, 0.45, 0.45, L, yaw, pitch);
+            put(parts.steel, x1 + ox, y1 + H / 2, z1 + oz, 0.35, H, 0.35, yaw);
+            // diagonal from this post's foot to the next post's top
+            const dl = Math.hypot(len, H + (y2 - y1));
+            put(parts.steel, mx + ox, my + H / 2, mz + oz, 0.3, 0.3, dl, yaw, -Math.atan2(H + (y2 - y1), len));
+          }
+          put(parts.steel, x1, y1 + H, z1, 9.9, 0.35, 0.35, yaw);
+        }
       }
-      g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      scene.add(g);
-      far.add(g.clone());
+    }
+    for (const [k, list] of Object.entries(parts)) {
+      if (!list.length) continue;
+      const im = new THREE.InstancedMesh(unit, mats[k], list.length);
+      list.forEach((mm, i) => im.setMatrixAt(i, mm));
+      im.instanceMatrix.needsUpdate = true;
+      im.castShadow = true; im.receiveShadow = true;
+      im.computeBoundingSphere();
+      scene.add(im);
+      far.add(im.clone());
     }
   }
 

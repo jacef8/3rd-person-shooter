@@ -14,7 +14,8 @@ export const DEEP_WATER = -0.9;     // deeper than this is impassable (you'd nee
 export const MAX_STEP_SLOPE = 1.1;  // rise/run a character can climb (~48°)
 export const PAD_LEVEL = 8.5;       // how far past a building's walls its level pad runs before grading out
 export const PAD_MARGIN = 15;       // …and where the grading ends
-export const BRIDGE_DECK = 2.5;     // height of a bridge's road deck over the water
+export const BRIDGE_DECK = 2.5;     // the lowest a bridge deck sits over the water
+export const DECK_HALF = 4.6;       // half the width of a bridge deck you can stand on
 export const BRIDGE_HALF_WIDTH = 16;
 // Real ground is drawn taller than life. Liberty County's relief is gentle (Bristol sits on a plateau
 // ~40 m over the river, the Torreya bluffs rise ~70 m), and at true scale from a shoulder camera it
@@ -283,8 +284,7 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
     return carveWater(x, z, w, h, noBridge);
   }
   /** River channels (unless a bridge deck is here) and lakes cut into the ground. */
-  function carveWater(x, z, w, h, noBridge) {
-    if (!noBridge && w.river < w.riverW / 2 + 60 && bridgeAt(x, z)) return Math.max(h, BRIDGE_DECK);
+  function carveWater(x, z, w, h) {
     const hw = w.riverW / 2;
     // Banks: low within 40 m of the water, then a slope up to the land that's no steeper than a
     // bank you can walk up (the taller the land beside the water, the further out the slope runs).
@@ -342,12 +342,40 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
     return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
   }
 
-  /** What stops a bullet: the ground, and at a bridge the deck itself rather than everything under it. */
-  function solid(x, z) {
-    const br = bridgeAt(x, z, BRIDGE_HALF_WIDTH + 17);
-    if (!br) return height(x, z);
-    const g = flattened(x, z, true);
-    return polyDist(x, z, br.path) < DECK_HALF_WIDTH ? Math.max(g, BRIDGE_DECK) : g;
+  /** What stops a bullet: the ground (bridge decks are boxes of their own). */
+  function solid(x, z) { return height(x, z); }
+
+  // ---- bridge decks: a level above the ground. world.js builds them from the real road lines that
+  // cross a river; you step onto one where it meets the ground at its ends, and walk (or boat) under it.
+  let decks = [];
+  /** The deck over (x, z), within `pad` metres of its centreline: { deck, y }, or null. Where two decks
+   *  overlap (the spans meet at their ends), the one at your level when you say where you're coming from. */
+  function deckAt(x, z, pad = DECK_HALF, fromY) {
+    let pick = null;
+    for (const d of decks) {
+      if (x < d.minX - pad || x > d.maxX + pad || z < d.minZ - pad || z > d.maxZ + pad) continue;
+      const p = d.pts;
+      let best = null, bd = pad;
+      for (let i = 0; i < p.length - 1; i++) {
+        const ax = p[i][0], az = p[i][1], vx = p[i + 1][0] - ax, vz = p[i + 1][1] - az, L2 = vx * vx + vz * vz || 1;
+        let t = ((x - ax) * vx + (z - az) * vz) / L2;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dd = Math.hypot(ax + vx * t - x, az + vz * t - z);
+        if (dd < bd) { bd = dd; best = { deck: d, y: p[i][2] + (p[i + 1][2] - p[i][2]) * t }; }
+      }
+      if (!best) continue;
+      if (fromY === undefined) { if (!pick || bd < pick.d) pick = { ...best, d: bd }; continue; }
+      const reach = fromY > best.y - 1.6;
+      if (!pick || (reach && (!pick.reach || Math.abs(best.y - fromY) < Math.abs(pick.y - fromY))) || (!reach && !pick.reach && best.y < pick.y)) pick = { ...best, d: bd, reach };
+    }
+    return pick;
+  }
+  /** Where you stand at (x, z), coming from height fromY: on a deck if you're up at its level, else the ground. */
+  function standY(x, z, fromY) {
+    const g = height(x, z);
+    if (fromY === undefined || !decks.length) return g;
+    const d = deckAt(x, z, DECK_HALF, fromY);
+    return d && d.y > g - 0.3 && fromY > d.y - 1.6 ? Math.max(d.y, g) : g;
   }
 
   /** The real land cover at a point (COVER.*), or 0 where there's none. */
@@ -360,9 +388,16 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
 
   return {
     seed, size, half, geo, bridges, cover, hasCover: !!lc, coverStep: lc ? lc.step : 0,
-    biome, raw, height, exact: flattened, channel, bridgeAt,
-    /** The ground as it's drawn: under a bridge deck that's the river and its banks, not the deck you walk on. */
-    drawn(x, z) { return bridgeAt(x, z, BRIDGE_HALF_WIDTH + 17) ? flattened(x, z, true) : height(x, z); },
+    biome, raw, height, exact: flattened, channel, bridgeAt, deckAt, standY,
+    /** The ground as it's drawn (decks are drawn on their own). */
+    drawn(x, z) { return height(x, z); },
+    /** Bridge decks: [{ pts: [[x, z, y]...] }] (world.js). */
+    setDecks(list) {
+      decks = list;
+      for (const d of list) Object.assign(d, { minX: Math.min(...d.pts.map((q) => q[0])), maxX: Math.max(...d.pts.map((q) => q[0])), minZ: Math.min(...d.pts.map((q) => q[1])), maxZ: Math.max(...d.pts.map((q) => q[1])) });
+    },
+    /** Is (x, z) under a deck that's well above the ground (no road drawn, no trees)? */
+    underDeck(x, z, pad = DECK_HALF) { const d = decks.length && deckAt(x, z, pad); return !!d && d.y > height(x, z) + 1.2; },
     /** Flatten ground: towns [{minX,minZ,maxX,maxZ,elev,margin}] and building pads (the same with
      *  pad: 1). Call before any height() use. */
     setFlats(list) {

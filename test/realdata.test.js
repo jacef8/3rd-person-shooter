@@ -60,18 +60,28 @@ test('the real-world map: ground, river, bridge, buildings and roads all line up
   for (const n of ['SR 20', 'Church Street', 'Pea Ridge Road']) assert.ok(roadNames.has(n) || [...roadNames].some((q) => q.includes(n)), n);
   assert.ok(map.roads.filter((r) => r.name).length > 4000 && map.roads.some((r) => r.dirt), 'named roads and dirt tracks');
 
-  // The highway crosses the real river on a bridge: walkable all the way over, and boats pass under.
-  const br = map.bridges.find((b) => b.road === 'SR 20' && b.river === 'Apalachicola River');
-  assert.ok(br && br.path.length >= 2, 'SR 20 bridge');
-  for (let i = 0; i < br.path.length - 1; i++) {
-    const [x1, z1] = br.path[i], [x2, z2] = br.path[i + 1], len = Math.hypot(x2 - x1, z2 - z1);
-    for (let t = 0; t <= len; t += 4) assert.ok(T.height(x1 + (x2 - x1) * t / len, z1 + (z2 - z1) * t / len) >= BRIDGE_DECK - 0.01, 'deck holds you up');
+  // The Trammell Bridge: SR 20's two spans across the Apalachicola and its swamp, a level above the
+  // ground. You walk the whole of each from end to end, up over the channel; boats and people pass under.
+  const spans = map.bridges.filter((b) => b.road === 'SR 20' && b.river === 'Apalachicola River');
+  assert.equal(spans.length, 2, 'two spans');
+  for (const br of spans) {
+    assert.ok(br.pts.length * 10 > 2000 && br.name === 'Trammell Bridge', `${br.span}: a long bridge`);
+    let p = { x: br.pts[0][0], z: br.pts[0][1], y: T.height(br.pts[0][0], br.pts[0][1]) }, top = 0;
+    for (let i = 1; i < br.pts.length; i++) {
+      p = moveWithCollision(p.x, p.z, br.pts[i][0] - p.x, br.pts[i][1] - p.z, PLAYER_RADIUS, map.grid.near(p.x, p.z, 4), T, p.y);
+      top = Math.max(top, p.y);
+    }
+    assert.ok(Math.hypot(p.x - br.pts.at(-1)[0], p.z - br.pts.at(-1)[1]) < 2, `${br.span}: walked across`);
+    assert.ok(top >= br.crest - 0.5, `${br.span}: up over the channel (${top.toFixed(1)} m)`);
   }
+  const br = spans[0];
   assert.ok(T.drawn(br.x, br.z) < DEEP_WATER, 'open water is drawn under the deck');
   assert.ok(floats(T, br.x, br.z), 'boats pass under the bridge');
-  const a = br.path[0], b = br.path.at(-1);
-  const across = moveWithCollision(a[0], a[1], b[0] - a[0], b[1] - a[1], PLAYER_RADIUS, [], T);   // (a straight bridge)
-  if (br.path.length === 2) assert.ok(Math.hypot(across.x - b[0], across.z - b[1]) < 2, 'walked across');
+  // Across the swamp under the trestle, on foot.
+  const mid = br.pts[Math.floor(br.pts.length * 0.7)], a0 = br.pts[0], a1 = br.pts.at(-1), L = Math.hypot(a1[0] - a0[0], a1[1] - a0[1]);
+  const nx = -(a1[1] - a0[1]) / L, nz = (a1[0] - a0[0]) / L, sx = mid[0] + nx * 50, sz = mid[1] + nz * 50;
+  const under = moveWithCollision(sx, sz, -nx * 100, -nz * 100, PLAYER_RADIUS, map.grid.near(mid[0], mid[1], 60), T, T.height(sx, sz));
+  assert.ok(Math.hypot(under.x - sx, under.z - sz) > 90 && under.y < mid[2] - 2, 'walked under the deck');
   assert.ok(map.boxes.some((q) => q.type === 'rail'), 'railings');
   // The river is a continuous channel from the top of the map to the bottom.
   for (let i = 0; i < map.river.length - 1; i++) {

@@ -5,7 +5,7 @@
 // seed and size and the client rebuilds the identical world. Generation therefore only uses
 // + - * / and the seeded RNG (no Math.sin etc., which can differ between JS engines).
 
-import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, PAD_MARGIN, RELIEF, COVER } from './terrain.js';
+import { createTerrain, biomeName, DEEP_WATER, MAX_STEP_SLOPE, BRIDGE_DECK, DECK_HALF, PAD_MARGIN, RELIEF, COVER } from './terrain.js';
 import { polyDist, lakeDepth, segDist, project, REAL_SIZE } from './geography.js';
 import RIVER from './data/river.json' with { type: 'json' };
 import EXTRA from './data/real-extra.json' with { type: 'json' };
@@ -655,26 +655,90 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const highways = geo.roads;
   for (const hw of highways) for (let i = 0; i < hw.pts.length - 1; i++) addRoadSeg(hw.pts[i][0], hw.pts[i][1], hw.pts[i + 1][0], hw.pts[i + 1][1], hw.name, 12, { hw: 1 });
   const ROAD_W = { motorway: 14, trunk: 12, primary: 11, secondary: 9, tertiary: 8, unclassified: 6, residential: 6, service: 4, track: 4 };
+  const realHighways = [];
   for (const [name, cls, pts] of real.roads || []) {
     const w = ROAD_W[cls] || 5;
     const p = pts.map(([lat, lon]) => project(lat, lon, size));
+    if ((cls === 'primary' || cls === 'trunk') && p.length > 3) realHighways.push({ name: name || '', pts: p.map((q) => [q.x, q.z]) });
     for (let i = 0; i < p.length - 1; i++) {
       if (Math.max(Math.abs(p[i].x), Math.abs(p[i].z), Math.abs(p[i + 1].x), Math.abs(p[i + 1].z)) > half + 200) continue;
       addRoadSeg(p[i].x, p[i].z, p[i + 1].x, p[i + 1].z, name || '', w, cls === 'track' ? { cls, dirt: 1 } : { cls });
     }
   }
 
-  // ---- bridge railings: solid (they're cover, and keep you on the deck), drawn by the client as rails
-  for (const br of terrain.bridges) {
-    for (let i = 0; i < br.path.length - 1; i++) {
-      const [x1, z1] = br.path[i], [x2, z2] = br.path[i + 1], len = Math.hypot(x2 - x1, z2 - z1) || 1;
-      const nx = -(z2 - z1) / len, nz = (x2 - x1) / len;
-      for (let t = 0; t <= len; t += 0.7) for (const side of [-1, 1]) {
-        const x = x1 + (x2 - x1) * t / len + nx * side * 4.9, z = z1 + (z2 - z1) * t / len + nz * side * 4.9;
-        if (terrain.exact(x, z, true) > BRIDGE_DECK - 0.6) continue;   // the bank is as high as the deck here
-        box(x - 0.45, z - 0.45, x + 0.45, z + 0.45, 1.6, 'rail', { y0: BRIDGE_DECK - 0.5 });
-      }
+  // ---- bridges: each highway line that crosses a river carries its own deck from bank to bank, a level
+  // above the ground. With the real roads the SR 20 crossing is the Trammell Bridge: two spans (the 1938
+  // steel truss westbound, the 1998 concrete high-rise eastbound) across the Apalachicola and its swamp.
+  const decks = [];
+  {
+    const lines = realHighways.length ? realHighways : [];
+    // No real roads (test maps): the hand-traced highway, a mile and a half either side of each crossing.
+    if (!lines.length) for (const br of terrain.bridges) {
+      const hw = highways.find((h) => h.name === br.road);
+      if (hw) lines.push({ name: br.road, pts: hw.pts.map((q) => [q[0], q[1]]), around: br });
     }
+    for (const line of lines) {
+      // Resample every 10 m (only near the crossing for the long hand-traced lines).
+      const pts = [];
+      for (let i = 0; i < line.pts.length - 1; i++) {
+        const [x1, z1] = line.pts[i], [x2, z2] = line.pts[i + 1], len = Math.hypot(x2 - x1, z2 - z1);
+        for (let t = 0; t < len; t += 10) pts.push([x1 + (x2 - x1) * t / len, z1 + (z2 - z1) * t / len]);
+      }
+      pts.push(line.pts.at(-1));
+      const sample = (line.around ? pts.filter(([x, z]) => Math.hypot(x - line.around.x, z - line.around.z) < 1500) : pts).filter(([x, z]) => Math.abs(x) < half - 30 && Math.abs(z) < half - 30);
+      if (sample.length < 6) continue;
+      const g = sample.map(([x, z]) => terrain.exact(x, z));
+      const wet = g.map((h, i) => (h < DEEP_WATER ? i : -1)).filter((i) => i >= 0);
+      if (!wet.length || wet.length > sample.length * 0.6) continue;
+      // The channel: the middle of the longest run of open water along the line.
+      let run = [wet[0], wet[0]], best = run;
+      for (const i of wet.slice(1)) { if (i === run[1] + 1) run = [run[0], i]; else run = [i, i]; if (run[1] - run[0] > best[1] - best[0]) best = run; }
+      const iC = Math.round((best[0] + best[1]) / 2), [cx, cz] = sample[iC];
+      const river = terrain.geo.rivers.reduce((a, rv) => { const d = Math.min(...rv.pts.map(([x, z]) => Math.hypot(x - cx, z - cz))); return d < a.d ? { d, name: rv.name } : a; }, { d: Infinity, name: '' });
+      // Abutments: where the high ground at each end drops off to the floodplain (the deck starts 40 m back).
+      let a = 0, b = sample.length - 1;
+      if (!line.around) {
+        while (a < iC - 1 && g[a + 1] > g[0] - 4) a++;
+        while (b > iC + 1 && g[b - 1] > g.at(-1) - 4) b--;
+        a = Math.max(0, a - 4); b = Math.min(sample.length - 1, b + 4);
+      }
+      const big = river.name === 'Apalachicola River';
+      const westbound = sample[0][0] > sample.at(-1)[0];
+      const style = big && line.name === 'SR 20' ? (westbound ? 'truss' : 'concrete') : 'concrete';
+      const crest = big ? (style === 'truss' ? 12 : 17) : 4;   // clearance over the river (m): ~40 ft and ~55 ft
+      // Deck height: up over the channel, a trestle 3.5 m over the swamp, down to the ground at each end.
+      const y = [];
+      for (let i = a; i <= b; i++) {
+        const sC = (i - iC) * 10, k = Math.min(1, Math.min(i - a, b - i) * 10 / 100);
+        const want = Math.max(g[i] + 3.5, crest * Math.max(0, 1 - (sC / 550) ** 2), BRIDGE_DECK);
+        y.push(g[i] + (want - g[i]) * (k * k * (3 - 2 * k)));
+      }
+      for (let pass = 0; pass < 4; pass++) {   // no grade steeper than 4.5%
+        for (let i = 1; i < y.length; i++) y[i] = Math.max(y[i], y[i - 1] - 0.45);
+        for (let i = y.length - 2; i >= 0; i--) y[i] = Math.max(y[i], y[i + 1] - 0.45);
+      }
+      y[0] = Math.max(g[a], y[1] - 0.45); y[y.length - 1] = Math.max(g[b], y[y.length - 2] - 0.45);
+      const deckPts = y.map((h, k) => [sample[a + k][0], sample[a + k][1], +h.toFixed(2)]);
+      decks.push({
+        name: big && line.name === 'SR 20' ? 'Trammell Bridge' : `${line.name} bridge`, span: style === 'truss' ? '1938 span (westbound)' : big ? '1998 span (eastbound)' : '',
+        road: line.name, river: river.name, style, crest, x: cx, z: cz, sC: iC - a, pts: deckPts, path: deckPts.map((q) => [q[0], q[1]]),
+        len: Math.max(...deckPts.map((q) => Math.hypot(q[0] - cx, q[1] - cz))) + 10,
+      });
+    }
+  }
+  terrain.setDecks(decks);
+  // Rails along both edges (solid: cover, and they keep you on the deck), and a slab under the deck that
+  // stops shots from below. Turned boxes following each 10 m piece; the client draws the bridge itself.
+  for (const d of decks) for (let i = 0; i < d.pts.length - 1; i++) {
+    const [x1, z1, y1] = d.pts[i], [x2, z2, y2] = d.pts[i + 1], len = Math.hypot(x2 - x1, z2 - z1) || 1;
+    const ux = (x2 - x1) / len, uz = (z2 - z1) / len, lo = Math.min(y1, y2), rise = Math.abs(y2 - y1);
+    const turned = (cx, cz, hw, hd, y0, h, type) => {
+      const ex = Math.abs(ux) * hw + Math.abs(uz) * hd, ez = Math.abs(uz) * hw + Math.abs(ux) * hd;
+      box(cx - ex, cz - ez, cx + ex, cz + ez, h, type, { y0, ang: Math.atan2(uz, ux), cx, cz, ca: ux, sa: uz, hw, hd });
+    };
+    const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
+    for (const side of [-1, 1]) turned(mx - uz * side * (DECK_HALF + 0.3), mz + ux * side * (DECK_HALF + 0.3), len / 2 + 0.05, 0.25, lo - 0.3, 1.4 + rise, 'rail');
+    if (lo - Math.min(terrain.exact(x1, z1), terrain.exact(x2, z2)) > 2.5) turned(mx, mz, len / 2 + 0.05, DECK_HALF + 0.3, lo - 1.2, 0.8, 'deckslab');
   }
 
   const inTown = (x, z, pad = 4) => towns.some((t) => x > t.rect.minX - pad && x < t.rect.maxX + pad && z > t.rect.minZ - pad && z < t.rect.maxZ + pad);
@@ -1162,7 +1226,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       for (let k = 0; k < cand; k++) {
         const [x, z] = spot(1), c = terrain.cover(x, z), keep = KEEP[c] || 0, roll = r(), kind = r(), tall = r();
         if (roll >= keep) continue;
-        if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || nearRail(x, z, 4) || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
+        if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || nearRail(x, z, 4) || terrain.underDeck(x, z, DECK_HALF + 6) || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
         const pine = c === COVER.marsh ? false : c === COVER.scrub ? true : pineTile ? kind < 0.85 : kind < 0.3;
         add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, c === COVER.scrub ? 5 + tall * 6 : (pine ? 15 : 10) + tall * 9, pine ? 'pine' : 'tree');
       }
@@ -1229,12 +1293,13 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...geo.rivers.map(riverLabel).filter(Boolean),
     ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })).filter(onMap),
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
+    ...[...new Map(decks.filter((d) => d.name === 'Trammell Bridge').map((d) => [d.name, d])).values()].map((d) => ({ text: d.name, x: d.x, z: d.z + 120, kind: 'place', place: 'bridge' })),
     ...(infra?.places || []).filter(([lat, lon, kind]) => kind !== 'landing').map(([lat, lon, kind, text]) => ({ ...project(lat, lon, size), text, kind: 'place', place: kind })).filter(onMap),
     ...airstrips.map((a) => ({ text: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, kind: 'place', place: 'airstrip' })),
     ...shops.map((sh) => ({ text: sh.name, x: sh.x, z: sh.z, kind: 'place', place: sh.kind })),
   ];
   return {
-    seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
+    seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: decks, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
     docks, camps, river: river ? river.pts : null, powerLines, rails, airstrips, shops, communities,
     /** The trees in one 128 m countryside tile, for drawing far-off woods without loading them into the world. */
@@ -1353,20 +1418,24 @@ export function resolveCircle(x, z, r, solids, y) {
  * Move from (x,z) by (dx,dz) in small substeps so fast movement can't tunnel through thin walls.
  * With `terrain`, too-steep slopes and deep water also stop you.
  */
-export function moveWithCollision(x, z, dx, dz, r, solids, terrain) {
+export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY) {
   const dist = Math.hypot(dx, dz);
   const steps = Math.max(1, Math.ceil(dist / 0.15));
+  const stand = (px, pz, from) => (terrain.standY ? terrain.standY(px, pz, from) : terrain.height(px, pz));
+  let y = terrain ? (fromY !== undefined ? stand(x, z, fromY) : terrain.height(x, z)) : undefined;
   for (let i = 0; i < steps; i++) {
-    const y = terrain ? terrain.height(x, z) : undefined;
     const p = resolveCircle(x + dx / steps, z + dz / steps, r, solids, y);
     if (terrain) {
-      const ny = terrain.height(p.x, p.z);
+      const ny = stand(p.x, p.z, y);
       const run = Math.hypot(p.x - x, p.z - z);
-      if (ny < DEEP_WATER || (run > 1e-6 && (ny - y) / run > MAX_STEP_SLOPE)) break;
+      // Too steep to climb stops you, but a curb-high step (onto a bridge deck where two meet) doesn't.
+      const curb = ny - y <= 0.5 && ny > terrain.height(p.x, p.z) + 0.3;   // only onto a deck, never up a hillside
+      if (ny < DEEP_WATER || (run > 1e-6 && !curb && (ny - y) / run > MAX_STEP_SLOPE)) break;
+      y = ny;
     }
     x = p.x; z = p.z;
   }
-  return { x, z };
+  return { x, z, y };
 }
 
 /** Ray vs 3D axis-aligned box. Returns hit distance t or Infinity. */
