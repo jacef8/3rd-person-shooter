@@ -4433,7 +4433,9 @@ function buildTouchUI() {
     e.preventDefault();
     ui.setPointerCapture(e.pointerId);
     const zone = stickZone();
-    if (e.clientX < innerWidth * 0.45 && !touch.stick && e.clientY > zone.top) {
+    // Left half: the move stick (unless a thumb is already on it). Everywhere else: look. A new finger
+    // always takes over looking, so a drag the phone lost track of can never leave the view stuck.
+    if (e.clientX < innerWidth * 0.5 && !touch.stick && e.clientY > zone.top) {
       // The stick comes up under your thumb, but kept between the top buttons and your health bars.
       const cx = Math.max(zone.minX, Math.min(zone.maxX, e.clientX)), cy = Math.max(zone.minY, Math.min(zone.maxY, e.clientY));
       touch.stick = { id: e.pointerId, x: e.clientX, y: e.clientY, bx: cx, by: cy };   // input from where your thumb landed; drawn at (bx, by)
@@ -4443,7 +4445,7 @@ function buildTouchUI() {
       lock.textContent = '🔒 RUN';
       lock.classList.remove('on', 'held');
       knob.style.transform = 'translate(0px, 0px)';
-    } else if (!touch.look) touch.look = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    } else touch.look = { id: e.pointerId, x: e.clientX, y: e.clientY };
   });
   ui.addEventListener('pointermove', (e) => {
     if (touch.stick?.id === e.pointerId) {
@@ -4472,6 +4474,13 @@ function buildTouchUI() {
   };
   ui.addEventListener('pointerup', end);
   ui.addEventListener('pointercancel', end);
+  ui.addEventListener('lostpointercapture', end);   // a menu opened, the phone took the touch: let go cleanly
+  // Leaving the app (a call, the home button) drops every touch.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    touch.stick = null; touch.look = null; touch.moveX = touch.moveY = 0; touch.sprint = false;
+    if (!touch.autoRun) { $('tstick').style.display = 'none'; $('tlock').style.display = 'none'; }
+  });
   // A close button for any open screen (phones have no Esc / Tab / P keys).
   $('tclose').addEventListener('click', closeTopPanel);
   applyTouchLayout();
@@ -4676,7 +4685,7 @@ setInterval(() => {
   document.body.classList.toggle('touchui', !$('touch').hidden || (touchCapable && !!state.me && state.inputMode !== 'pad'));
   // Close button for screens that otherwise need a keyboard to leave.
   $('tclose').hidden = !(state.inputMode !== 'pad' && panel && panel.id !== 'login' && !(panel.id === 'mapscreen' && state.mapMode !== 'view' && state.mapMode !== 'travel'));
-  if ($('touch').hidden && touch.stick) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; }
+  if ($('touch').hidden && (touch.stick || touch.look)) { touch.stick = null; touch.look = null; touch.moveX = touch.moveY = 0; touch.sprint = false; $('tstick').style.display = 'none'; }
   $('touch').querySelector('.aim')?.classList.toggle('on', state.aiming);
   // Buttons that only matter sometimes show only then: USE when there's something to use, RELOAD when
   // the gun isn't full, HEAL when you're hurt and carry a medkit. (The layout editor shows them all.)
