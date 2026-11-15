@@ -1201,6 +1201,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const H = terrain.height;
   /** Everything that grows or lies in one 128 m tile of countryside. Deterministic, so it's worked
    *  out when first needed rather than stored. `Hf` is the height function to stand things on. */
+  /** Trees cut down to a stump (box ids), kept by whoever runs the world: no collision, no cover. */
+  const felled = new Set();
   function natureTile(tx, tz, Hf = H) {
     const out = [];
     const x0 = -half + tx * NATURE_TILE, z0 = -half + tz * NATURE_TILE;
@@ -1213,7 +1215,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       grid.rect(minX, minZ, maxX, maxZ, [], true).some((q) => !q.nature);
     const add = (minX, minZ, maxX, maxZ, h, type) => {
       const y0 = Math.min(Hf(minX, minZ), Hf(maxX, maxZ), Hf(minX, maxZ), Hf(maxX, minZ)) - 0.3;
-      out.push({ id: id++, minX, minZ, maxX, maxZ, h: h + 0.3, y0, type, nature: 1 });
+      const box = { id: id++, minX, minZ, maxX, maxZ, h: h + 0.3, y0, type, nature: 1 };
+      if (felled.has(box.id)) box.gone = 1;   // cut down (and not grown back yet)
+      out.push(box);
     };
     const spot = (m) => [x0 + m + r() * (NATURE_TILE - 2 * m), z0 + m + r() * (NATURE_TILE - 2 * m)];
     const pineTile = b.forest + b.desert > b.mountain + b.sea;
@@ -1304,6 +1308,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     docks, camps, river: river ? river.pts : null, powerLines, rails, airstrips, shops, communities,
     /** The trees in one 128 m countryside tile, for drawing far-off woods without loading them into the world. */
     natureTile: (tx, tz) => natureTile(tx, tz, terrain.exact).filter((b) => b.type === 'tree' || b.type === 'pine'), natureTileSize: NATURE_TILE,
+    felled,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },
     roadsNear: (x, z, r) => roadGrid.near(x, z, r),
   };
@@ -1343,6 +1348,7 @@ export function insideBuilding(b, x, z, margin = 0.3) {
 }
 /** Where a ray meets a box (turned or not): distance, or Infinity. */
 export function rayHitBox(b, ox, oy, oz, dx, dy, dz) {
+  if (b.gone) return Infinity;
   const y0 = b.y0 || 0;
   if (b.ang === undefined) return rayBox(ox, oy, oz, dx, dy, dz, b.minX, y0, b.minZ, b.maxX, y0 + b.h, b.maxZ);
   const [lx, lz] = toBox(b, ox, oz);
@@ -1363,6 +1369,7 @@ export function circleOverlapsBox(x, z, r, b) {
 
 /** Does a box block a character standing at height y? (Overhead roofs/canopies and flat jetties don't.) */
 export function blocksAt(b, y) {
+  if (b.gone) return false;
   if (y === undefined) return true;
   const y0 = b.y0 || 0;
   return y0 < y + 1.9 && y0 + b.h > y + 0.35;
@@ -1373,7 +1380,7 @@ export function resolveCircle(x, z, r, solids, y) {
   for (let iter = 0; iter < 3; iter++) {
     let moved = false;
     for (const b of solids) {
-      if (y !== undefined && !blocksAt(b, y)) continue;
+      if (b.gone || (y !== undefined && !blocksAt(b, y))) continue;
       if (b.ang !== undefined) {
         // A turned box: push out in its own frame, then turn the answer back.
         const [lx, lz] = toBox(b, x, z);

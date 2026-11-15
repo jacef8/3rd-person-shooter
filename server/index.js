@@ -2292,7 +2292,11 @@ function tickHacks(now) {
       const hv = harvested.get(h.id) || { uses: 0, regrowAt: 0 };
       if (hv.uses >= BUILD.harvest.uses && hv.regrowAt <= now) hv.uses = 0;
       hv.uses++;
-      if (hv.uses >= BUILD.harvest.uses) hv.regrowAt = now + BUILD.harvest.regrowMs;
+      if (hv.uses >= BUILD.harvest.uses) {
+        hv.regrowAt = now + Number(process.env.HARVEST_REGROW_MS || BUILD.harvest.regrowMs);
+        // A tree with nothing left comes down to a stump for everyone until it grows back.
+        if (h.box && (h.box.type === 'tree' || h.box.type === 'pine')) { hv.box = h.box; h.box.gone = 1; map.felled.add(h.box.id); broadcast({ t: 'felled', id: h.box.id, on: 1 }); }
+      }
       harvested.set(h.id, hv);
       const n = BUILD.harvest[h.res];
       p[h.res] += n;
@@ -3232,7 +3236,7 @@ function interact(p) {
     if (!hasTool(p, tool)) return toast(p, `You need a ${tool} to gather ${it.res}`);
     const hv = harvested.get(it.ref.id);
     if (hv && hv.uses >= BUILD.harvest.uses && hv.regrowAt > Date.now()) return toast(p, 'Nothing left here — it regrows in a while');
-    return startHack(p, 'harvest', it.ref.id, { res: it.res });
+    return startHack(p, 'harvest', it.ref.id, { res: it.res, box: it.ref });
   }
   if (it.kind === 'struct') return structInteract(p, it.ref);
   if (it.kind === 'contact') {
@@ -3914,7 +3918,7 @@ function handleJoin(ws, msg) {
   }
   send(ws, {
     t: 'welcome', id: p.id, token, world: WORLD_ID, worldName: WORLD_NAME, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
-    x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, devKit: DEV_KIT, doorBase: DOOR_HP,
+    x: p.x, z: p.z, yaw: p.yaw, felled: [...map.felled], packSize: PACK_SIZE, devKit: DEV_KIT, doorBase: DOOR_HP,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
@@ -4290,6 +4294,7 @@ const loop = setInterval(() => {
       for (const c of [...p.contracts]) if (c.expires < now) { abandonContract(p, c.id); toast(p, `Contract expired: ${CONTRACT_TYPES[c.type].name}`); }
     }
     if (tick % (TICK_HZ * 5) === 0) for (const s of squads.values()) pushSquadState(s);   // squadmate positions for the map
+    for (const [id, hv] of harvested) if (hv.box && hv.regrowAt <= now) { hv.box.gone = 0; hv.box = null; hv.uses = 0; map.felled.delete(id); broadcast({ t: 'felled', id, on: 0 }); }   // grown back
   }
   if (tick % SNAPSHOT_EVERY === 0 && players.size) {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {

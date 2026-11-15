@@ -153,8 +153,13 @@ async function loadRealData(info) {
   return { structures, roads, elevation: elev, landcover: cover, infrastructure };
 }
 
+/** A loaded tree or rock by its id (nature boxes sit in the grid near where they grow). */
+function findNatureBox(id) {
+  return state.map.grid.near(state.x, state.z, 400).find((q) => q.id === id) || null;
+}
 function initWorld(m) {
   const map = generateMap(m.seed, m.size, m.realData || {});
+  for (const id of m.felled || []) map.felled.add(id);
   if (mapChecksum(map) !== m.mapSum) toast('⚠ World mismatch with server — update your client');
   state.map = map;
   // One coarse pass over the whole county, shared by the far landscape and the map screen.
@@ -1098,6 +1103,13 @@ function handle(m) {
       state.air = { alt: m.alt, mode: m.mode };
       if (m.heli) flyBy({ ...m.heli, alt: m.alt });
       return;
+    case 'felled': {
+      // A tree cut down to a stump (on: 1) or grown back (on: 0).
+      if (m.on) state.map.felled.add(m.id); else state.map.felled.delete(m.id);
+      const b = findNatureBox(m.id);
+      if (b) { b.gone = m.on ? 1 : 0; state.view?.setFelled(b, !!m.on); }
+      return;
+    }
     case 'taxiMenu':
       state.taxi = m;
       openMapScreen('taxi');
@@ -2756,7 +2768,7 @@ function nearestInteractable() {
   if (!best) {
     for (const b of state.map.grid.near(state.x, state.z, 2.5)) {
       const wood = b.type === 'tree' || b.type === 'pine', stone = b.type === 'rock' || b.type === 'boulder';
-      if (!wood && !stone) continue;
+      if ((!wood && !stone) || b.gone) continue;
       const tool = wood ? 'hatchet' : 'pickaxe';
       if (!has(tool) && has('rod')) continue;   // fishing takes over at the water's edge (below)
       const d = Math.hypot(Math.max(b.minX - state.x, 0, state.x - b.maxX), Math.max(b.minZ - state.z, 0, state.z - b.maxZ)) + 0.6;

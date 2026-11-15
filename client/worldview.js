@@ -528,6 +528,21 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   const wallColor = (r) => paint({ type: r.type, bldg: r.bldg, real: r.real, id: r.bldg })[0];
   const ownChunk = (b, x0, z0) => { const mx = (b.minX + b.maxX) / 2, mz = (b.minZ + b.maxZ) / 2; return mx >= x0 && mx < x0 + CHUNK && mz >= z0 && mz < z0 + CHUNK; };
 
+  // Each drawn tree's place in its chunk's instanced meshes, so one can be cut to a stump (or regrow) in place.
+  const treeSlots = new WeakMap(), tm = new THREE.Matrix4();
+  function setTreeMatrix(t) {
+    const sl = treeSlots.get(t);
+    if (!sl) return;
+    const { trunks, crowns, i, x, y, z, h, w } = sl;
+    if (t.gone) {   // a stump knee-high, and no crown
+      tm.makeScale(1.15, 0.55, 1.15).setPosition(x, y + 0.3, z); trunks.setMatrixAt(i, tm);
+      tm.makeScale(0, 0, 0).setPosition(x, y, z); crowns.setMatrixAt(i, tm);
+    } else {
+      tm.makeScale(1, h * 0.45, 1).setPosition(x, y, z); trunks.setMatrixAt(i, tm);
+      tm.makeScale(w, h * 0.75, w).setPosition(x, y + h * 0.28, z); crowns.setMatrixAt(i, tm);
+    }
+    trunks.instanceMatrix.needsUpdate = true; crowns.instanceMatrix.needsUpdate = true;
+  }
   function buildChunk(cx, cz) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
@@ -573,11 +588,9 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
       const m = new THREE.Matrix4();
       list.forEach((t, i) => {
         const x = (t.minX + t.maxX) / 2, z = (t.minZ + t.maxZ) / 2, y = t.y0 || 0, h = t.h;
-        m.makeScale(1, h * 0.45, 1).setPosition(x, y, z);
-        trunks.setMatrixAt(i, m);
         const w = wide + (t.id % 5) * 0.25;
-        m.makeScale(w, h * 0.75, w).setPosition(x, y + h * 0.28, z);
-        crowns.setMatrixAt(i, m);
+        treeSlots.set(t, { trunks, crowns, i, x, y, z, h, w });
+        setTreeMatrix(t);
       });
       trunks.castShadow = crowns.castShadow = !mobile;
       group.add(trunks, crowns);
@@ -671,6 +684,8 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   return {
     /** The far scene: draw it first with a long-range camera at the same place, then clear depth. */
     far,
+    /** A tree cut down to a stump, or grown back. */
+    setFelled(t) { setTreeMatrix(t); },
     setOwnHouse(id) {
       if (id === ownHouseId) return;
       ownHouseId = id;
