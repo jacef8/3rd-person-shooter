@@ -20,6 +20,7 @@ import { BOATS, floats, seatPos } from '../shared/boats.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
+  JUMP_V, JUMP_G,
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
@@ -95,7 +96,7 @@ const nth = (list, i) => { const k = typeof i === 'string' && /^\d+$/.test(i) ? 
 /** Where a character stands: a boat deck, a bridge deck (its tracked height, while it's still where it was
  *  measured), or the ground; plus how high it is on a jump. */
 const standing = (c) => (c.y !== undefined && c.yx === c.x && c.yz === c.z ? c.y : terrain.height(c.x, c.z));
-const gy = (c) => (c.boat ? 0.25 : standing(c) + (c.air ? c.air.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
+const gy = (c) => (c.boat ? 0.25 : standing(c) + (c.air ? c.air.alt : 0) + (c.hop ? c.hop.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
 const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
@@ -2603,7 +2604,7 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1, opts = {}) {
       }
     }
     const t = Math.min(hit.t, maxRange);
-    tracers.push([+(ox + dx * t).toFixed(2), +(oy + dy * t).toFixed(2), +(oz + dz * t).toFixed(2), hit.kind ? 1 : 0]);
+    tracers.push([+(ox + dx * t).toFixed(2), +(oy + dy * t).toFixed(2), +(oz + dz * t).toFixed(2), hit.kind === 'player' || hit.kind === 'bot' ? 2 : hit.kind ? 1 : 0]);   // 2 a person or animal, 1 anything solid, 0 nothing
     if (!hit.kind || hit.kind === 'world') continue;
     const F = COMBAT.falloff;
     const falloff = t <= s.range ? 1 : Math.max(F.minMul, 1 - (t - s.range) / (s.range * F.overRangeSpan) * F.maxDrop);
@@ -3947,7 +3948,7 @@ function handleState(p, msg) {
   const maxStep = isStunned(p, now) ? 0.05 : p.prone ? PRONE_SPEED * dt * 1.5 + 0.15 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
-  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain, standing(p));
+  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain, standing(p), p.hop ? p.hop.alt : 0);
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
   if (p.speed > 0.5) p.lastActive = now;
   p.x = np.x; p.z = np.z;
@@ -4105,6 +4106,12 @@ wss.on('connection', (ws) => {
     }
     switch (msg.t) {
       case 'state': return handleState(p, msg);
+      case 'jump': {   // off the ground only, not lying down, a breath between jumps
+        const now = Date.now();
+        if (p.dead || p.downed || p.prone || p.boat || p.air || p.hop || now - (p.lastJump || 0) < 650 || isStunned(p, now)) return;
+        p.lastJump = now; p.hop = { alt: 0, vy: JUMP_V };
+        return;
+      }
       case 'shoot': return handleShoot(p, msg);
       case 'reload': return handleReload(p);
       case 'swap': {   // next gun you're carrying: main gun 1, main gun 2, sidearm, round again
@@ -4245,6 +4252,7 @@ const loop = setInterval(() => {
   for (const c of bots.values()) if (!c.dead) { (c.hist ??= []).push({ t: now, x: c.x, z: c.z, y: gy(c), crouch: c.crouch }); if (c.hist.length > 8) c.hist.shift(); }
   const dt = 1 / TICK_HZ;
   for (const p of players.values()) if (p.air && !p.dead) tickAir(p, dt);
+  for (const p of players.values()) if (p.hop) { p.hop.vy -= JUMP_G * dt; p.hop.alt += p.hop.vy * dt; if (p.hop.alt <= 0 || p.dead || p.downed || p.boat || p.air) p.hop = null; }
   updateBots(dt, now);
   tickHacks(now);
   if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); }
@@ -4288,7 +4296,7 @@ const loop = setInterval(() => {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
-      air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : undefined,
+      air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : p.hop ? Math.round(p.hop.alt * 100) / 100 : undefined,
       y: !p.boat && standing(p) > terrain.height(p.x, p.z) + 0.8 ? +standing(p).toFixed(2) : undefined,   // up on a bridge deck
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,

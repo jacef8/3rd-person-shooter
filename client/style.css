@@ -636,3 +636,15 @@ body.touchui .tbtn.use.ready { background: var(--accent); border-color: #fff; co
 #tedit[hidden] { display: none; }
 #tedit span { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 #touch.editing .tbtn[data-key] { outline: 2px dashed var(--accent); outline-offset: 2px; }
+
+/* Phone: buttons that aren't useful right now step out of the way; JUMP sits by AIM. */
+#touch .tbtn.idle { opacity: 0; pointer-events: none; }
+body.touchui .tbtn.jump { right: calc(96px + env(safe-area-inset-right)); bottom: 74px; width: 52px; height: 52px; }
+body.touchui .tbtn.r1 { right: calc(24px + env(safe-area-inset-right)); bottom: 150px; }   /* reload, over FIRE */
+body.touchui .tbtn.use { right: calc(30px + env(safe-area-inset-right)); bottom: 206px; }
+body.touchui .tbtn.r4 { right: calc(96px + env(safe-area-inset-right)); bottom: 134px; }   /* grenade */
+body.touchui .tbtn.r5 { right: calc(156px + env(safe-area-inset-right)); bottom: 128px; }  /* tag */
+
+/* The gun's line is blocked short of the crosshair: red, with an X. */
+#crosshair.blocked i { background: #ff4d4d; }
+#crosshair.blocked::after { content: '✕'; position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); color: #ff4d4d; font: 700 18px/1 var(--font-text); }

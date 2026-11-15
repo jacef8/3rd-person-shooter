@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED,
-} from '/shared/world.js';
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, JUMP_V, JUMP_G } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
@@ -37,10 +36,12 @@ const ground = (x, z) => (state.map ? state.map.terrain.height(x, z) : 0);
 const canvas = $('game');
 // Phones/tablets (touch-first devices) get a lighter render profile.
 const MOBILE = matchMedia('(pointer: coarse)').matches;
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: !MOBILE, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, MOBILE ? 1.25 : 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // soft-edged shadows
+renderer.toneMapping = THREE.ACESFilmicToneMapping;  // film-like light: bright sky without washing out the ground
+renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene();
 // No fog. The distance is a second scene (sky, the county's ground, far-off buildings and woods,
 // see worldview.js) drawn first through a long-range camera; the near world is drawn over it.
@@ -48,17 +49,32 @@ renderer.autoClear = false;
 renderer.setClearColor(SKY_HORIZON);
 // Graphics: Fast for phones (and older computers), Full for desktops; changed in the crew panel.
 const GFX = {
-  fast: { label: 'Fast', pixel: 1, view: 200, far: 600, shadows: false, about: 'Shorter view, no shadows: smooth on phones.' },
-  balanced: { label: 'Balanced', pixel: 1.25, view: 260, far: 1000, shadows: true, about: 'Middle ground.' },
-  full: { label: 'Full', pixel: 2, view: 320, far: 1500, shadows: true, about: 'Everything: long views and shadows.' },
+  fast: { label: 'Low', pixel: 1, view: 200, far: 600, shadows: false, shadowMap: 1024, about: 'For older phones: shorter view, no shadows.' },
+  balanced: { label: 'Medium', pixel: 1.5, view: 260, far: 1000, shadows: true, shadowMap: 1024, about: 'Middle ground.' },
+  full: { label: 'High', pixel: 2, view: 320, far: 1500, shadows: true, shadowMap: 2048, about: 'Long views and shadows, sharp on any screen.' },
+  ultra: { label: 'Ultra', pixel: 3, view: 420, far: 2600, shadows: true, shadowMap: 4096, about: 'Full screen sharpness, the longest views and the finest shadows: for flagship phones and gaming PCs.' },
 };
-let gfxMode = (() => { try { const v = localStorage.getItem('dz_gfx'); if (GFX[v]) return v; } catch { /* private mode */ } return MOBILE ? 'fast' : 'full'; })();
+// Everyone starts on High (today's phones run it); Low stays in Settings for older ones. A saved
+// 'fast' from before High was the phone default is moved up once.
+let gfxMode = (() => {
+  try {
+    const v = localStorage.getItem('dz_gfx');
+    if (v === 'fast' && !localStorage.getItem('dz_gfx_v2')) { localStorage.setItem('dz_gfx_v2', '1'); return 'full'; }
+    if (GFX[v]) return v;
+  } catch { /* private mode */ }
+  return 'full';
+})();
 function applyGfx(mode = gfxMode) {
   gfxMode = mode;
   try { localStorage.setItem('dz_gfx', mode); } catch { /* private mode */ }
   const g = GFX[mode];
   renderer.setPixelRatio(Math.min(devicePixelRatio, g.pixel));
   sun.castShadow = g.shadows;
+  if (sun.shadow.mapSize.x !== g.shadowMap) { sun.shadow.mapSize.set(g.shadowMap, g.shadowMap); sun.shadow.map?.dispose(); sun.shadow.map = null; }
+  const reach = mode === 'ultra' ? 110 : 70;
+  Object.assign(sun.shadow.camera, { left: -reach, right: reach, top: reach, bottom: -reach, far: reach * 3 });
+  sun.shadow.camera.updateProjectionMatrix();
+  try { localStorage.setItem('dz_gfx_v2', '1'); } catch { /* private mode */ }
   state.view?.setRanges(g.view, g.far);
   dispatchEvent(new Event('resize'));
 }
@@ -765,16 +781,44 @@ function syncEntities(list, store, create) {
 
 // ------------------------------------------------------------------ effects
 const tracers = [];
+/** Where your own shots appear to leave from: the muzzle of the gun in your hands (right of you, at chest height). */
+function muzzlePoint(o) {
+  const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw), rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
+  return [state.x + rx * 0.32 + fx * 0.75, eyeHeight() - 0.28, state.z + rz * 0.32 + fz * 0.75];
+}
+const TRACER_MAT = new THREE.MeshBasicMaterial({ color: 0xffe4a0, transparent: true, opacity: 0.95, depthWrite: false });
+const PUFF_MAT = new THREE.MeshBasicMaterial({ color: 0xd9cfbf, transparent: true, opacity: 0.85, depthWrite: false });
+const MARK_MAT = new THREE.MeshBasicMaterial({ color: 0x1a1612, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+const HIT_MAT = new THREE.MeshBasicMaterial({ color: 0xff5040 });
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1), PUFF_GEO = new THREE.SphereGeometry(1, 8, 6), MARK_GEO = new THREE.CircleGeometry(0.09, 10);
 function addTracer(o, p, hit) {
-  const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...o), new THREE.Vector3(p[0], p[1], p[2])]);
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.9 }));
-  scene.add(line);
-  tracers.push({ obj: line, life: 0.08 });
-  if (hit) {
-    const spark = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), new THREE.MeshBasicMaterial({ color: 0xffd27a }));
-    spark.position.set(p[0], p[1], p[2]);
-    scene.add(spark);
-    tracers.push({ obj: spark, life: 0.12 });
+  // A bright streak you can see, from the gun to where the bullet stopped.
+  const a = new THREE.Vector3(...o), b = new THREE.Vector3(p[0], p[1], p[2]), len = a.distanceTo(b);
+  if (len > 0.5) {
+    const streak = new THREE.Mesh(UNIT_BOX, TRACER_MAT);
+    streak.scale.set(0.035, 0.035, len);
+    streak.position.copy(a).add(b).multiplyScalar(0.5);
+    streak.lookAt(b);
+    scene.add(streak);
+    tracers.push({ obj: streak, life: 0.07, shared: true });
+  }
+  // Where it landed: red on a person or animal; dust and a bullet hole on anything else.
+  if (!hit) return;   // into the sky: nothing to land on
+  const body = hit === 2;
+  const puff = new THREE.Mesh(PUFF_GEO, body ? HIT_MAT : PUFF_MAT);
+  puff.scale.setScalar(body ? 0.09 : 0.16);
+  puff.position.copy(b);
+  scene.add(puff);
+  tracers.push({ obj: puff, life: body ? 0.15 : 0.45, shared: true, grow: body ? 0 : 0.9 });
+  if (!body && len > 0.5) {
+    const mark = new THREE.Mesh(MARK_GEO, MARK_MAT);
+    mark.position.copy(b).addScaledVector(b.clone().sub(a).normalize(), -0.02);
+    mark.lookAt(a);
+    scene.add(mark);
+    tracers.push({ obj: mark, life: 6, shared: true });
+    // Keep only the newest 40 holes.
+    const marks = tracers.filter((t) => t.obj.geometry === MARK_GEO);
+    if (marks.length > 40) marks[0].life = 0;
   }
 }
 
@@ -1168,7 +1212,7 @@ function handle(m) {
       // Suppressed fire from other players only shows up close.
       const near = Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < (m.sup === 2 ? 8 : 25);
       if (m.sup && m.from !== state.id && !near) break;
-      for (const h of m.hits) addTracer(m.o, h, h[3]);
+      for (const h of m.hits) addTracer(m.from === state.id ? muzzlePoint(m.o) : m.o, h, h[3]);
       break;
     }
     case 'xp':
@@ -2382,6 +2426,15 @@ function lockPointer() {
 }
 
 /** One place for every gameplay action, shared by keyboard and controller. */
+/** Jump (your client shows it at once; the server runs the same arc for everyone else and for hits). */
+function jump() {
+  const me = state.me, now = performance.now();
+  if (!me || me.dead || me.downed || me.boat || state.air || state.hop || state.prone || now - (state.lastJump || 0) < 650 || build.on) return;
+  state.lastJump = now;
+  state.hop = { alt: 0, vy: JUMP_V };
+  state.crouch = false;
+  send({ t: 'jump' });
+}
 function doAction(a) {
   if (!state.me) return;
   switch (a) {
@@ -2410,6 +2463,8 @@ function doAction(a) {
     }
   }
   switch (a) {
+    case 'jump': jump(); break;
+    case 'padA': if (state.promptText) send({ t: 'interact' }); else jump(); break;   // controller A: use if there's something to use, else jump
     case 'interact': send({ t: 'interact' }); break;
     case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
     case 'sensor': { const p = aimPoint(); send({ t: state.grenade === 'stun' ? 'stun' : 'sensor', x: p.x, z: p.z }); break; }
@@ -2478,7 +2533,7 @@ addEventListener('keydown', (e) => {
 addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
-  KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', KeyH: 'heal', ControlLeft: 'crouch',
+  KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', KeyH: 'heal', ControlLeft: 'crouch', Space: 'jump',
 };
 addEventListener('keydown', (e) => {
   if (document.activeElement?.tagName === 'INPUT') return;
@@ -2533,7 +2588,7 @@ function lookDir() {
 
 /** Where you stand: up on a bridge deck (tracked as you walk) or the ground. */
 function myY() { return state.y !== undefined && state.yx === state.x && state.yz === state.z ? state.y : ground(state.x, state.z); }
-function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : myY() + (state.air ? state.air.alt : 0) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
+function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : myY() + (state.air ? state.air.alt : 0) + (state.hop ? state.hop.alt : 0) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
 
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
@@ -2971,7 +3026,7 @@ function renderBoards() {
 // and only after a button has been pressed.
 const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, L3: 10, R3: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
 const PAD_ACTIONS = {
-  [BTN.A]: 'interact', [BTN.B]: 'crouch', [BTN.X]: 'reload', [BTN.Y]: 'swap', [BTN.LB]: 'sensor', [BTN.RB]: 'tag',
+  [BTN.A]: 'padA', [BTN.B]: 'crouch', [BTN.X]: 'reload', [BTN.Y]: 'swap', [BTN.LB]: 'sensor', [BTN.RB]: 'tag',
   [BTN.R3]: 'camo', [BTN.UP]: 'heal', [BTN.DOWN]: 'ping', [BTN.LEFT]: 'rally', [BTN.RIGHT]: 'build',
   [BTN.VIEW]: 'inventory', [BTN.MENU]: 'map',
 };
@@ -3654,6 +3709,7 @@ function frame(now) {
     if (state.mouseDown && free && !build.on) tryFire(now); else if (!state.mouseDown) state.firedThisPress = false;
   }
   if (!alive) state.air = null;
+  if (state.hop) { state.hop.vy -= JUMP_G * dt; state.hop.alt += state.hop.vy * dt; if (state.hop.alt <= 0 || !alive) state.hop = null; }
   if (alive && state.air && !inBoat) {
     // On a jump: Sprint (held) flies the squirrel suit, the stick steers, Use pulls the chute.
     const k = state.keys;
@@ -3710,7 +3766,7 @@ function frame(now) {
     }
     if (len > 0.05 && !stunnedNow) {
       if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
-      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, myY());
+      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, myY(), state.hop ? state.hop.alt : 0);
       state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
     }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
@@ -3729,7 +3785,7 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);
@@ -3769,6 +3825,16 @@ function frame(now) {
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
   $('crosshair').classList.toggle('aim', aim);
+  // Obstructed: something close between your gun and what the crosshair is on (a corner, a door frame,
+  // a low wall: the over-the-shoulder camera sees past it, the gun doesn't). Those shots hit it.
+  if (alive && ws && !state.air) {
+    const t = aimPoint(), e = new THREE.Vector3(state.x, eyeHeight(), state.z), dir = t.clone().sub(e), L = dir.length();
+    if (L > 1) {
+      dir.normalize();
+      const blk = Math.min(rayAgainstBoxes(e.x, e.y, e.z, dir.x, dir.y, dir.z, solidsAlongRay(e.x, e.z, dir.x, dir.z, L), L).t, state.map.terrain.ray(e.x, e.y, e.z, dir.x, dir.y, dir.z, L));
+      $('crosshair').classList.toggle('blocked', blk < L - 0.6);
+    } else $('crosshair').classList.remove('blocked');
+  }
   // The crosshair opens up to show how far shots can stray (hip fire, moving, crouched, prone).
   if (ws) {
     const moving = Math.hypot(pad.moveX, pad.moveY) > 0.2 || Math.hypot(touch.moveX, touch.moveY) > 0.2 || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => state.keys.has(k));
@@ -3799,7 +3865,8 @@ function frame(now) {
   for (let i = tracers.length - 1; i >= 0; i--) {
     const t = tracers[i];
     t.life -= dt;
-    if (t.life <= 0) { scene.remove(t.obj); t.obj.geometry.dispose(); tracers.splice(i, 1); }
+    if (t.grow) t.obj.scale.multiplyScalar(1 + t.grow * dt * 3);
+    if (t.life <= 0) { scene.remove(t.obj); if (!t.shared) t.obj.geometry.dispose(); tracers.splice(i, 1); }
   }
 
   const prompt = alive && !state.invOpen && !state.air ? nearestInteractable() : null;
@@ -3832,7 +3899,7 @@ const TOUCH_BTNS = [
   // into the lock to keep running. Guns switch by tapping them at the bottom.
   ['FIRE', 'fire', 'big fire', 'fire'], ['FIRE', 'fire', 'mid fire lfire', 'lfire'], ['AIM', 'aim', 'mid aim', 'aim'], ['USE', 'interact', 'mid use', 'use'],
   ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'], ['PRONE', 'prone', 'sm r7', 'prone'], ['NADE', 'sensor', 'sm r4', 'nade'],
-  ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
+  ['JUMP', 'jump', 'mid jump', 'jump'], ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
 ];
 // Top left: the map and bag, and ⋯ for the rest.
 const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['⋯', 'touchMore']];
@@ -3997,7 +4064,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { touch, tset, editTouch });   // debug/test hook
+Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers });   // debug/test hook
 function closeTopPanel() {
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.gunsmithOpen) return closeGunsmith();
@@ -4018,7 +4085,15 @@ setInterval(() => {
   $('tclose').hidden = !(state.inputMode !== 'pad' && panel && panel.id !== 'login' && !(panel.id === 'mapscreen' && state.mapMode !== 'view' && state.mapMode !== 'travel'));
   if ($('touch').hidden && touch.stick) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; }
   $('touch').querySelector('.aim')?.classList.toggle('on', state.aiming);
-  $('touch').querySelector('.use')?.classList.toggle('ready', !!state.promptText);
+  // Buttons that only matter sometimes show only then: USE when there's something to use, RELOAD when
+  // the gun isn't full, HEAL when you're hurt and carry a medkit. (The layout editor shows them all.)
+  const me = state.me, show = (key, on) => { const b = $('touch').querySelector(`[data-key=${key}]`); if (b) b.classList.toggle('idle', !on && !touch.editing); };
+  if (me) {
+    const w = me.inv?.[me.active], full = w ? me.mag >= weaponStats(w).mag : true;
+    show('use', !!state.promptText);
+    show('reload', !!w && !full && me.ammo > 0);
+    show('heal', me.hp < me.maxHp && me.inv?.pack?.some((i) => i.kind === 'medkit'));
+  }
   $('touch').querySelector('[data-key=crouch]')?.classList.toggle('on', !!state.crouch);
   $('touch').querySelector('[data-key=prone]')?.classList.toggle('on', !!state.prone);
   if (touch.autoRun && (state.me?.dead || state.me?.downed)) { touch.autoRun = false; touch.moveY = 0; touch.sprintOn = false; $('tlock').style.display = 'none'; }

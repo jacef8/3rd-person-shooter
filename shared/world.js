@@ -1418,13 +1418,15 @@ export function resolveCircle(x, z, r, solids, y) {
  * Move from (x,z) by (dx,dz) in small substeps so fast movement can't tunnel through thin walls.
  * With `terrain`, too-steep slopes and deep water also stop you.
  */
-export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY) {
+/** A jump: straight up at JUMP_V m/s against JUMP_G: about 0.6 s in the air, 0.75 m up at the top. */
+export const JUMP_V = 5.2, JUMP_G = 18;
+export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift = 0) {
   const dist = Math.hypot(dx, dz);
   const steps = Math.max(1, Math.ceil(dist / 0.15));
   const stand = (px, pz, from) => (terrain.standY ? terrain.standY(px, pz, from) : terrain.height(px, pz));
   let y = terrain ? (fromY !== undefined ? stand(x, z, fromY) : terrain.height(x, z)) : undefined;
   for (let i = 0; i < steps; i++) {
-    const p = resolveCircle(x + dx / steps, z + dz / steps, r, solids, y);
+    const p = resolveCircle(x + dx / steps, z + dz / steps, r, solids, y === undefined ? y : y + lift);   // up in a jump, low things pass under you
     if (terrain) {
       const ny = stand(p.x, p.z, y);
       const run = Math.hypot(p.x - x, p.z - z);

@@ -19,7 +19,7 @@ const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU:
 const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
 const p = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 // Graphics on Fast: this checks controller navigation, and software rendering on a big view makes frames slow.
-await p.addInitScript(() => { try { localStorage.setItem('dz_gfx', 'fast'); } catch { /* no storage */ } });
+await p.addInitScript(() => { try { localStorage.setItem('dz_gfx', 'fast'); localStorage.setItem('dz_gfx_v2', '1'); } catch { /* no storage */ } });
 const errs = [];
 p.on('pageerror', (e) => errs.push(String(e)));
 p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
