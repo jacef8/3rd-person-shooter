@@ -757,3 +757,8 @@ body.scoped #wslots, body.scoped #tracker, body.scoped #feed, body.scoped #promp
 body.scoped #touch .tbtn[data-key=look], body.scoped #touch .tbtn[data-key=tag], body.scoped #touch .tbtn[data-key=nade],
 body.scoped #touch .tbtn[data-key=heal], body.scoped #touch .tbtn[data-key=use], body.scoped #touch .ttop, body.scoped #tloot { visibility: hidden; }
 body.scoped #weapon { background: transparent; border-color: transparent; }
+
+/* Phones, map open: the Close button sits inside the map panel's top-right corner, level with the
+   panel title, and the title row leaves room for it. */
+body.touchui:has(#mapscreen:not([hidden])) #tclose { top: calc(1vh + 10px); right: calc(1vw + 10px); padding: 8px 14px; min-height: 44px; }
+body.touchui #mapscreen aside h2#mapTitle { margin-right: 112px; min-height: 44px; }

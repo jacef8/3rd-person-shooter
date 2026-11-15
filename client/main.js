@@ -2518,7 +2518,7 @@ function renderMapScreen() {
   if (state.mapMode === 'view') {
     const pad = state.inputMode === 'pad';
     const touchy = document.body.classList.contains('touchui');
-    list.append(Object.assign(document.createElement('div'), { className: 'mapnote', textContent: pad ? 'The cross in the middle is your pointer: slide the map with the right stick, zoom with LT / RT.' : touchy ? 'Tap to set a waypoint. Drag to move, + and − to zoom.' : 'Click the map to set a waypoint, right-click to ping your crew. Drag to move, wheel to zoom.' }));
+    list.append(Object.assign(document.createElement('div'), { className: 'mapnote', textContent: pad ? 'The cross in the middle is your pointer: slide the map with the right stick, zoom with LT / RT.' : touchy ? 'Tap to set a waypoint. Drag to move, pinch (or + and −) to zoom.' : 'Click the map to set a waypoint, right-click to ping your crew. Drag to move, wheel to zoom.' }));
     const wb = btn(`Set waypoint here${pad ? ' (Ⓧ)' : ''}`, () => setWaypoint(mapView.cx, mapView.cz), 'gsweapon');
     const pb = btn(`Ping crew here${pad ? ' (Ⓨ)' : ''}`, () => mapPing(mapView.cx, mapView.cz), 'gsweapon');
     list.append(wb, pb);
@@ -2617,7 +2617,39 @@ $('mapcanvas').addEventListener('click', (e) => {
 });
 $('mapcanvas').addEventListener('wheel', (e) => { e.preventDefault(); mapView.zoom = Math.max(1, Math.min(60, mapView.zoom * (e.deltaY < 0 ? 1.25 : 0.8))); drawMapCanvas(); }, { passive: false });
 let mapDrag = null, mapDragMoved = false;
-$('mapcanvas').addEventListener('pointerdown', (e) => { mapDrag = { x: e.clientX, y: e.clientY, cx: mapView.cx, cz: mapView.cz }; mapDragMoved = false; });
+// Two fingers: pinch to zoom, keeping the spot between them under your fingers. One: drag.
+const mapTouches = new Map();
+let mapPinch = null;
+$('mapcanvas').addEventListener('pointerdown', (e) => {
+  mapTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (mapTouches.size === 2) {
+    const [a, b] = [...mapTouches.values()], r = $('mapcanvas').getBoundingClientRect();
+    const mx = (a.x + b.x) / 2 - r.left, my = (a.y + b.y) / 2 - r.top;
+    mapPinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, zoom: mapView.zoom, w: state.mapProj?.toWorld(mx, my) };
+    mapDrag = null; mapDragMoved = true;
+    return;
+  }
+  mapDrag = { x: e.clientX, y: e.clientY, cx: mapView.cx, cz: mapView.cz }; mapDragMoved = false;
+});
+$('mapcanvas').addEventListener('pointermove', (e) => {
+  if (!mapTouches.has(e.pointerId)) return;
+  mapTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!mapPinch || mapTouches.size < 2 || !state.mapProj) return;
+  const [a, b] = [...mapTouches.values()], r = $('mapcanvas').getBoundingClientRect();
+  const mx = (a.x + b.x) / 2 - r.left, my = (a.y + b.y) / 2 - r.top;
+  mapView.zoom = Math.max(1, Math.min(60, mapPinch.zoom * Math.hypot(a.x - b.x, a.y - b.y) / mapPinch.d));
+  drawMapCanvas();
+  if (mapPinch.w) {   // slide so the place you pinched on stays between your fingers
+    const now = state.mapProj.toWorld(mx, my);
+    mapView.cx += mapPinch.w.x - now.x; mapView.cz += mapPinch.w.z - now.z;
+    drawMapCanvas();
+  }
+});
+for (const ev of ['pointerup', 'pointercancel']) $('mapcanvas').addEventListener(ev, (e) => {
+  mapTouches.delete(e.pointerId);
+  if (mapTouches.size < 2) mapPinch = null;
+  if (mapTouches.size === 1) { const [t] = [...mapTouches.values()]; mapDrag = { x: t.x, y: t.y, cx: mapView.cx, cz: mapView.cz }; }
+});
 $('mapcanvas').addEventListener('contextmenu', (e) => {
   e.preventDefault();
   if (state.mapMode !== 'view' || !state.mapProj) return;
@@ -2626,7 +2658,7 @@ $('mapcanvas').addEventListener('contextmenu', (e) => {
 });
 addEventListener('pointerup', () => { mapDrag = null; });
 addEventListener('pointermove', (e) => {
-  if (!mapDrag || !state.mapProj) return;
+  if (!mapDrag || !state.mapProj || mapPinch) return;
   if (Math.hypot(e.clientX - mapDrag.x, e.clientY - mapDrag.y) > 6) mapDragMoved = true;
   mapView.cx = mapDrag.cx - (e.clientX - mapDrag.x) / state.mapProj.k;
   mapView.cz = mapDrag.cz - (e.clientY - mapDrag.y) / state.mapProj.k;
@@ -4879,7 +4911,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction });   // debug/test hook
+Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction, mapView });   // debug/test hook
 function closeTopPanel() {
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.gunsmithOpen) return closeGunsmith();
