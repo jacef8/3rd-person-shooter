@@ -1,6 +1,6 @@
 {
   "_about": "Combat, survival and AI tuning. Distances in metres, times in ms.",
-  "packSize": 12,
+  "packSize": 24,
   "doorHp": 1500,
   "bagLifetimeMs": 1800000,
   "spawnProtectMs": 10000,

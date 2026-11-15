@@ -57,7 +57,7 @@ const BOT_ACTIVE_RANGE = 450;
 // unlocked), plenty of cash and materials, a bigger backpack, and the gunsmith anywhere. It refills
 // on every join and respawn.
 const DEV_KIT = process.env.DEV_KIT !== '0';
-const PACK_SIZE = DEV_KIT ? 40 : COMBAT.packSize;
+const PACK_SIZE = DEV_KIT ? 80 : COMBAT.packSize;
 const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
