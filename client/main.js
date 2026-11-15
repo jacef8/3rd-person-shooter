@@ -18,6 +18,7 @@ import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
 import HELI from '/shared/data/activities.json' with { type: 'json' };
+import { SKY, airRates, nextMode, stepAir } from '/shared/skydive.js';
 import { BOATS, BOAT_RULES, stepBoat, seatPos } from '/shared/boats.js';
 import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
@@ -643,7 +644,7 @@ function updateCharacterMesh(g, c, dt) {
   const k = Math.min(1, dt * 12);
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
-  g.position.y = c.boat ? 0.15 : ground(g.position.x, g.position.z);
+  g.position.y = c.boat ? 0.15 : ground(g.position.x, g.position.z) + (c.alt || 0);
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
@@ -669,7 +670,12 @@ function updateCharacterMesh(g, c, dt) {
   g.visible = !c.dead;
   // Downed: lying on the ground.
   g.rotation.order = 'YXZ';
-  g.rotation.x += ((c.downed || c.prone ? 1.35 : 0) - g.rotation.x) * k;
+  g.rotation.x += ((c.downed || c.prone || c.air === 'fall' || c.air === 'suit' ? 1.35 : 0) - g.rotation.x) * k;
+  if (c.air || u.canopy) {
+    if (!u.canopy) { u.canopy = makeCanopy(); u.wings = makeWings(); g.add(u.canopy, u.wings); }
+    u.canopy.visible = c.air === 'chute';
+    u.wings.visible = c.air === 'suit';
+  }
   if (g.userData.label) {
     const near = camera.position.distanceTo(g.position) < 4;
     g.userData.label.visible = !near;
@@ -685,6 +691,44 @@ function updateCharacterMesh(g, c, dt) {
     g.userData.armorBar.visible = arFrac > 0;
     g.userData.armorBar.scale.x = Math.max(0.001, arFrac);
     g.userData.armorBar.position.x = -0.45 * (1 - arFrac);
+  }
+}
+
+/** A parachute canopy over the head, with lines down to the shoulders. */
+function makeCanopy() {
+  const g = new THREE.Group();
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(3.2, 18, 6, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x4f6b3a, side: THREE.DoubleSide, roughness: 0.9 }));
+  dome.scale.y = 0.45;
+  dome.position.y = 6.2;
+  const pts = [];
+  for (const [x, z] of [[-2.9, -1], [2.9, -1], [-2.9, 1], [2.9, 1], [0, -3], [0, 3]]) pts.push(new THREE.Vector3(Math.sign(x) * 0.25, 1.55, 0), new THREE.Vector3(x, 6.2, z));
+  const lines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x222222 }));
+  g.add(dome, lines);
+  g.visible = false;
+  return g;
+}
+/** The squirrel suit's webbing between arms and legs (the body lies flat, so it spans the body's plane). */
+function makeWings() {
+  const w = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.15, 0.04), new THREE.MeshStandardMaterial({ color: 0xc8541e, roughness: 0.8 }));
+  w.position.y = 0.95;
+  w.visible = false;
+  return w;
+}
+/** The taxi flying on past after you jump. */
+const flyBys = [];
+function flyBy(h) {
+  const heli = makeHelicopter();
+  heli.position.set(h.x, ground(h.x, h.z) + (h.alt ?? SKY.alt) + 6, h.z);
+  heli.rotation.y = h.yaw;
+  scene.add(heli);
+  flyBys.push({ heli, born: performance.now(), dx: Math.sin(h.yaw), dz: Math.cos(h.yaw) });
+}
+function animateFlyBys(dt) {
+  for (let i = flyBys.length - 1; i >= 0; i--) {
+    const f = flyBys[i];
+    for (const r of f.heli.userData.rotors) r.rotation.y += 0.6;
+    f.heli.position.x += f.dx * 45 * dt; f.heli.position.z += f.dz * 45 * dt; f.heli.position.y += 4 * dt;
+    if (performance.now() - f.born > 14000) { scene.remove(f.heli); flyBys.splice(i, 1); }
   }
 }
 
@@ -1002,6 +1046,12 @@ const send = (m) => state.ws?.readyState === 1 && state.ws.send(JSON.stringify(m
 
 function handle(m) {
   switch (m.t) {
+    case 'air':
+      // Out of the helicopter (or the chute opened, or you landed).
+      if (m.mode == null) { state.air = null; return; }
+      state.air = { alt: m.alt, mode: m.mode };
+      if (m.heli) flyBy({ ...m.heli, alt: m.alt });
+      return;
     case 'taxiMenu':
       state.taxi = m;
       openMapScreen('taxi');
@@ -1020,7 +1070,12 @@ function handle(m) {
       break;
     case 'snap': {
       for (const p of m.players) {
-        if (p.id === state.id) { state.selfSnap = p; continue; }
+        if (p.id === state.id) {
+          state.selfSnap = p;
+          // The server owns your height on a jump: catch up if the two drift apart.
+          if (state.air && p.alt != null) { if (Math.abs(p.alt - state.air.alt) > 4) state.air.alt = p.alt; if (p.air === 'chute') state.air.mode = 'chute'; }
+          continue;
+        }
         let rec = state.players.get(p.id);
         if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, ground(p.x, p.z), p.z); state.players.set(p.id, rec); }
         rec.data = p;
@@ -1275,7 +1330,7 @@ function stanceNote() {
   const pad = state.inputMode === 'pad';
   const hint = pad ? 'Ⓑ crouch · hold Ⓑ prone · L3 sprint' : MOBILE && !pad ? 'tap CROUCH · hold it to go prone' : 'C crouch · hold C prone · Shift sprint';
   el.innerHTML = `<b>${STANCE_TEXT[st]}</b><span>${hint}</span>`;
-  el.hidden = !!state.me.dead || !!state.me.boat;
+  el.hidden = !!state.me.dead || !!state.me.boat || !!state.air;   // the line above the crosshair covers a jump
   el.classList.toggle('standing', st === 'stand');
   // Phones are played sideways: say so if it's held upright in the game.
   const upright = document.body.classList.contains('touchui') && innerHeight > innerWidth * 1.1 && !state.me.dead;
@@ -1941,7 +1996,7 @@ function renderMapScreen() {
     first: 'Pick where to start. Then find a place to call home and plant your claim marker in it: a town house or apartment room, a limestone cave, rock outcrop, hollow cypress, river fish camp, an abandoned RV, bus, box truck or houseboat — or plant it as a claim flag on open ground.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
-    taxi: `Pick where to fly. It never drops you on the stop itself: you land somewhere random ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it, away from strangers, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
+    taxi: `Pick where to fly. You jump from ${feet(HELI.airTaxi.jump.alt, 50)} over a random spot ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it and steer down by parachute or squirrel suit, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
     view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
@@ -2393,7 +2448,7 @@ function lookDir() {
   return new THREE.Vector3(Math.sin(state.yaw) * Math.cos(state.pitch), Math.sin(state.pitch), Math.cos(state.yaw) * Math.cos(state.pitch));
 }
 
-function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : ground(state.x, state.z) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
+function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : ground(state.x, state.z) + (state.air ? state.air.alt : 0) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
 
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
@@ -2927,6 +2982,12 @@ function padAdjust(el, d) {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
 }
+function airHud() {
+  const a = state.air, height = `${Math.round(a.alt * 3.28084 / 10) * 10} ft`;
+  if (a.mode === 'chute') return `🪂 ${height} · steer to land`;
+  const sprint = state.inputMode === 'pad' ? 'L3' : !$('touch').hidden ? 'Sprint' : 'Shift';
+  return `${a.mode === 'suit' ? '🐿 Squirrel suit' : 'Freefall'} · ${height} · hold <kbd>${sprint}</kbd> to fly the suit · <kbd>${glyph('E')}</kbd> pull chute (opens by itself at ${feet(SKY.autoChute, 10)})`;
+}
 function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : k; }
 
 for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, () => sfx.unlock(), { passive: true });
@@ -3130,7 +3191,7 @@ function pollPad(dt, now) {
     pad.moveX = deadzone(ax[0]);
     pad.moveY = -deadzone(ax[1]);
     if (just(BTN.L3)) pad.sprint = !pad.sprint;
-    if (Math.hypot(pad.moveX, pad.moveY) < 0.2) pad.sprint = false;
+    if (Math.hypot(pad.moveX, pad.moveY) < 0.2 && !state.air) pad.sprint = false;
     // Look: response curve for fine aim, slower while aiming down sights, light aim slowdown over targets.
     aimPoint();
     const curve = (v) => Math.sign(v) * Math.abs(v) ** 1.8;
@@ -3474,8 +3535,33 @@ function frame(now) {
     state.sprint = false; state.crouch = false; state.prone = false;
     if (state.mouseDown && free && !build.on) tryFire(now); else if (!state.mouseDown) state.firedThisPress = false;
   }
+  if (!alive) state.air = null;
+  if (alive && state.air && !inBoat) {
+    // On a jump: Sprint (held) flies the squirrel suit, the stick steers, Use pulls the chute.
+    const k = state.keys;
+    const pf = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0) + pad.moveY + touch.moveY;
+    const pr = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0) + pad.moveX + touch.moveX;
+    const glide = !me.downed && !!(k.has('ShiftLeft') || pad.sprint || touch.sprint || touch.sprintOn);
+    state.air.mode = nextMode(state.air.mode, glide);
+    stepAir(state.air, dt);
+    const speed = airRates(state.air.mode).speed;
+    const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw), rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
+    let mx, mz;
+    if (state.air.mode === 'suit') {
+      // The suit always flies forward; push on to go faster, turn by looking.
+      const fwd = 0.7 + 0.3 * Math.max(0, Math.min(1, pf));
+      mx = fx * fwd + rx * pr * 0.35; mz = fz * fwd + rz * pr * 0.35;
+    } else {
+      mx = fx * pf + rx * pr; mz = fz * pf + rz * pr;
+      const l = Math.hypot(mx, mz);
+      if (l > 1) { mx /= l; mz /= l; }
+    }
+    const lim = state.map.half - 30;
+    state.x = Math.max(-lim, Math.min(lim, state.x + mx * speed * dt));
+    state.z = Math.max(-lim, Math.min(lim, state.z + mz * speed * dt));
+    state.sprint = glide; state.crouch = false; state.prone = false;
+  } else if (alive && !state.invOpen && !inBoat) {
   // Local movement (client-side prediction; server re-validates every step).
-  if (alive && !state.invOpen && !inBoat) {
     const k = state.keys;
     const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
@@ -3525,7 +3611,8 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat }, 1);
+  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt }, 1);
+  animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);
   for (const [, r] of state.bots) {
@@ -3544,7 +3631,7 @@ function frame(now) {
   const right = new THREE.Vector3(-Math.cos(state.yaw), 0, Math.sin(state.yaw));
   const aim = state.aiming && alive;
   const afloat = !!me?.boat;
-  const dist = aim ? 1.8 : afloat ? 6.5 : 4.2, shoulder = aim ? 0.6 : afloat ? 0.3 : 0.85;
+  const dist = aim ? 1.8 : afloat ? 6.5 : state.air ? 7.5 : 4.2, shoulder = aim ? 0.6 : afloat ? 0.3 : 0.85;
   const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.2 : afloat ? 0.9 : 0.45), state.z).addScaledVector(right, shoulder);
   const want = pivot.clone().addScaledVector(d, -dist);
   const toCam = want.clone().sub(pivot);
@@ -3597,8 +3684,8 @@ function frame(now) {
     if (t.life <= 0) { scene.remove(t.obj); t.obj.geometry.dispose(); tracers.splice(i, 1); }
   }
 
-  const prompt = alive && !state.invOpen ? nearestInteractable() : null;
-  $('prompt').innerHTML = prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : boatHud();
+  const prompt = alive && !state.invOpen && !state.air ? nearestInteractable() : null;
+  $('prompt').innerHTML = state.air && alive ? airHud() : prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : boatHud();
   drawMinimap();
   updateWhere(now);
   renderWorld();

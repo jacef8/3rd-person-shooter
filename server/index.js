@@ -30,6 +30,7 @@ import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, investedCost, pla
 import { CLAIM, HOME_XP, homeLevel, homePerks, RAIDS, windowOpen, windowText } from '../shared/claims.js';
 import { EXTRACT } from '../shared/extraction.js';
 import { distText, feet } from '../shared/units.js';
+import { SKY, airRates, nextMode, stepAir } from '../shared/skydive.js';
 import COMBAT from '../shared/data/combat.json' with { type: 'json' };
 import GADGET_DATA from '../shared/data/gadgets.json' with { type: 'json' };
 import ACTIVITIES from '../shared/data/activities.json' with { type: 'json' };
@@ -86,7 +87,7 @@ const terrain = map.terrain;
 const own = (table, key) => (typeof key === 'string' && key[0] !== '_' && Object.hasOwn(table, key) ? table[key] : undefined);
 /** An entry of a list by an index a client sent: whole numbers only. */
 const nth = (list, i) => { const k = typeof i === 'string' && /^\d+$/.test(i) ? Number(i) : i; return Number.isInteger(k) && k >= 0 && k < list.length ? list[k] : undefined; };
-const gy = (c) => (c.boat ? 0.25 : terrain.height(c.x, c.z));   // ground height under a character (or the boat deck)
+const gy = (c) => (c.boat ? 0.25 : terrain.height(c.x, c.z) + (c.air ? c.air.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
 const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
@@ -2405,6 +2406,7 @@ function markAssist(target, killer) {
  * You keep your level, unlocks, commendations, field gear and everything in your stash house.
  */
 function killPlayer(p, attacker, headshotKill) {
+  if (p.air) { p.air = null; send(p.ws, { t: 'air', mode: null }); }
   if (p.boat) unseat(p);
   p.dead = true;
   Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null });
@@ -3607,6 +3609,7 @@ function extractSite(p) {
   return best;
 }
 const FLARE = ACTIVITIES.rescueFlare, TAXI = ACTIVITIES.airTaxi, TAXI_WAIT_MS = Number(process.env.TAXI_WAIT_MS || TAXI.waitMs);
+const JUMP_ALT = Number(process.env.JUMP_ALT || SKY.alt);   // how high the taxi drops you (lower in tests)
 // ---- the helicopter taxi: between landing zones, Contacts and the airstrip, for a fare
 const taxiPoints = [
   ...map.landingZones.map((l) => ({ id: `lz${l.id}`, name: l.name, x: l.x, z: l.z, range: TAXI.pickupRange })),
@@ -3672,10 +3675,12 @@ function tickTaxis(now) {
       o.openContainer = null;
       send(o.ws, { t: 'container', closed: true });
       const a = (i / Math.max(1, riders.length)) * Math.PI * 2;
-      placeAt(o, drop.x + Math.cos(a) * 2.5 * (riders.length > 1), drop.z + Math.sin(a) * 2.5 * (riders.length > 1));
-      o.protectedUntil = now + 5000;
+      // Out the door over the drop: each rider a few metres apart, the helicopter flying on past.
+      placeAt(o, drop.x + Math.cos(a) * 6 * (riders.length > 1), drop.z + Math.sin(a) * 6 * (riders.length > 1));
+      o.air = { alt: JUMP_ALT, mode: 'fall' };
+      send(o.ws, { t: 'air', alt: JUMP_ALT, mode: 'fall', heli: { x: drop.x, z: drop.z, yaw: Math.atan2(t.to.x - t.from.x, t.to.z - t.from.z) } });
       o.taxiReadyAt = now + TAXI.cooldownMs;
-      toast(o, `🚁 Dropped ${where}${o === p ? ` ($${t.fare})` : ' (on your crewmate)'}`);
+      toast(o, `🪂 Jump! You're over ${where}${o === p ? ` ($${t.fare})` : ' (on your crewmate)'}. Hold Sprint for the squirrel suit; Use pulls your chute.`);
       dirty(o);
     });
   }
@@ -3814,6 +3819,7 @@ function handleState(p, msg) {
   if (!Number.isFinite(tx) || !Number.isFinite(tz)) return;
   if ((msg.tp || 0) !== (p.tp || 0)) return;   // sent before the latest teleport
   if (p.boat) return boatState(p, msg);
+  if (p.air) return airState(p, msg, dt, tx, tz);
   let dx = tx - p.x, dz = tz - p.z;
   const hungry = (p.food ?? 100) < HUNGER.noSprintBelow;
   p.prone = !!msg.prone && !p.downed;
@@ -3831,6 +3837,51 @@ function handleState(p, msg) {
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
   if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z });
   if (p.openContainer && !nearContainer(p, p.openContainer.kind, p.openContainer.id)) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
+}
+/** Steering a jump: no walls up there, just how fast this part of the fall lets you move. */
+function airState(p, msg, dt, tx, tz) {
+  p.air.mode = p.downed ? 'chute' : nextMode(p.air.mode, !!msg.sprint);
+  const max = airRates(p.air.mode).speed * dt * 1.5 + 0.3, lim = map.half - 30;
+  let dx = tx - p.x, dz = tz - p.z;
+  const d = Math.hypot(dx, dz);
+  if (d > max) { dx *= max / d; dz *= max / d; }
+  const nx = Math.max(-lim, Math.min(lim, p.x + dx)), nz = Math.max(-lim, Math.min(lim, p.z + dz));
+  p.speed = dt > 0 ? Math.hypot(nx - p.x, nz - p.z) / dt : 0;
+  p.x = nx; p.z = nz;
+  p.lastActive = Date.now();
+  p.yaw = Number(msg.yaw) || 0;
+  p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
+  p.crouch = false; p.prone = false; p.aiming = false;
+  if (Math.hypot(p.x - tx, p.z - tz) > 1) send(p.ws, { t: 'correct', x: p.x, z: p.z });
+}
+/** Open ground to touch down on near (x, z): not in a building, not in deep water, not in a wall. */
+function touchdownSpot(x, z) {
+  const ok = (px, pz) => buildingAt(px, pz) < 0 && terrain.height(px, pz) >= DEEP_WATER + 0.3
+    && Math.hypot(resolveCircle(px, pz, PLAYER_RADIUS, solidsNear(px, pz, 3), terrain.height(px, pz)).x - px, resolveCircle(px, pz, PLAYER_RADIUS, solidsNear(px, pz, 3), terrain.height(px, pz)).z - pz) < 0.3;
+  if (ok(x, z)) return { x, z };
+  for (let r = 2; r <= 60; r += 2) for (let a = 0; a < 16; a++) {
+    const px = x + Math.cos(a * Math.PI / 8) * r, pz = z + Math.sin(a * Math.PI / 8) * r;
+    if (ok(px, pz)) return { x: px, z: pz };
+  }
+  return { x, z };
+}
+function pullChute(p) {
+  if (!p.air || p.air.mode === 'chute') return;
+  p.air.mode = 'chute';
+  send(p.ws, { t: 'air', alt: p.air.alt, mode: 'chute' });
+}
+function landAir(p) {
+  p.air = null;
+  const at = touchdownSpot(p.x, p.z);
+  placeAt(p, at.x, at.z);
+  send(p.ws, { t: 'air', mode: null });
+}
+function tickAir(p, dt) {
+  const was = p.air.mode;
+  stepAir(p.air, dt);
+  if (p.downed) p.air.mode = 'chute';
+  if (was !== 'chute' && p.air.mode === 'chute') send(p.ws, { t: 'air', alt: p.air.alt, mode: 'chute' });
+  if (p.air.alt <= 0) landAir(p);
 }
 function handleShoot(p, msg) {
   if (p.dead) return;
@@ -3925,6 +3976,11 @@ wss.on('connection', (ws) => {
       if (msg.t === 'interact') { if (p.hack) return cancelHack(p, 'Cancelled'); return soloRevive(p) ? startHack(p, 'selfrevive', p.id) : toast(p, 'Only a crewmate can revive you'); }
       if (!['state', 'squad', 'leaderboard', 'closeContainer', 'dev'].includes(msg.t)) return;
     }
+    // In the air: steer, pull the chute (Use), talk to your crew; no shooting or anything else.
+    if (p.air && !p.dead) {
+      if (msg.t === 'interact') return pullChute(p);
+      if (!['state', 'squad', 'leaderboard', 'closeContainer', 'dev', 'swap', 'reload'].includes(msg.t)) return;
+    }
     switch (msg.t) {
       case 'state': return handleState(p, msg);
       case 'shoot': return handleShoot(p, msg);
@@ -4006,6 +4062,7 @@ wss.on('connection', (ws) => {
     const p = ws.player;
     if (!p) return;
     if (p.boat) leaveBoat(p, true);   // nobody logs off in the middle of the river
+    if (p.air) { const at = touchdownSpot(p.x, p.z); p.x = at.x; p.z = at.z; p.air = null; }   // or in the sky
     persistCharacter(p);
     db.lastSeen[p.token] = Date.now();
     players.delete(p.id);
@@ -4065,6 +4122,7 @@ const loop = setInterval(() => {
   for (const c of players.values()) if (!c.dead) { (c.hist ??= []).push({ t: now, x: c.x, z: c.z, y: gy(c), crouch: c.crouch, prone: !!c.prone }); if (c.hist.length > 8) c.hist.shift(); }
   for (const c of bots.values()) if (!c.dead) { (c.hist ??= []).push({ t: now, x: c.x, z: c.z, y: gy(c), crouch: c.crouch }); if (c.hist.length > 8) c.hist.shift(); }
   const dt = 1 / TICK_HZ;
+  for (const p of players.values()) if (p.air && !p.dead) tickAir(p, dt);
   updateBots(dt, now);
   tickHacks(now);
   if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); }
@@ -4108,6 +4166,7 @@ const loop = setInterval(() => {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
+      air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : undefined,
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),

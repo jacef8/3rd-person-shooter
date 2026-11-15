@@ -420,7 +420,7 @@
     "lieutenantChance": 0.25
   },
   "airTaxi": {
-    "_about": "The helicopter taxi: from any landing zone, Contact or the airstrip to any other one. Pay the fare (base + per mile), wait at the pad for it to land (leave or go down and it turns back, no charge), then you and any crewmates on the pad fly there. Not in combat, not with freight. The pilot never sets down on the pad itself: each trip drops you at a random open spot dropMin-dropMax metres out from the stop, at least keepClear metres from anyone not in your crew, so nobody can camp a drop point.",
+    "_about": "The helicopter taxi: from any landing zone, Contact or the airstrip to any other one. Pay the fare (base + per mile), wait at the pad for it to land (leave or go down and it turns back, no charge), then you and any crewmates on the pad fly there. Not in combat, not with freight. The pilot never sets down at the stop: each trip flies you over a random open spot dropMin-dropMax metres out from the stop, at least keepClear metres from anyone not in your crew, and you jump from there, so nobody can camp a drop point.",
     "waitMs": 20000,
     "radius": 25,
     "pickupRange": 20,
@@ -430,6 +430,17 @@
     "cooldownMs": 120000,
     "dropMin": 150,
     "dropMax": 400,
-    "keepClear": 90
+    "keepClear": 90,
+    "jump": {
+      "_about": "The taxi drops you from the air over the stop. Freefall, hold Sprint for the squirrel suit (slow drop, fast and far), Use pulls the chute (it opens by itself at autoChute). Heights in metres above the ground, speeds in m/s.",
+      "alt": 320,
+      "fall": 34,
+      "fallSpeed": 14,
+      "suitFall": 11,
+      "suitSpeed": 42,
+      "chuteFall": 5.5,
+      "chuteSpeed": 9,
+      "autoChute": 55
+    }
   }
 }
