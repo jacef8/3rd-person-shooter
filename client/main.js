@@ -756,7 +756,7 @@ function updateCharacterMesh(g, c, dt) {
   g.visible = !c.dead;
   // Downed: lying on the ground.
   g.rotation.order = 'YXZ';
-  g.rotation.x += ((c.downed || c.prone || c.air === 'fall' || c.air === 'suit' ? 1.35 : 0) - g.rotation.x) * k;
+  g.rotation.x += ((c.downed || c.prone || c.air === 'fall' || c.air === 'suit' ? 1.35 : 0) - g.rotation.x) * (c.tiltK ?? k);
   if (c.air || u.canopy) {
     if (!u.canopy) { u.canopy = makeCanopy(); u.wings = makeWings(); g.add(u.canopy, u.wings); }
     u.canopy.visible = c.air === 'chute';
@@ -1424,6 +1424,11 @@ function handle(m) {
       hubSend({ t: 'invite', name: m.for, world: state.worldId, ticket: m.ticket });
       break;
     case 'stunThrow': stunThrowFx(m); break;
+    case 'nadeThrow':
+      // Your own throw leaves from your shoulder, so you see it go past you rather than from behind your back.
+      if (m.by === state.id) { m.from = muzzlePoint(m.from); if (m.kind === 'frag') toast('💣 Frag out!'); }
+      stunThrowFx(m, m.kind === 'frag' ? 0xd7e08a : 0xff9b21);
+      break;
     case 'stunBlast': stunBlastFx(m.x, m.y, m.z); break;
     case 'stunned':
       state.stunnedUntil = performance.now() + (m.until - Date.now());
@@ -2695,10 +2700,10 @@ function doAction(a) {
     case 'padA': if (state.promptText) send({ t: 'interact' }); else jump(); break;   // controller A: use if there's something to use, else jump
     case 'interact': send({ t: 'interact' }); break;
     case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
-    case 'sensor': { const p = aimPoint(); send({ t: state.grenade === 'stun' ? 'stun' : 'sensor', x: p.x, z: p.z }); break; }
+    case 'sensor': { const p = aimPoint(), g = state.grenade || 'frag'; send({ t: g, x: p.x, z: p.z }); break; }
     case 'switchGrenade':
-      state.grenade = state.grenade === 'stun' ? 'sensor' : 'stun';
-      toast(`Grenade: ${state.grenade === 'stun' ? 'Stun grenade' : 'Sensor grenade'}`);
+      state.grenade = { frag: 'sensor', sensor: 'stun', stun: 'frag' }[state.grenade || 'frag'];
+      toast(`Grenade: ${{ frag: 'Frag grenade', sensor: 'Sensor grenade', stun: 'Stun grenade' }[state.grenade]}`);
       updateGadgetBar();
       break;
     case 'camo':
@@ -2816,7 +2821,22 @@ function lookDir() {
 
 /** Where you stand: up on a bridge deck (tracked as you walk) or the ground. */
 function myY() { return state.y !== undefined && state.yx === state.x && state.yz === state.z ? state.y : ground(state.x, state.z); }
-function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : myY() + (state.air ? state.air.alt : 0) + (state.hop ? state.hop.alt : 0) + (state.prone ? PRONE_EYE : state.crouch ? CROUCH_EYE : STAND_EYE); }
+function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : myY() + (state.air ? state.air.alt : 0) + (state.hop ? state.hop.alt : 0) + (state.eyeNow ?? STAND_EYE); }
+/** Ease the eye (and the body) toward the stance you picked: about a quarter second to crouch, most
+ *  of a second to go prone or get up from it, and you can't move while you're dropping or rising. */
+const PRONE_SHIFT_MS = 700;
+function updateStance(dt, now) {
+  const key = state.prone ? 'prone' : state.crouch ? 'crouch' : 'stand';
+  if (key !== state.stanceKey) {
+    if (state.stanceKey && (key === 'prone' || state.stanceKey === 'prone')) state.stanceBusyUntil = now + PRONE_SHIFT_MS;
+    state.stanceKey = key;
+  }
+  const target = key === 'prone' ? PRONE_EYE : key === 'crouch' ? CROUCH_EYE : STAND_EYE;
+  const slow = key === 'prone' || now < (state.stanceBusyUntil || 0);
+  state.eyeNow = (state.eyeNow ?? target) + (target - (state.eyeNow ?? target)) * Math.min(1, dt * (slow ? 4.5 : 10));
+}
+/** What the server is told: you're only flat once you've finished getting down. */
+const proneSettled = () => state.prone && performance.now() >= (state.stanceBusyUntil || 0);
 
 /** Raycast from the camera through the crosshair and return the world point it lands on. */
 function aimPoint() {
@@ -3134,7 +3154,9 @@ function updateGadgetBar() {
     ['F', 'Tag', GADGETS.mark.level, ''],
     state.grenade === 'stun'
       ? ['G', 'Stun ⇄', GADGETS.stun.level, me.stunReadyAt > now ? 'cooldown' : me.tech < GADGETS.stun.cost ? 'notech' : '']
-      : ['G', 'Sensor ⇄', GADGETS.sensor.level, me.sensorReadyAt > now ? 'cooldown' : me.tech < GADGETS.sensor.cost ? 'notech' : ''],
+      : state.grenade === 'sensor'
+        ? ['G', 'Sensor ⇄', GADGETS.sensor.level, me.sensorReadyAt > now ? 'cooldown' : me.tech < GADGETS.sensor.cost ? 'notech' : '']
+        : ['G', 'Frag ⇄', 1, (me.parts || 0) < COMBAT_RULES.frag.costParts ? 'notech' : ''],
     ['V', me.camoOn ? (me.camoActive ? 'Camo ON' : 'Camo (move slow)') : 'Camo', GADGETS.camo.level, me.camoOn ? 'on' : ''],
     ['T', 'Rally', GADGETS.rally.level, !leader ? 'notleader' : me.rallyReadyAt > now ? 'cooldown' : ''],
     ['B', 'Ping', 1, state.squad.id ? '' : 'notleader'],
@@ -3823,15 +3845,26 @@ function syncCharges(list) {
   }
   for (const [id, m] of chargeVis) if (!seen.has(id)) { scene.remove(m); chargeVis.delete(id); }
 }
-function stunThrowFx(m) {
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshBasicMaterial({ color: 0xe8f2ff }));
+function stunThrowFx(m, color = 0xe8f2ff) {
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(m.kind === 'frag' ? 0.16 : 0.12, 10, 8), new THREE.MeshBasicMaterial({ color }));
+  if (m.kind === 'frag') {   // lying where it landed, a red light blinks faster and faster until it goes off
+    const blink = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2a1a }));
+    blink.position.y = 0.17; ball.add(blink);
+    const tick = () => {
+      if (!ball.parent) return;
+      const left = (m.boomAt || 0) - Date.now();
+      blink.visible = Math.floor(performance.now() / Math.max(60, Math.min(300, left / 6))) % 2 === 0;
+      requestAnimationFrame(tick);
+    };
+    tick();
+  }
   scene.add(ball);
   const [fx, fy, fz] = m.from, ty = ground(m.x, m.z) + 0.3, ms = Math.max(300, m.at - Date.now());
   const t0 = performance.now();
   const step = () => {
     const f = Math.min(1, (performance.now() - t0) / ms);
     ball.position.set(fx + (m.x - fx) * f, fy + (ty - fy) * f + Math.sin(f * Math.PI) * 4, fz + (m.z - fz) * f);
-    if (f < 1) requestAnimationFrame(step); else setTimeout(() => scene.remove(ball), 50);
+    if (f < 1) requestAnimationFrame(step); else setTimeout(() => scene.remove(ball), m.kind === 'frag' ? Math.max(50, (m.boomAt || 0) - Date.now()) : 50);   // a frag sits where it lands until it goes off
   };
   step();
 }
@@ -4035,7 +4068,8 @@ function frame(now) {
     // Momentum: you reach full speed in about a tenth of a second and slide a step when you let go,
     // instead of starting and stopping dead.
     if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
-    const want = len > 0.05 && !stunnedNow ? [mx * speed, mz * speed] : [0, 0];
+    updateStance(dt, now);
+    const want = len > 0.05 && !stunnedNow && now >= (state.stanceBusyUntil || 0) ? [mx * speed, mz * speed] : [0, 0];
     const v = state.vel || (state.vel = [0, 0]), rate = Math.min(1, dt * (len > 0.05 ? 11 : 9));
     v[0] += (want[0] - v[0]) * rate; v[1] += (want[1] - v[1]) * rate;
     if (Math.hypot(v[0], v[1]) > 0.05) {
@@ -4048,7 +4082,7 @@ function frame(now) {
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch, prone: state.prone, aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
+    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch || (state.prone && !proneSettled()), prone: proneSettled(), aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
   }
 
   // Recoil recovers smoothly.
@@ -4065,7 +4099,7 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
@@ -4118,7 +4152,11 @@ function frame(now) {
     if (L > 1) {
       dir.normalize();
       const blk = Math.min(rayAgainstBoxes(e.x, e.y, e.z, dir.x, dir.y, dir.z, solidsAlongRay(e.x, e.z, dir.x, dir.z, L), L).t, state.map.terrain.ray(e.x, e.y, e.z, dir.x, dir.y, dir.z, L));
-      $('crosshair').classList.toggle('blocked', blk < L - 0.6);
+      const raw = blk < L - 2 && blk < L * 0.9;   // something well short of the target, not the ground right at it
+      state.blkFor = raw ? (state.blkFor || 0) + dt : 0;
+      state.clearFor = raw ? 0 : (state.clearFor || 0) + dt;
+      if (state.blkFor > 0.18) $('crosshair').classList.add('blocked');
+      else if (state.clearFor > 0.25) $('crosshair').classList.remove('blocked');
     } else $('crosshair').classList.remove('blocked');
   }
   // The crosshair opens up to show how far shots can stray (hip fire, moving, crouched, prone).
@@ -4392,8 +4430,8 @@ function openTouchPicker(kind, from) {
     for (const g of Object.keys(GOODS)) if (GOODS[g].food && me[g] > 0) opts.push([`${GOODS[g].name} ×${me[g]}`, `+${GOODS[g].food} food`, () => send({ t: 'inv', action: 'eat', good: g })]);
     if (!opts.length) opts.push(['Nothing to heal with', 'Find medkits; cook or buy food', null]);
   } else {
-    for (const [k, name, about] of [['sensor', 'Sensor grenade', 'Shows who is near where it lands'], ['stun', 'Stun grenade', 'Dazes anyone caught in it']]) {
-      opts.push([`${state.grenade === k || (!state.grenade && k === 'sensor') ? '● ' : ''}${name}`, about, () => { state.grenade = k; doAction('sensor'); }]);
+    for (const [k, name, about] of [['frag', 'Frag grenade', `Bursts after ${COMBAT_RULES.frag.fuseMs / 1000}s: hurts everyone close · ${COMBAT_RULES.frag.costParts} parts`], ['sensor', 'Sensor grenade', `Shows who is near where it lands, and any defenses · ${GADGETS.sensor.cost} tech`], ['stun', 'Stun grenade', `Dazes anyone caught in it, jams sentries and alarms · ${GADGETS.stun.cost} tech`]]) {
+      opts.push([`${(state.grenade || 'frag') === k ? '● ' : ''}${name}`, about, () => { state.grenade = k; doAction('sensor'); }]);
     }
   }
   box.innerHTML = '';

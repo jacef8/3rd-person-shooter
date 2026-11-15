@@ -2173,6 +2173,7 @@ function throwSensor(p, msg) {
   p.tech -= GADGETS.sensor.cost;
   p.sensorReadyAt = now + SENSOR.cooldown;
   const radius = hasField(p, 'sensorMk2') ? SENSOR.radiusMk2 : SENSOR.radius;
+  sensorThrowFx(p, x, z);
   sensors.push({ x, z, until: now + SENSOR.duration, key: squadKey(p), owner: p, radius });
   sendSquad(p, { t: 'sensor', x, z, until: now + SENSOR.duration, radius });
   const found = [];
@@ -2395,7 +2396,34 @@ function throwStun(p, msg) {
   for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'stunThrow', x, z, from: [p.x, gy(p) + 1.5, p.z], at: now + STUN.fuseMs });
   dirty(p);
 }
+// ---- the frag grenade: thrown in an arc, bursts after its fuse
+const FRAG = COMBAT.frag, fragBlasts = [];
+function throwFrag(p, msg) {
+  const now = Date.now();
+  if (now < (p.fragReadyAt || 0)) return;
+  if ((p.parts || 0) < FRAG.costParts) return toast(p, `A frag grenade takes ${FRAG.costParts} parts`);
+  let x = Number(msg.x), z = Number(msg.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+  const d = Math.hypot(x - p.x, z - p.z);
+  if (d > FRAG.throwRange) { x = p.x + (x - p.x) * FRAG.throwRange / d; z = p.z + (z - p.z) * FRAG.throwRange / d; }
+  p.parts -= FRAG.costParts;
+  p.fragReadyAt = now + FRAG.cooldownMs;
+  breakCamo(p, 2000); p.protectedUntil = 0;
+  fragBlasts.push({ id: uid('fg'), x, z, at: now + FRAG.fuseMs, owner: p.token, ownerName: p.name });
+  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'nadeThrow', kind: 'frag', by: p.id, x, z, from: [p.x, gy(p) + 1.5, p.z], at: now + Math.min(900, FRAG.fuseMs), boomAt: now + FRAG.fuseMs });
+  dirty(p);
+}
+/** Anyone throwing a sensor: everyone nearby sees it fly. */
+function sensorThrowFx(p, x, z) {
+  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'nadeThrow', kind: 'sensor', by: p.id, x, z, from: [p.x, gy(p) + 1.5, p.z], at: Date.now() + 600 });
+}
 function tickStuns(now) {
+  for (let i = fragBlasts.length - 1; i >= 0; i--) {
+    const g = fragBlasts[i];
+    if (g.at > now) continue;
+    fragBlasts.splice(i, 1);
+    explode({ id: g.id, x: g.x, y: terrain.height(g.x, g.z) + 0.2, z: g.z, owner: g.owner, ownerName: g.ownerName }, now, FRAG);
+  }
   for (let i = stunBlasts.length - 1; i >= 0; i--) {
     const g = stunBlasts[i];
     if (g.at > now) continue;
@@ -4596,6 +4624,7 @@ wss.on('connection', (ws) => {
       case 'mark': return !p.dead && markTarget(p, msg);
       case 'sensor': return !p.dead && throwSensor(p, msg);
       case 'stun': return !p.dead && throwStun(p, msg);
+      case 'frag': return !p.dead && !p.downed && throwFrag(p, msg);
       case 'camo':
         if (p.dead) return;
         if (level(p) < GADGETS.camo.level) return toast(p, `Optical camo unlocks at level ${GADGETS.camo.level}`);

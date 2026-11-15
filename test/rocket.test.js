@@ -56,3 +56,37 @@ test('a rocket bursts where it lands: splash damage, and the launcher reloads fr
   a.send({ t: 'reload' });
   await until(() => a.you.rockets === 1 && a.you.mag === 1, 6000);
 });
+
+test('a frag grenade: costs parts, flies, and bursts after its fuse, hurting whoever is close', async (t) => {
+  const C = await import('../shared/data/combat.json', { with: { type: 'json' } });
+  const FRAG = C.default.frag;
+  let spot = null;
+  for (const c of map.campSites.slice(5)) {
+    if (map.terrain.height(c.x, c.z) < 1 || map.terrain.height(c.x + 10, c.z) < 1 || map.grid.near(c.x + 5, c.z, 8).length) continue;
+    spot = c; break;
+  }
+  const A = 'ab'.repeat(16), B = 'cd'.repeat(16);
+  const person = (name, x, z, extra = {}) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(15), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [], parts: 20, ...extra });
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzfg-')), 'w.json');
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: person('Thrower', spot.x, spot.z), [B]: person('Target', spot.x + 10, spot.z) } }));
+  const port = 32800 + Math.floor(Math.random() * 100);
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', HOTZONE_FIRST_MS: '99999999', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => proc.kill('SIGKILL'));
+  await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));
+  const conn = (name, token) => new Promise((r) => {
+    const ws = new WebSocket(`ws://localhost:${port}`);
+    const c = { msgs: [] };
+    ws.on('message', (raw) => { const m = JSON.parse(raw); c.msgs.push(m); if (m.t === 'you') c.you = m; });
+    c.send = (m) => ws.send(JSON.stringify(m));
+    ws.on('open', () => { c.send({ t: 'join', name, token }); r(c); });
+  });
+  const a = await conn('Thrower', A), b = await conn('Target', B);
+  await until(() => a.you && b.you && !a.you.dead && !b.you.dead);
+  await sleep(11000);   // spawn protection wears off
+  a.send({ t: 'frag', x: spot.x + 10, z: spot.z });
+  await until(() => b.msgs.some((m) => m.t === 'nadeThrow' && m.kind === 'frag'));
+  await until(() => a.you.parts === 20 - FRAG.costParts);
+  assert.equal(b.you.hp, 100, 'nothing yet: the fuse is burning');
+  await until(() => b.msgs.some((m) => m.t === 'boom'), FRAG.fuseMs + 3000);
+  await until(() => b.you.hp < 100 || b.you.downed || b.you.dead);
+});

@@ -74,5 +74,16 @@
     "crateChance": 0.25,
     "dropChance": 0.3,
     "devKit": 6
+  },
+  "frag": {
+    "_about": "The frag grenade: NADE's default. Costs parts, thrown in an arc, bursts after a short fuse. Hurts everyone close (you too) and dents structures.",
+    "costParts": 8,
+    "cooldownMs": 4000,
+    "fuseMs": 2500,
+    "throwRange": 35,
+    "radius": 2.5,
+    "damage": 250,
+    "playerRadius": 7,
+    "playerDamage": 110
   }
 }
