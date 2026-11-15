@@ -737,6 +737,87 @@ function setCharacterStowed(g, list) {
 /** Your own stowed guns, from your inventory. */
 function stowedOf(me) { return ['primary', 'primary2', 'secondary'].filter((sl) => sl !== me.active && me.inv[sl]).map((sl) => ({ slot: sl, a: me.inv[sl].archetype, parts: me.inv[sl].parts, paint: me.inv[sl].paint })); }
 
+// ------------------------------------------------------------------ gun effects: flash, empties, kick, reloads
+/** A star-shaped muzzle flash, drawn once into a little texture. */
+const FLASH_TEX = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(32, 32, 0, 32, 32, 30);
+  g.addColorStop(0, 'rgba(255,255,235,1)'); g.addColorStop(0.25, 'rgba(255,214,120,0.95)'); g.addColorStop(0.6, 'rgba(255,140,40,0.35)'); g.addColorStop(1, 'rgba(255,90,20,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+  x.globalCompositeOperation = 'lighter'; x.fillStyle = 'rgba(255,220,150,0.8)';
+  for (let k = 0; k < 6; k++) { x.save(); x.translate(32, 32); x.rotate(k * Math.PI / 3 + 0.2); x.beginPath(); x.moveTo(0, -3); x.lineTo(31, 0); x.lineTo(0, 3); x.fill(); x.restore(); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+const muzzleLight = new THREE.PointLight(0xffb060, 0, 10, 2);
+scene.add(muzzleLight);
+const SHELL = { brass: new THREE.MeshStandardMaterial({ color: 0xc9a14a, metalness: 0.75, roughness: 0.35 }), hull: new THREE.MeshStandardMaterial({ color: 0xb02a1e, roughness: 0.6 }) };
+const SHELL_GEO = { rifle: new THREE.CylinderGeometry(0.0055, 0.0055, 0.034, 7), pistol: new THREE.CylinderGeometry(0.0055, 0.0055, 0.02, 7), hull: new THREE.CylinderGeometry(0.0105, 0.0105, 0.055, 8) };
+const FLASH_SIZE = { sidearm: 0.32, smg: 0.34, carbine: 0.42, lmg: 0.48, dmr: 0.55, shotgun: 0.62, launcher: 0.95 };
+const gunFx = { flashes: [], bits: [] };
+/** The gun a character is holding, and a point on it in the world. */
+const heldGun = (g) => g?.userData?.gun?.children?.[0] || null;
+/** A shot from a character's gun: flash at the muzzle, an empty flicked out the right, the gun kicks. */
+function shotFx(g, archetype, sup = 0) {
+  const gun = heldGun(g);
+  if (!gun) return;
+  const a = archetype || gun.userData.archetype || 'carbine';
+  const mz = gun.localToWorld((gun.userData.muzzle || new THREE.Vector3(0, 0, 0.6)).clone());
+  const size = (FLASH_SIZE[a] || 0.4) * (sup === 2 ? 0 : sup || gun.userData.suppressed ? 0.25 : 1);
+  if (size > 0) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: FLASH_TEX, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, rotation: Math.random() * Math.PI }));
+    sp.position.copy(mz); sp.scale.setScalar(size * (0.85 + Math.random() * 0.3));
+    scene.add(sp);
+    gunFx.flashes.push({ obj: sp, life: 0.05 });
+    if (a === 'launcher' && gun.userData.back) {   // the backblast out of the rear of the tube
+      const bb = new THREE.Sprite(sp.material.clone()); bb.position.copy(gun.localToWorld(gun.userData.back.clone())); bb.scale.setScalar(0.8);
+      scene.add(bb); gunFx.flashes.push({ obj: bb, life: 0.09 });
+    }
+    muzzleLight.position.copy(mz); muzzleLight.intensity = 5 * size;
+  }
+  g.userData.kick = 1;
+  if (a === 'launcher' || !gun.userData.eject) return;
+  const shotgun = a === 'shotgun';
+  const m = new THREE.Mesh(shotgun ? SHELL_GEO.hull : a === 'sidearm' ? SHELL_GEO.pistol : SHELL_GEO.rifle, shotgun ? SHELL.hull : SHELL.brass);
+  m.position.copy(gun.localToWorld(gun.userData.eject.clone()));
+  m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+  const right = new THREE.Vector3(-1, 0, 0).transformDirection(gun.matrixWorld), back = new THREE.Vector3(0, 0, -1).transformDirection(gun.matrixWorld);
+  const vel = right.multiplyScalar(2 + Math.random()).add(back.multiplyScalar(0.4)).add(new THREE.Vector3(0, 1.8 + Math.random() * 0.8, 0));
+  scene.add(m);
+  gunFx.bits.push({ obj: m, vel, spin: new THREE.Vector3(18 * Math.random() - 9, 18 * Math.random() - 9, 18 * Math.random() - 9), life: 2.6, rest: false, shell: true });
+  if (gunFx.bits.length > 60) { const old = gunFx.bits.shift(); scene.remove(old.obj); }
+}
+/** A magazine dropping out of a gun during a reload. */
+function dropMag(gun) {
+  const mag = gun?.userData?.mag;
+  if (!mag) return;
+  const m = mag.clone(true);
+  mag.getWorldPosition(m.position); mag.getWorldQuaternion(m.quaternion);
+  scene.add(m);
+  gunFx.bits.push({ obj: m, vel: new THREE.Vector3(0, -0.5, 0), spin: new THREE.Vector3(2 * Math.random() - 1, 0, 2 * Math.random() - 1), life: 6, rest: false });
+}
+/** Your own reload starts on screen the moment you press it. */
+function startReloadFx() { if (!state.reloadAt || performance.now() - state.reloadAt > 6000) state.reloadAt = performance.now(); }
+function updateGunFx(dt) {
+  if (gunFx.hold) return;   // tests: freeze the effects to look at them
+  for (let i = gunFx.flashes.length - 1; i >= 0; i--) { const f = gunFx.flashes[i]; f.life -= dt; if (f.life <= 0) { scene.remove(f.obj); f.obj.material.dispose(); gunFx.flashes.splice(i, 1); } }
+  muzzleLight.intensity = Math.max(0, muzzleLight.intensity - dt * 80);
+  for (let i = gunFx.bits.length - 1; i >= 0; i--) {
+    const b = gunFx.bits[i];
+    b.life -= dt;
+    if (b.life <= 0) { scene.remove(b.obj); gunFx.bits.splice(i, 1); continue; }
+    if (b.rest) continue;
+    b.vel.y -= 9.8 * dt;
+    b.obj.position.addScaledVector(b.vel, dt);
+    b.obj.rotation.x += b.spin.x * dt; b.obj.rotation.y += b.spin.y * dt; b.obj.rotation.z += b.spin.z * dt;
+    const gy0 = ground(b.obj.position.x, b.obj.position.z) + (b.shell ? 0.006 : 0.02);
+    if (b.obj.position.y < gy0) {   // hit the ground: a small bounce, then it settles
+      b.obj.position.y = gy0;
+      if (Math.abs(b.vel.y) < 0.6) { b.rest = true; if (b.shell) b.obj.rotation.set(Math.PI / 2, b.obj.rotation.y, 0); }
+      b.vel.y *= -0.32; b.vel.x *= 0.45; b.vel.z *= 0.45; b.spin.multiplyScalar(0.5);
+    }
+  }
+}
 function setCharacterGun(g, gun) {
   const key = gunKey(gun);
   if (g.userData.gunKey === key) return;
@@ -756,6 +837,39 @@ function smoothed(r) {
   let dy = c.yaw - a.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   return { ...r.data, x: a.x + (c.x - a.x) * f, z: a.z + (c.z - a.z) * f, yaw: a.yaw + dy * f, alt: (a.alt || 0) + ((c.alt || 0) - (a.alt || 0)) * f, smooth: 1 };
 }
+/** The gun in the hands: kicks back and up with each shot and settles; during a reload it tips down and
+ *  rolls, the support hand goes to the mag well, the old mag drops, a fresh one goes in, and back up. */
+function gunPose(g, c, now, adt) {
+  const u = g.userData, joint = u.gun, gun = heldGun(g), left = u.arms?.[1];
+  if (!joint) return;
+  u.gunHome ??= joint.position.clone();
+  if (left && u.leftBase == null) u.leftBase = left.rotation.x;
+  u.kick = Math.max(0, (u.kick || 0) - adt * 9);
+  // Reload: c.rl is the ms left (others) or worked out from your own reload (you).
+  const rl = c.rl || 0;
+  if (rl > 0 && (!u.rlEnd || now > u.rlEnd || Math.abs(u.rlEnd - (now + rl)) > 350)) {
+    if (!u.rlEnd || now > u.rlEnd) { u.rlDur = Math.max(400, rl); u.rlDropped = false; }
+    u.rlEnd = now + rl;
+  }
+  let env = 0;
+  if (u.rlEnd && now < u.rlEnd) {
+    const f = 1 - (u.rlEnd - now) / u.rlDur;
+    env = Math.sin(Math.min(1, Math.max(0, f)) * Math.PI);
+    const a = gun?.userData.archetype;
+    if (gun?.userData.mag && a !== 'shotgun' && a !== 'launcher') {
+      if (f > 0.3 && !u.rlDropped) { u.rlDropped = true; dropMag(gun); gun.userData.mag.visible = false; }
+      if (f > 0.62) gun.userData.mag.visible = true;
+    }
+    if (left) left.rotation.x = u.leftBase + 0.8 * Math.sin(Math.min(1, Math.max(0, (f - 0.15) / 0.7)) * Math.PI);
+  } else {
+    if (u.rlEnd && gun?.userData.mag) gun.userData.mag.visible = true;
+    u.rlEnd = 0;
+    if (left && u.leftBase != null) left.rotation.x += (u.leftBase - left.rotation.x) * Math.min(1, adt * 10);
+  }
+  // Reloading: the gun comes in toward the chest, nose up and rolled onto its side so the mag well faces you.
+  joint.rotation.set(-0.12 * u.kick - 0.45 * env, 0.35 * env, 1.05 * env);
+  joint.position.set(u.gunHome.x + 0.16 * env, u.gunHome.y + 0.04 * env, u.gunHome.z - 0.05 * u.kick - 0.08 * env);
+}
 function updateCharacterMesh(g, c, dt) {
   // Interpolate toward the latest snapshot (already smoothed for other players: follow it exactly).
   const k = c.smooth ? 1 : Math.min(1, dt * 12);
@@ -768,6 +882,7 @@ function updateCharacterMesh(g, c, dt) {
   // Pose: walk cycle from how fast the character is really moving, crouch, sitting in a boat.
   const u = g.userData, now = performance.now(), adt = Math.min(0.1, (now - u.lastT) / 1000) || 0.016;
   u.lastT = now;
+  gunPose(g, c, now, adt);
   const speed = u.last ? Math.hypot(g.position.x - u.last.x, g.position.z - u.last.z) / adt : 0;
   u.last = { x: g.position.x, z: g.position.z };
   u.speed = (u.speed || 0) + (Math.min(8, speed) - (u.speed || 0)) * Math.min(1, adt * 10);
@@ -1418,7 +1533,11 @@ function handle(m) {
       break;
     case 'shot': {
       // Your own shots are heard the moment you fire (see tryFire); everyone else's from where they are.
-      if (m.from !== state.id) sfx.shot(m.o[0], m.o[1], m.o[2], state.players.get(m.from)?.data?.gun?.a || 'carbine', m.sup);
+      if (m.from !== state.id) {
+        sfx.shot(m.o[0], m.o[1], m.o[2], state.players.get(m.from)?.data?.gun?.a || 'carbine', m.sup);
+        const r = state.players.get(m.from) || state.bots.get(m.from);
+        if (r?.mesh && Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < 120) shotFx(r.mesh, r.data?.gun?.a, m.sup);
+      }
       // Suppressed fire from other players only shows up close.
       const near = Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < (m.sup === 2 ? 8 : 25);
       if (m.sup && m.from !== state.id && !near) break;
@@ -2772,7 +2891,7 @@ function doAction(a) {
       break;
     case 'rally': send({ t: 'rally' }); break;
     case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
-    case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && reserveFor(state.me) > 0) sfx.reload(); send({ t: 'reload' }); break;
+    case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && reserveFor(state.me) > 0) { sfx.reload(); startReloadFx(); } send({ t: 'reload' }); break;
     case 'swap': send({ t: 'swap' }); break;
     case 'slot1': send({ t: 'weapon', slot: 'primary' }); break;
     case 'slot2': send({ t: 'weapon', slot: 'primary2' }); break;
@@ -2939,7 +3058,7 @@ function tryFire(now) {
   if (me.reloading) return;
   if (me.mag <= 0) {
     if (!state.firedThisPress) { sfx.empty(); state.firedThisPress = true; }
-    if (reserveFor(me) > 0 && !state.autoReloadSent) { send({ t: 'reload' }); sfx.reload(); state.autoReloadSent = now; }
+    if (reserveFor(me) > 0 && !state.autoReloadSent) { send({ t: 'reload' }); sfx.reload(); startReloadFx(); state.autoReloadSent = now; }
     return;
   }
   state.autoReloadSent = 0;
@@ -2949,6 +3068,7 @@ function tryFire(now) {
   // The server aims from its copy of you at the same point, and checks the target you saw.
   send({ t: 'shoot', dir: [dir.x, dir.y, dir.z], at: [+target.x.toFixed(2), +target.y.toFixed(2), +target.z.toFixed(2)], tid: state.aimTargetId || undefined });
   sfx.shot(0, 0, 0, w.archetype, s.suppressed ? (s.subsonic ? 2 : 1) : 0, true);
+  shotFx(selfMesh, w.archetype, s.suppressed ? (s.subsonic ? 2 : 1) : 0);
   state.lastShot = now;
   state.firedThisPress = true;
   me.mag -= 1;                          // predicted; server confirms via 'you'
@@ -4187,10 +4307,13 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  if (state.reloadAt && (performance.now() - state.reloadAt > 6000 || !state.me || state.me.dead)) state.reloadAt = 0;
+  const myRl = state.reloadAt ? Math.max(0, (weaponStats(state.me.inv[state.me.active])?.reloadMs || 2000) - (performance.now() - state.reloadAt)) : 0;
+  updateCharacterMesh(selfMesh, { rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
+  updateGunFx(dt);
   for (const [, r] of state.bots) {
     if (!r.animal) { updateCharacterMesh(r.mesh, r.data, dt); continue; }
     // Wildlife: glide toward the latest position and face where it's going.
@@ -4756,7 +4879,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground, toast });   // debug/test hook
+Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction });   // debug/test hook
 function closeTopPanel() {
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.gunsmithOpen) return closeGunsmith();

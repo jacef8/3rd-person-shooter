@@ -4778,6 +4778,7 @@ const loop = setInterval(() => {
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),
+      rl: p.reloadUntil > now ? Math.round(p.reloadUntil - now) : undefined,   // reloading: ms left
     }]));
     for (const v of views.values()) Object.defineProperty(v, 'json', { value: JSON.stringify(v) });   // not enumerable: never encoded twice
     for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(snapshotFor(r, views, now));
