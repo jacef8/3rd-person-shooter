@@ -1060,7 +1060,7 @@ function handle(m) {
       state.worldId = m.world; loadWaypoint();
       localStorage.setItem('dz_token', m.token);
       state.myName = lobby.account?.name || $('name').value.trim() || 'Agent';
-      Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, doorBase: m.doorBase });
+      Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, devKit: !!m.devKit, doorBase: m.doorBase });
       if (!state.map) initWorld(m);
       selfMesh.visible = true;
       selfMesh.position.set(m.x, ground(m.x, m.z), m.z);
@@ -1482,6 +1482,7 @@ function renderInventory() {
       ? { title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
       : { title: `${label}: empty`, detail: 'Equip one from your backpack', why: 'Empty' }));
   }
+  if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', actions: [['Open', openGunsmith]] }));
   you.append(head(`Backpack · ${inv.pack.length} of ${state.packSize} slots`));
   if (!inv.pack.length) you.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
   inv.pack.forEach((it) => {

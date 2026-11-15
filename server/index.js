@@ -23,7 +23,7 @@ import {
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
-  levelFromXp, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
+  levelFromXp, xpForLevel, MAX_LEVEL, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, investedCost, placementProblem } from '../shared/building.js';
@@ -52,7 +52,12 @@ const SNAPSHOT_EVERY = 2;              // 10 Hz
 const INTEREST = 320;                  // metres: what each client is told about
 const AMBIENT_BOTS = Number(process.env.BOTS ?? 5);   // roaming rogues kept around each active player
 const BOT_ACTIVE_RANGE = 450;
-const PACK_SIZE = COMBAT.packSize;
+// Testing kit (on while the game is in development; set DEV_KIT=0 to turn it off): everyone gets one
+// of every gun and armor, flares, charges, tools, top level (every scope, part, paint and grenade
+// unlocked), plenty of cash and materials, a bigger backpack, and the gunsmith anywhere. It refills
+// on every join and respawn.
+const DEV_KIT = process.env.DEV_KIT !== '0';
+const PACK_SIZE = DEV_KIT ? 40 : COMBAT.packSize;
 const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
@@ -236,6 +241,37 @@ function wearTool(p, tool, n) {
   if (it.dur <= 0) { p.inv.pack = p.inv.pack.filter((i) => i !== it); toast(p, `Your ${it.name.toLowerCase()} broke. Craft or buy another.`); }
   else if (it.dur <= n * 2) toast(p, `Your ${it.name.toLowerCase()} is nearly worn out`);
   dirty(p);
+}
+/** The testing kit: top up whatever is missing (never takes anything away). */
+function devKit(p) {
+  if (!DEV_KIT) return;
+  p.xp = Math.max(p.xp || 0, xpForLevel(MAX_LEVEL));
+  const field = new Set(p.field || []);
+  for (const table of [PARTS, PAINTS, ARMORS]) for (const [id, d] of Object.entries(table)) if (d.field) field.add(id);
+  for (const id of Object.keys(FIELD_PERKS)) field.add(id);
+  p.field = [...field];
+  const atLeast = { cash: 5000, ammo: 900, parts: 600, tech: 400, intel: 5, salvage: 400, wood: 400, stone: 400, comms: 20 };
+  for (const g of GOODS) if (g !== 'cash') atLeast[g] = 20;
+  for (const [k, v] of Object.entries(atLeast)) p[k] = Math.max(p[k] || 0, v);
+  // One of every gun: carbine, marksman rifle and sidearm in hand, the rest in the pack.
+  const inv = p.inv;
+  inv.primary ??= makeWeapon('carbine');
+  inv.primary2 ??= makeWeapon('dmr');
+  inv.secondary ??= makeWeapon('sidearm');
+  inv.armor ??= makeArmor('heavy');
+  const all = () => [inv.primary, inv.primary2, inv.secondary, inv.armor, ...inv.pack].filter(Boolean);
+  for (const a of Object.keys(ARCHETYPES)) if (!all().some((i) => i.kind === 'weapon' && i.archetype === a)) inv.pack.push(makeWeapon(a));
+  for (const a of Object.keys(ARMORS)) if (!all().some((i) => i.kind === 'armor' && i.type === a)) inv.pack.push(makeArmor(a));
+  const upTo = (n, test, make) => { for (let k = inv.pack.filter(test).length; k < n; k++) inv.pack.push(make()); };
+  upTo(3, (i) => i.kind === 'medkit', () => makeConsumable('medkit'));
+  upTo(2, (i) => i.kind === 'ammo', () => makeConsumable('ammo'));
+  upTo(3, (i) => i.kind === 'flare', makeFlare);
+  upTo(3, (i) => i.kind === 'charge', () => ({ id: uid('c'), kind: 'charge', name: 'Breach Charge' }));
+  for (const t of Object.keys(TOOLS)) upTo(1, (i) => i.kind === 'tool' && i.tool === t, () => makeTool(t));
+  if (!claimOf(p)) upTo(1, (i) => i.kind === 'marker', makeMarker);
+  for (const w of all()) if (w.kind === 'weapon') p.mags[w.id] = Math.max(p.mags[w.id] ?? 0, weaponStats(w).mag);
+  if (inv.pack.length > PACK_SIZE) inv.pack.length = PACK_SIZE;
+  p.armor = Math.max(p.armor || 0, maxArmor(p));
 }
 function newCharacter(name) {
   const kit = starterLoadout();
@@ -3334,7 +3370,8 @@ function spend(p, cost, store = claimOf(p)?.store || {}) {
   return true;
 }
 function gunsmithAction(p, msg) {
-  if (!atOwnStash(p)) return toast(p, 'The gunsmith bench is at your stash house');
+  const anywhere = DEV_KIT && (msg.action === 'attach' || msg.action === 'paint');   // testing kit: parts and paint anywhere
+  if (!atOwnStash(p) && !anywhere) return toast(p, 'The gunsmith bench is at your stash house');
   if (msg.action === 'attach' || msg.action === 'paint') {
     const w = findOwnedWeapon(p, msg.itemId);
     if (!w || w.kind !== 'weapon') return;
@@ -3554,6 +3591,7 @@ function handleDeploy(p, msg) {
     Object.assign(p, { hp: 100, armor: 0, ...starterLoadout(), food: HOMESTEAD.hunger.start });
     p.intel = keepIntel;
   }
+  devKit(p);
   if ((msg.kind === 'house' || msg.kind === 'home') && claim.store.upg.infirmary) {
     p.inv.armor = makeArmor('light');
     p.armor = maxArmor(p);
@@ -3774,6 +3812,8 @@ function handleJoin(ws, msg) {
   if (c.cash === undefined) p.cash = ECONOMY.startingCash;   // characters from before money existed
   p.houseId = ownedHouse(token);
   if (p.houseId !== null) db.houses[p.houseId].ownerName = name;
+  p.mags ??= {};
+  devKit(p);
   for (const st of structs.values()) if (st.owner === token) st.ownerName = name;
   p.deploying = !!p.needsDeploy;
   if (p.deploying) p.dead = true;
@@ -3792,7 +3832,7 @@ function handleJoin(ws, msg) {
   }
   send(ws, {
     t: 'welcome', id: p.id, token, world: WORLD_ID, worldName: WORLD_NAME, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
-    x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, doorBase: DOOR_HP,
+    x: p.x, z: p.z, yaw: p.yaw, packSize: PACK_SIZE, devKit: DEV_KIT, doorBase: DOOR_HP,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });

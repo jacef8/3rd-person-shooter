@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server/hub.js",
-    "test": "node --test test/*.test.js",
+    "test": "DEV_KIT=0 node --test test/*.test.js",
     "start:world": "node server/index.js"
   },
   "engines": {
