@@ -452,5 +452,47 @@
     "keepAwayM": 1500,
     "keepAwayMin": 5,
     "crewEveryMin": 5
+  },
+  "hotZone": {
+    "_about": "One hot zone at a time: announced warnMs before it opens, open for openMs, a new one every everyMs (announce to announce). Elite guards and a few crates of top gear. Everything from a crate is hot: you show on everyone's map every pingMs until you extract it (fly it out, or carry it into your stash house or a hideout); die first and it drops. The taxi won't come within keepOutM, fast travel and respawns can't put you there; a hot-drop flare parachutes you in at the edge.",
+    "everyMs": 2400000,
+    "warnMs": 240000,
+    "openMs": 1200000,
+    "firstAfterMs": 600000,
+    "radius": 150,
+    "keepOutM": 1609,
+    "crates": 4,
+    "cratesPerPlayer": 2,
+    "crateMs": 10000,
+    "alarmRange": 450,
+    "pingMs": 30000,
+    "guards": 6,
+    "reinforceMs": 240000,
+    "extractOut": 40,
+    "crate": {
+      "cash": [
+        500,
+        1000
+      ],
+      "tech": [
+        30,
+        60
+      ],
+      "intel": [
+        2,
+        4
+      ],
+      "parts": [
+        30,
+        60
+      ],
+      "armorChance": 0.5
+    },
+    "hotDrop": {
+      "price": 1500,
+      "waitMs": 20000,
+      "dropChance": 0.08,
+      "edge": 30
+    }
   }
 }

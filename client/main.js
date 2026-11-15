@@ -112,7 +112,7 @@ resize();
 const state = {
   exposed: new Map(), sensors: [], pings: [], alerts: [], squad: { id: null, members: [], leaderId: null }, invite: null,
   hack: null, aimTargetId: null, houseState: new Map(), termState: new Map(),
-  contracts: [], drops: [], extracts: [], objectives: [], contactMeshes: [],
+  contracts: [], drops: [], extracts: [], objectives: [], contactMeshes: [], hotZone: null,
   ws: null, id: null, map: null, houseId: null, me: null,
   x: 0, z: 0, yaw: 0, pitch: 0, crouch: false, aiming: false, sprint: false,
   keys: new Set(), mouseDown: false, firedThisPress: false, lastShot: 0,
@@ -292,6 +292,55 @@ function syncDrops() {
   }
   for (const [id, g] of dropVis) if (!seen.has(id)) { scene.remove(g); dropVis.delete(id); }
 }
+
+// ---- the hot zone: a faint red wall around it you can see from far off, glowing crates, a green pickup beam
+const hotVis = { group: null, id: null, crates: new Map() };
+const hotCrateMat = new THREE.MeshStandardMaterial({ color: 0x5a1a10, emissive: 0xff3b1f, emissiveIntensity: 0.6 });
+function syncHotZone() {
+  const z = state.hotZone;
+  if (hotVis.group && (!z || z.id !== hotVis.id)) { scene.remove(hotVis.group); hotVis.group = null; hotVis.crates.clear(); }
+  if (!z) return;
+  if (!hotVis.group) {
+    const g = new THREE.Group(), y0 = ground(z.x, z.z);
+    const wall = new THREE.Mesh(new THREE.CylinderGeometry(z.radius, z.radius, 60, 96, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xff4a1f, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false, fog: false }));
+    wall.position.set(z.x, y0 + 20, z.z);
+    g.add(wall);
+    scene.add(g);
+    hotVis.group = g; hotVis.id = z.id; hotVis.wall = wall;
+  }
+  hotVis.wall.material.opacity = z.open ? 0.22 : 0.1;
+  for (const c of z.crates) {
+    let m = hotVis.crates.get(c.id);
+    if (!m) {
+      m = new THREE.Group();
+      const box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.9, 0.9), hotCrateMat);
+      box.position.y = 0.45;
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.35, 40, 8, 1, true), new THREE.MeshBasicMaterial({ color: 0xff5a1f, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+      beam.position.y = 20;
+      m.add(box, beam);
+      m.position.set(c.x, ground(c.x, c.z), c.z);
+      hotVis.group.add(m);
+      hotVis.crates.set(c.id, m);
+    }
+    m.visible = !c.opened;
+  }
+  if (z.extract && !hotVis.pickup) {
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.9, 80, 10, 1, true), new THREE.MeshBasicMaterial({ color: 0x5dff8a, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+    beam.position.set(z.extract.x, ground(z.extract.x, z.extract.z) + 40, z.extract.z);
+    hotVis.group.add(beam);
+    hotVis.pickup = beam;
+  }
+  if (!z.extract) hotVis.pickup = null;
+}
+const mmss = (ms) => { const t = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+function hotZoneLine() {
+  const z = state.hotZone;
+  if (!z) return '';
+  const now = Date.now(), d = distText(Math.hypot(z.x - state.x, z.z - state.z)), left = z.crates.filter((c) => !c.opened).length;
+  return z.open ? `🔥 Hot zone: ${z.name} · ${d} · closes in ${mmss(z.closesAt - now)} · ${left} crate${left === 1 ? '' : 's'} left` : `🔥 Hot zone: ${z.name} · ${d} · opens in ${mmss(z.opensAt - now)}`;
+}
+const carryingHot = () => { const me = state.me; return !!me && (['primary', 'primary2', 'secondary', 'armor'].some((s) => me.inv[s]?.hot) || me.inv.pack.some((i) => i.hot)); };
 
 // ---- helicopter extraction: red flare smoke at the pickup, then a helicopter that comes down to it
 const extractVis = new Map();   // id -> group
@@ -929,6 +978,13 @@ function drawMinimap() {
   for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
   for (const e of state.extracts) edge(e.x, e.z, '#ff2a2a', 8);
   for (const e of state.worldEvents || []) edge(e.x, e.z, '#c77dff', 8);
+  if (state.hotZone) {
+    const hz = state.hotZone;
+    g.strokeStyle = '#ff5a1f'; g.lineWidth = 2; g.beginPath(); g.arc(X(hz.x), Z(hz.z), hz.radius * k, 0, Math.PI * 2); g.stroke();
+    for (const c of hz.crates) if (!c.opened) dot(c.x, c.z, '#ff5a1f', 6);
+    if (hz.extract) dot(hz.extract.x, hz.extract.z, '#5dff8a', 7);
+    edge(hz.x, hz.z, '#ff5a1f', 10);
+  }
   for (const d of state.map.docks) if (Math.abs(d.x - state.x) < view * 1.5 && Math.abs(d.z - state.z) < view * 1.5) dot(d.x, d.z, '#7fd6ff', 5);
   for (const [, v] of boatVis) dot(v.mesh.position.x, v.mesh.position.z, v.data.mine ? '#7dff9a' : '#ffd27a', 5);
   if (state.enemyStash && state.enemyStash.untilPerf > performance.now()) edge(state.enemyStash.x, state.enemyStash.z, '#ff8a2a', 8);
@@ -1358,8 +1414,8 @@ function handle(m) {
       break;
     case 'alert':
       sfx.ping(true);
-      state.alerts.push({ x: m.x, z: m.z, until: performance.now() + 6000 });
-      toast(`⚠ ${m.text} nearby`);
+      state.alerts.push({ x: m.x, z: m.z, until: performance.now() + (m.hot ? 12000 : 6000), hot: !!m.hot });
+      toast(m.hot ? `🔥 ${m.text} · ${distText(Math.hypot(m.x - state.x, m.z - state.z))} away` : `⚠ ${m.text} nearby`);
       break;
     case 'hack':
       if (m.cancel) { state.hack = null; toast(m.reason); }
@@ -1383,6 +1439,10 @@ function handle(m) {
       state.view.setOwnHouse(state.houseId);
       toast(m.kind === 'claim' ? `Stash house claimed. Open the crate (${glyph('E')}) to reach your stash, gunsmith and upgrades.` : 'Deployed — 10 seconds of spawn protection.');
       lockPointer();
+      break;
+    case 'hotzone':
+      state.hotZone = m.zone;
+      syncHotZone();
       break;
     case 'events':
       state.drops = m.drops;
@@ -1494,6 +1554,8 @@ function statLine(item) {
   }
   if (item.kind === 'armor') { const a = armorStats(item); return `Armor ${a.armor}${a.mobility ? ` · ${Math.round(a.mobility * 100)}% speed` : ''}`; }
   if (item.kind === 'medkit') return 'Restores 60 health and 40 armor';
+  if (item.kind === 'lockbox') return `Opens at your stash: ${Object.entries(item.contents || {}).map(([k, v]) => (k === 'cash' ? `$${v}` : `${v} ${k}`)).join(', ')}`;
+  if (item.kind === 'hotflare') return 'Parachutes you (and crew beside you) in at the edge of an open hot zone. Fire it outdoors. One use.';
   if (item.kind === 'flare') return `Calls the helicopter home from anywhere outdoors. Hold ${HELI.rescueFlare.holdMs / 60000} min; seen ${distText(HELI.rescueFlare.alertRange)} away. One use.`;
   return '';
 }
@@ -1566,12 +1628,13 @@ const RES_USE = {
   intel: 'Upload at your stash for XP. Lost if you die carrying it.', seeds: 'Plant in a farm plot',
 };
 /** One line: a full-width button. `actions` is [[label, fn], ...]; `why` says why there's nothing to do. */
-function invRow(key, { title, detail = '', extra = '', color = '#5a5f68', actions = [], why = '' }) {
+function invRow(key, { title, detail = '', extra = '', color = '#5a5f68', actions = [], why = '', hot = false }) {
   const row = document.createElement('button');
   row.className = 'irow';
   row.dataset.pad = key;   // so the highlight finds this line again after a redraw
   row.style.setProperty('--bar', color);
   const act = actions.length ? actions.map((a) => a[0]).join(' · ') : why;
+  if (hot) { row.classList.add('hot'); title = `<span class="hottag">HOT</span> ${title}`; detail = `Extract to keep · ${detail}`; }
   row.innerHTML = `<span class="imeta"><b>${title}</b>${detail ? `<small>${detail}</small>` : ''}${extra ? `<small class="at">${extra}</small>` : ''}</span><span class="iact${actions.length ? '' : ' none'}">${act}</span>`;
   row.onclick = () => {
     if (!actions.length) { if (why) toast(why); return; }
@@ -1612,7 +1675,7 @@ function renderInventory() {
   for (const slot of ['primary', 'primary2', 'secondary', 'armor']) {
     const it = inv[slot], label = SLOT_LABEL[slot];
     you.append(...invRow(`eq-${slot}`, it
-      ? { title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentChips(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: it.kind === 'weapon' ? [partsAction(it), ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
+      ? { hot: !!it.hot, title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentChips(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: it.kind === 'weapon' ? [partsAction(it), ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
       : { title: `${label}: empty`, detail: 'Equip one from your backpack', why: 'Empty' }));
   }
   if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', actions: [['Open', openGunsmith]] }));
@@ -1632,9 +1695,10 @@ function renderInventory() {
     } else if (it.kind === 'weapon' || it.kind === 'armor') actions.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })]);
     if (it.kind === 'medkit') actions.push(['Use', () => send({ t: 'inv', action: 'use' })]);
     if (it.kind === 'flare') actions.push(['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }]);
+    if (it.kind === 'hotflare') actions.push(['Fire it: hot drop', () => { send({ t: 'inv', action: 'hotdrop', itemId: it.id }); closeInventory(); }]);
     if (put) actions.push(['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })]);
     if (it.kind !== 'package') actions.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })]);
-    packEl.append(...invRow(`pk-${it.id}`, { title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions }));
+    packEl.append(...invRow(`pk-${it.id}`, { hot: !!it.hot, title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions }));
   });
   const carried = RES_UI.filter((r) => me[r]);
   packEl.append(head('Supplies'));
@@ -2058,7 +2122,9 @@ function renderContact() {
 /** Active contracts shown under the kill feed. */
 function renderTracker() {
   const el = $('tracker');
-  el.innerHTML = state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('') +
+  el.innerHTML = (state.hotZone ? `<div class="hotc">${hotZoneLine()}</div>` : '') +
+    (carryingHot() ? '<div class="hotc carry">🔥 You carry hot loot: everyone sees you every 30 s. Get it home or fly it out.</div>' : '') +
+    state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('') +
     (state.worldEvents || []).map((e) => `<div class="eventc">📣 ${e.name} <span>${e.type === 'swing' ? '' : `${distText(Math.hypot(e.x - state.x, e.z - state.z))} · `}${Math.max(0, Math.ceil((e.endsAt - Date.now()) / 60000))} min left</span></div>`).join('');
 }
 setInterval(() => { if (state.map) renderTracker(); }, 1000);
@@ -2191,7 +2257,7 @@ function renderMapScreen() {
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. Come back at your stash house, a hideout or any town, but nothing inside the red circle round where you died for 5 minutes. From your stash house, fast travel takes you to landing zones and your crew.',
     travel: 'Fast travel goes out from your stash house to your hideouts, Contacts you have found, landing zones (tap one on the map for an exact one) and your crew. Getting loot home is still on foot. Not within about a mile of where you last died for 5 minutes, and joining your crew works once every 5 minutes.',
     taxi: `Pick where to fly. You jump from ${feet(HELI.airTaxi.jump.alt, 50)} over a random spot ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it and steer down by parachute or squirrel suit, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
-    view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
+    view: 'Orange ring 🔥 the hot zone (the faint ring a mile out: no taxi drops, fast travel or respawns inside it) · orange ● its crates · green ● its pickup point · Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
@@ -2266,6 +2332,15 @@ function drawMapCanvas() {
   for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: lzPick ? 6 : 4, highlight: lit.has(lz.id), label: lzPick ? lz.name.split(' (')[0] : '', labelMin: 0 });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
+  if (state.hotZone) {
+    const hz = state.hotZone;
+    markers.push({ x: hz.x, z: hz.z, kind: 'ring', radius: hz.radius, color: '#ff5a1f' });
+    markers.push({ x: hz.x, z: hz.z, kind: 'ring', radius: HELI.hotZone.keepOutM, color: 'rgba(255,90,31,0.45)' });
+    markers.push({ x: hz.x, z: hz.z, kind: 'diamond', color: '#ff5a1f', size: 9, label: `🔥 ${hotZoneLine().replace(/^🔥 Hot zone: /, 'Hot zone: ')}`, labelMin: 0 });
+    for (const c of hz.crates) if (!c.opened) markers.push({ x: c.x, z: c.z, color: '#ff5a1f', size: 5 });
+    if (hz.extract) markers.push({ x: hz.extract.x, z: hz.extract.z, color: '#5dff8a', size: 7, label: 'Hot-zone pickup', labelMin: 0 });
+  }
+  for (const a of state.alerts) if (a.hot && a.until > performance.now()) markers.push({ x: a.x, z: a.z, kind: 'diamond', color: '#ff5a1f', size: 7, label: 'Hot loot' });
   for (const d of map.docks) markers.push({ x: d.x, z: d.z, color: '#7fd6ff', size: 4, label: d.campId != null ? '' : `⚓ ${d.name}` });
   for (const c of map.camps) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: '#9fe39f', size: 6, label: `🏕 ${c.name}` });
   for (const [, v] of boatVis) if (v.data.mine) markers.push({ x: v.mesh.position.x, z: v.mesh.position.z, color: '#7dff9a', size: 5, label: `🚤 ${BOATS[v.data.type].name}` });
@@ -2807,6 +2882,11 @@ function nearestInteractable() {
   }
   for (const [, r] of state.players) if (r.data.sq && r.data.downed && !r.data.dead) consider(Math.hypot(r.data.x - state.x, r.data.z - state.z) - 1.5, `✚ Revive ${r.data.name} (stand still ${COMBAT_RULES.downed.reviveMs / 1000}s)`);
   for (const d of state.drops) consider(Math.hypot(d.x - state.x, d.z - state.z) - 0.6, d.landsAt > Date.now() ? 'Supply drop incoming…' : 'Open supply drop (6s)');
+  const hz = state.hotZone;
+  if (hz?.open) {
+    for (const c of hz.crates) if (!c.opened) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.6, `Open hot crate (${HELI.hotZone.crateMs / 1000}s): the alarm shows everyone near the zone where you are`);
+    if (hz.extract && state.me?.claim && !state.extracts.length && Math.hypot(hz.extract.x - state.x, hz.extract.z - state.z) < EXTRACT.callRange) consider(Math.hypot(hz.extract.x - state.x, hz.extract.z - state.z), `Call extraction at the hot-zone pickup: hold ${feet(EXTRACT.radius)} for ${EXTRACT.holdMs / 1000}s, fly home with your loot`);
+  }
   if (!best && state.me?.claim && !state.extracts.length) for (const lz of state.map.landingZones) if (Math.hypot(lz.x - state.x, lz.z - state.z) < EXTRACT.callRange) best = `Call extraction — fire a flare, hold ${feet(EXTRACT.radius)} for ${EXTRACT.holdMs / 1000}s, fly home with your loot`;
   for (const o of state.objectives) consider(Math.hypot(o.x - state.x, o.z - state.z) - 0.5, 'Recover contract crate (3s)');
   const me = state.me;

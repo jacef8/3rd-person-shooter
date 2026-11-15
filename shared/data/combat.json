@@ -30,6 +30,14 @@
       "damageMul": 0.45,
       "sightRange": 45,
       "weapon": "dmr"
+    },
+    "guard": {
+      "name": "Elite guard",
+      "hp": 420,
+      "damageMul": 0.8,
+      "sightRange": 55,
+      "weapon": "carbine",
+      "aim": 0.6
     }
   },
   "crewMax": 6,

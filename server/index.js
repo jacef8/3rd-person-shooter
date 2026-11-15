@@ -588,7 +588,7 @@ const TIER_NAMES = ['basic', 'steel', 'blast', 'vault'];
 // ---------------------------------------------------------------- new-player shield
 const SHIELD_LEVEL = Number(process.env.SHIELD_UNTIL_LEVEL ?? COMBAT.newPlayerShield.untilLevel);
 /** Below level 5, other players can't hurt you, until you attack someone (that ends it for good). */
-function shielded(c) { return !!c && !c.isBot && !!c.token && !c.shieldOff && level(c) < SHIELD_LEVEL; }
+function shielded(c) { return !!c && !c.isBot && !!c.token && !c.shieldOff && level(c) < SHIELD_LEVEL && !inHotZone(c); }
 function dropShield(p) {
   if (!shielded(p)) return;
   p.shieldOff = true;
@@ -730,6 +730,202 @@ function randomDry(test, tries = 200) {
     if (test(x, z)) return { x, z };
   }
   return null;
+}
+// ---- hot zones: one at a time, announced ahead, guarded, a few crates of the best gear. What comes out
+// of a crate is hot until you get it home: you show on everyone's map, and it drops if you die.
+const HZ = ACTIVITIES.hotZone;
+const HZ_WARN_MS = Number(process.env.HOTZONE_WARN_MS || HZ.warnMs), HZ_OPEN_MS = Number(process.env.HOTZONE_OPEN_MS || HZ.openMs);
+const HZ_CRATE_MS = Number(process.env.HOTZONE_CRATE_MS || HZ.crateMs), HZ_PING_MS = Number(process.env.HOTZONE_PING_MS || HZ.pingMs);
+const HOTDROP_WAIT_MS = Number(process.env.HOTDROP_WAIT_MS || HZ.hotDrop.waitMs);
+const HZ_GUARDS = Number(process.env.HOTZONE_GUARDS ?? HZ.guards);
+let hotZone = null, lastHotSpot = null;
+let nextHotAt = Date.now() + Number(process.env.HOTZONE_FIRST_MS || HZ.firstAfterMs);
+/** Real places a hot zone can open: the towns, Rock Bluff, either end of a bridge, the airstrips. */
+function hotSpots() {
+  const out = map.towns.map((t) => ({ name: t.name, x: (t.rect.minX + t.rect.maxX) / 2, z: (t.rect.minZ + t.rect.maxZ) / 2 }));
+  for (const c of map.communities || []) out.push({ name: c.name, x: c.x, z: c.z });
+  for (const b of map.bridges || []) {
+    const end = [b.pts?.[0], b.pts?.[b.pts.length - 1]].filter(Boolean).find((q) => terrain.height(q[0], q[1]) > 1);
+    if (end && !out.some((o) => o.name === b.name)) out.push({ name: b.name, x: end[0], z: end[1] });
+  }
+  for (const a of map.airstrips || []) out.push({ name: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2 });
+  return out.filter((o) => Math.abs(o.x) < map.half - 400 && Math.abs(o.z) < map.half - 400);
+}
+const inHotZone = (c) => !!(hotZone?.open && c && Math.hypot(c.x - hotZone.x, c.z - hotZone.z) <= hotZone.radius);
+/** Within a mile of a hot zone that's announced or open: no taxi drops, fast travel or respawns there. */
+const nearHotZone = (x, z) => !!(hotZone && Math.hypot(x - hotZone.x, z - hotZone.z) < HZ.keepOutM);
+const hasHot = (p) => [...GUN_SLOTS, 'armor'].some((s) => p.inv[s]?.hot) || p.inv.pack.some((i) => i.hot);
+function hotZoneView() {
+  if (!hotZone) return null;
+  const z = hotZone;
+  return { id: z.id, name: z.name, x: Math.round(z.x), z: Math.round(z.z), radius: z.radius, opensAt: z.opensAt, closesAt: z.closesAt, open: !!z.open,
+    crates: z.crates.map((c) => ({ id: c.id, x: +c.x.toFixed(1), z: +c.z.toFixed(1), opened: !!c.opened })), extract: z.extract };
+}
+const sendHotZone = () => broadcast({ t: 'hotzone', zone: hotZoneView() });
+/** A dry, outdoor, clear spot near (x, z), within r. */
+function openSpotNear(x, z, r, tries = 60) {
+  for (let i = 0; i < tries; i++) {
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
+    const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
+    if (terrain.height(px, pz) < 0.8 || buildingAt(px, pz) >= 0) continue;
+    const fixed = resolveCircle(px, pz, 1.2, solidsNear(px, pz, 4), terrain.height(px, pz));
+    if (Math.hypot(fixed.x - px, fixed.z - pz) > 0.3) continue;
+    return { x: px, z: pz };
+  }
+  return null;
+}
+function announceHotZone(now) {
+  const spots = hotSpots().filter((o) => o.name !== lastHotSpot);
+  const at = pick(spots);
+  if (!at) { nextHotAt = now + HZ.everyMs; return; }
+  lastHotSpot = at.name;
+  const c = touchdownSpot(at.x, at.z);
+  hotZone = { id: uid('hz'), name: at.name, x: c.x, z: c.z, radius: HZ.radius, opensAt: now + HZ_WARN_MS, closesAt: now + HZ_WARN_MS + HZ_OPEN_MS, open: false, crates: [], guards: [], opened: new Map(), extract: null, reinforceAt: 0 };
+  nextHotAt = now + Math.max(HZ.everyMs, HZ_WARN_MS + HZ_OPEN_MS + 1000);
+  for (const o of players.values()) toast(o, `🔥 Hot zone at ${at.name} (${distText(Math.hypot(o.x - c.x, o.z - c.z))} away) opens in ${Math.round(HZ_WARN_MS / 60000) || '<1'} min, for ${Math.round(HZ_OPEN_MS / 60000)} min: elite guards and ${HZ.crates} crates of top gear. Is it worth the trip?`);
+  feed(`🔥 Hot zone announced: ${at.name}`);
+  sendHotZone();
+}
+function spawnGuard(z) {
+  const at = openSpotNear(z.x, z.z, z.radius * 0.55) || { x: z.x, z: z.z };
+  z.guards.push(spawnBot(at.x, at.z, 'guard', { hotZone: z.id }).id);
+}
+function openHotZone(z) {
+  z.open = true;
+  for (let i = 0; i < HZ.crates; i++) {
+    const at = openSpotNear(z.x, z.z, z.radius * 0.7);
+    if (at) z.crates.push({ id: `${z.id}c${i}`, x: at.x, z: at.z, opened: null });
+  }
+  for (let i = 0; i < HZ_GUARDS; i++) spawnGuard(z);
+  z.reinforceAt = Date.now() + HZ.reinforceMs;
+  // The zone's own pickup point, just outside its edge, on the side nearest the middle of the county.
+  const a = Math.atan2(-z.z, -z.x);
+  const ex = openSpotNear(z.x + Math.cos(a) * (z.radius + HZ.extractOut), z.z + Math.sin(a) * (z.radius + HZ.extractOut), 30) || touchdownSpot(z.x + Math.cos(a) * (z.radius + HZ.extractOut), z.z + Math.sin(a) * (z.radius + HZ.extractOut));
+  z.extract = { x: Math.round(ex.x), z: Math.round(ex.z) };
+  for (const o of players.values()) toast(o, `🔥 The hot zone at ${z.name} is open for ${Math.round(HZ_OPEN_MS / 60000)} min. Crates are guarded; whatever you take is hot until you extract it.`);
+  sendHotZone();
+}
+function closeHotZone(z) {
+  for (const id of z.guards) bots.delete(id);
+  hotZone = null;
+  feed(`🔥 The hot zone at ${z.name} has closed`);
+  sendHotZone();
+}
+/** A gun with rare parts already fitted: the best that fits it in each slot, one or two steps down at random. */
+function rareWeapon() {
+  const arche = pick(['carbine', 'dmr', 'lmg', 'smg', 'shotgun']);
+  const w = makeWeapon(arche);
+  w.parts = { ...(w.parts || {}) };
+  for (const slot of SLOTS) {
+    const fits = Object.entries(PARTS).filter(([id, pt]) => pt.slot === slot && partFits(id, arche) && pt.level >= 5).sort((a, b) => b[1].level - a[1].level);
+    if (fits.length) w.parts[slot] = fits[Math.min(fits.length - 1, Math.floor(Math.random() * 3))][0];
+  }
+  w.name = `${w.name} (hot-zone build)`;
+  return w;
+}
+const rnd = ([a, b]) => Math.round(a + Math.random() * (b - a));
+function finishHotCrate(p, id) {
+  const z = hotZone, c = z?.crates.find((q) => q.id === id);
+  if (!z?.open || !c) return send(p.ws, { t: 'hack', done: true, text: 'The hot zone has closed' });
+  if (c.opened) return send(p.ws, { t: 'hack', done: true, text: `${c.opened} got to that crate first` });
+  const got = [rareWeapon(), ...(Math.random() < HZ.crate.armorChance ? [makeArmor('heavy')] : [])];
+  const box = { id: uid('lb'), kind: 'lockbox', name: 'Hot-zone lockbox', contents: { cash: rnd(HZ.crate.cash), tech: rnd(HZ.crate.tech), intel: rnd(HZ.crate.intel), parts: rnd(HZ.crate.parts) } };
+  got.push(box);
+  if (p.inv.pack.length + got.length > PACK_SIZE) return send(p.ws, { t: 'hack', done: true, text: `Make room: the crate holds ${got.length} things` });
+  c.opened = p.name;
+  z.opened.set(p.token, (z.opened.get(p.token) || 0) + 1);
+  for (const it of got) { it.hot = z.id; p.inv.pack.push(it); }
+  send(p.ws, { t: 'hack', done: true, text: `🔥 Crate open: ${got.map((i) => i.name).join(', ')}. It's hot: you'll show on everyone's map every ${Math.round(HZ_PING_MS / 1000)}s until you extract it.` });
+  award(p, 60, 'Hot crate');
+  feed(`🔥 ${p.name} cracked a hot-zone crate at ${z.name}`);
+  pingHot(p, true);
+  dirty(p);
+  sendHotZone();
+}
+/** Everyone but your crew sees where a hot-loot carrier is. */
+function pingHot(p, first = false) {
+  p.hotPingAt = Date.now();
+  if (first) toast(p, '🔥 You are carrying hot loot. Get it to your stash house or a hideout, or fly it out at an extraction point or with a rescue flare.');
+  for (const o of players.values()) {
+    if (o === p || o.dead || sameSquad(o, p)) continue;
+    send(o.ws, { t: 'alert', x: Math.round(p.x), z: Math.round(p.z), text: `Hot loot carrier (${p.name})`, hot: 1 });
+  }
+}
+/** Hot loot made safe: home, a hideout, or flown out. Lockboxes open into your supplies. */
+function coolHot(p, how) {
+  const got = {}, names = [];
+  for (const s of [...GUN_SLOTS, 'armor']) if (p.inv[s]?.hot) { delete p.inv[s].hot; names.push(p.inv[s].name); }
+  for (const it of [...p.inv.pack]) {
+    if (!it.hot) continue;
+    if (it.kind === 'lockbox') {
+      p.inv.pack.splice(p.inv.pack.indexOf(it), 1);
+      for (const [k, v] of Object.entries(it.contents || {})) { if (k === 'cash') p.cash = (p.cash || 0) + v; else p[k] = (p[k] || 0) + v; got[k] = (got[k] || 0) + v; }
+    } else { delete it.hot; names.push(it.name); }
+  }
+  const res = Object.entries(got).map(([k, v]) => (k === 'cash' ? `$${v}` : `${v} ${k}`));
+  toast(p, `✅ Hot loot secured ${how}: ${[...names, ...res].join(', ')}. It's yours for good.`);
+  award(p, 80, 'Hot loot extracted');
+  feed(`✅ ${p.name} got hot-zone loot out`);
+  dirty(p);
+}
+function tickHotZone(now) {
+  if (!hotZone && now >= nextHotAt) announceHotZone(now);
+  const z = hotZone;
+  if (z && !z.open && now >= z.opensAt) openHotZone(z);
+  if (z?.open) {
+    if (now >= z.closesAt) closeHotZone(z);
+    else if (now >= z.reinforceAt) {   // reinforcements: back up to full strength every few minutes
+      z.guards = z.guards.filter((id) => bots.has(id) && !bots.get(id).dead);
+      for (let i = z.guards.length; i < HZ_GUARDS; i++) spawnGuard(z);
+      z.reinforceAt = now + HZ.reinforceMs;
+    }
+  }
+  for (const p of players.values()) {
+    if (p.dead || p.deploying || !hasHot(p)) continue;
+    // Home free: inside your stash house or at one of your hideouts.
+    if (atOwnStash(p) || hideoutsOf(p).some((st) => Math.hypot(st.x - p.x, st.z - p.z) < 6)) { coolHot(p, 'at your stash'); continue; }
+    if (now - (p.hotPingAt || 0) >= HZ_PING_MS) pingHot(p);
+  }
+  for (const [tok, h] of [...hotDrops]) if (now >= h.arrivesAt) { hotDrops.delete(tok); landHotDrop(tok, h, now); }
+}
+// ---- the hot-drop flare: the helicopter picks you (and crew beside you) up and drops you at the zone's edge
+const hotDrops = new Map();   // token -> { arrivesAt, x, z, flare }
+const makeHotFlare = () => ({ id: uid('hf'), kind: 'hotflare', name: 'Hot-drop flare' });
+function callHotDrop(p, flare) {
+  const now = Date.now();
+  if (!hotZone?.open) return toast(p, 'There\'s no hot zone open to drop into');
+  if (inHotZone(p) || Math.hypot(p.x - hotZone.x, p.z - hotZone.z) < hotZone.radius + 80) return toast(p, 'You\'re already at the hot zone');
+  if (buildingAt(p.x, p.z) >= 0) return toast(p, 'Get outside: the helicopter can\'t see a flare indoors');
+  if (terrain.height(p.x, p.z) < 0.3 || p.boat) return toast(p, 'Get onto dry land to fire the flare');
+  if (now - (p.lastHit || 0) < 10_000) return toast(p, 'Not while you\'re being shot at');
+  if (hasCargo(p) || hasHot(p)) return toast(p, 'Not with freight or hot loot aboard: extract that first');
+  if (hotDrops.has(p.token) || taxis.has(p.token)) return toast(p, 'A helicopter is already on its way to you');
+  p.inv.pack.splice(p.inv.pack.indexOf(flare), 1);
+  hotDrops.set(p.token, { arrivesAt: now + HOTDROP_WAIT_MS, x: p.x, z: p.z, flare });
+  toast(p, `🚁 Hot-drop flare lit. The helicopter lands in ${Math.round(HOTDROP_WAIT_MS / 1000)}s: stay close. Crew beside you ride along. It drops you at the edge of ${hotZone.name}.`);
+  dirty(p);
+}
+function landHotDrop(tok, h, now) {
+  const p = onlineByToken(tok);
+  if (!p) return;
+  const refund = (why) => { if (p.inv.pack.length < PACK_SIZE) p.inv.pack.push(h.flare); toast(p, `${why} (flare back in your bag)`); dirty(p); };
+  if (p.dead || p.downed || Math.hypot(p.x - h.x, p.z - h.z) > 25) return refund('The helicopter couldn\'t find you');
+  if (!hotZone?.open) return refund('The hot zone closed before the helicopter got there');
+  if (now - (p.lastHit || 0) < 10_000) return refund('The pilot saw the shooting and turned back');
+  const z = hotZone, a = Math.atan2(p.z - z.z, p.x - z.x);
+  const riders = [...players.values()].filter((o) => !o.dead && !o.downed && (o === p || sameSquad(o, p)) && Math.hypot(o.x - h.x, o.z - h.z) < 25 && !hasCargo(o) && !hasHot(o));
+  const edge = openSpotNear(z.x + Math.cos(a) * (z.radius + HZ.hotDrop.edge), z.z + Math.sin(a) * (z.radius + HZ.hotDrop.edge), 25) || touchdownSpot(z.x + Math.cos(a) * (z.radius + HZ.hotDrop.edge), z.z + Math.sin(a) * (z.radius + HZ.hotDrop.edge));
+  riders.forEach((o, i) => {
+    if (o.hack) cancelHack(o, 'Boarding the helicopter');
+    o.openContainer = null;
+    send(o.ws, { t: 'container', closed: true });
+    placeAt(o, edge.x + Math.cos(i * 2.1) * 6 * (riders.length > 1), edge.z + Math.sin(i * 2.1) * 6 * (riders.length > 1));
+    o.air = { alt: JUMP_ALT, mode: 'fall' };
+    send(o.ws, { t: 'air', alt: JUMP_ALT, mode: 'fall', heli: { x: edge.x, z: edge.z, yaw: a + Math.PI } });
+    toast(o, `🪂 Jump! You're over the edge of the ${z.name} hot zone. Everyone in there can see you coming.`);
+    dirty(o);
+  });
+  for (const o of players.values()) if (!riders.includes(o) && !o.dead && Math.hypot(o.x - z.x, o.z - z.z) < z.radius * 3) send(o.ws, { t: 'alert', x: Math.round(edge.x), z: Math.round(edge.z), text: 'Hot drop: parachutes coming in' });
 }
 function startEvent(type) {
   const def = EV[type];
@@ -958,13 +1154,14 @@ function pawnSellable(p) {
   const out = [];
   for (const slot of [...GUN_SLOTS, 'armor']) if (p.inv[slot]) out.push({ item: p.inv[slot], slot });
   for (const it of p.inv.pack) if (it.kind === 'weapon' || it.kind === 'armor') out.push({ item: it, slot: 'pack' });
-  return out;
+  return out.filter((o) => !o.item.hot);   // hot loot has to be extracted before Lamar will touch it
 }
 function pawnView(p) {
   const G = (g) => HOMESTEAD.goods[g]?.name || g;
   return { town: PAWN.name, who: PAWN.keeper, pawn: true,
     sells: Object.keys(ECONOMY.prices).map((g) => ({ good: g, pays: Math.max(1, Math.floor(ECONOMY.prices[g] * PAWN.goodsPays)), name: G(g) })),
     shop: [{ id: 'rescueFlare', name: 'Rescue flare (calls the helicopter from anywhere)', price: FLARE.price, qty: 1 },
+      { id: 'hotFlare', name: 'Hot-drop flare (parachute in at the edge of an open hot zone)', price: HZ.hotDrop.price, qty: 1 },
       ...Object.entries(ECONOMY.shop).filter(([k]) => !k.startsWith('_')).map(([k, it]) => ({ id: k, name: it.name || G(k), price: it.kind === 'good' && ECONOMY.prices[k] ? Math.max(it.price, Math.round(ECONOMY.prices[k] * PAWN.goodsMarkup)) : it.price, qty: it.qty || 1 }))],
     case: pawnCase().map((it) => ({ ...it, price: pawnPrice(it) })),
     offers: p ? pawnSellable(p).map(({ item, slot }) => ({ id: item.id, name: item.name, kind: item.kind, archetype: item.archetype, type: item.type, parts: item.parts, paint: item.paint, slot, pays: pawnPays(item) })) : [] };
@@ -977,6 +1174,14 @@ function pawnTrade(p, b, msg) {
     p.cash -= FLARE.price;
     p.inv.pack.push(makeFlare());
     toast(p, 'Bought a rescue flare. Fire it from your bag, out in the open.');
+    return true;
+  }
+  if (msg.action === 'buy' && msg.item === 'hotFlare') {
+    if ((p.cash || 0) < HZ.hotDrop.price) return toast(p, `A hot-drop flare is $${HZ.hotDrop.price}. You have $${p.cash || 0}`), true;
+    if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full'), true;
+    p.cash -= HZ.hotDrop.price;
+    p.inv.pack.push(makeHotFlare());
+    toast(p, 'Bought a hot-drop flare. Fire it from your bag, out in the open, while a hot zone is open.');
     return true;
   }
   if (msg.action === 'buyItem') {
@@ -2172,7 +2377,7 @@ function startHack(p, kind, id, extra = {}) {
     if (!st || raidMul(baseOf(st), p) <= 0) return;
     if (kind === 'gatehack') { const bp = bypassOf('gate', id); extra = { ...extra, ms: bp.ms, tech: bp.tech }; }
   }
-  if (kind === 'rebuild' || kind === 'selfrevive' || kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire') {
+  if (kind === 'rebuild' || kind === 'selfrevive' || kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire' || kind === 'hotcrate') {
     const ms = extra.ms ? extra.ms : kind === 'rebuild' ? RAIDS.ruin.rebuildMs : kind === 'selfrevive' ? DOWNED.selfReviveMs : kind === 'hotwire' ? RV.rules.hotwireMs : kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
@@ -2260,6 +2465,7 @@ function tickHacks(now) {
     if (h.kind === 'cook') { finishCook(p); continue; }
     if (h.kind === 'fish') { finishFishing(p); continue; }
     if (h.kind === 'hotwire') { finishHotwire(p, h.id); continue; }
+    if (h.kind === 'hotcrate') { finishHotCrate(p, h.id); continue; }
     if (h.kind === 'selfrevive') {
       const i = p.inv.pack.findIndex((x) => x.kind === 'medkit');
       if (!p.downed || i < 0) { send(p.ws, { t: 'hack', done: true, text: 'No medkit' }); continue; }
@@ -2356,6 +2562,7 @@ function tickHacks(now) {
       for (const [k, v] of Object.entries(res)) p[k] += v;
       p.comms += comms;
       if (Math.random() < FLARE.dropChance && p.inv.pack.length < PACK_SIZE) { p.inv.pack.push(makeFlare()); toast(p, 'There was a rescue flare in the drop!'); }
+      if (Math.random() < HZ.hotDrop.dropChance && p.inv.pack.length < PACK_SIZE) { p.inv.pack.push(makeHotFlare()); toast(p, 'There was a hot-drop flare in the drop!'); }
       award(p, XP.supplyDrop, 'Supply drop secured', true);
       feed(`${p.name} secured a supply drop`);
       sendEvents();
@@ -2526,7 +2733,7 @@ function killBot(b, attacker, headshotKill) {
   markAssist(b, attacker);
   if (attacker && !attacker.isBot) {
     attacker.kills++;
-    award(attacker, (b.kind === 'hvt' ? 300 : XP.rogueKill) + (headshotKill ? XP.headshotKill : 0), b.kind === 'hvt' ? 'Lieutenant down' : 'Rogue down', true);
+    award(attacker, (b.kind === 'hvt' ? 300 : b.kind === 'guard' ? 150 : XP.rogueKill) + (headshotKill ? XP.headshotKill : 0), b.kind === 'hvt' ? 'Lieutenant down' : b.kind === 'guard' ? 'Elite guard down' : 'Rogue down', true);
     if (b.kind !== 'ambient') feed(`${attacker.name} ➜ ${b.name}`);
   }
   bots.delete(b.id);
@@ -2638,7 +2845,7 @@ function notifyOwner(houseId, text) { notifyStore(db.houses[houseId], text); }
 let botSerial = 0;
 const BOT_WEAPONS = COMBAT.bots.weapons;
 function spawnBot(x, z, kind = 'ambient', extra = {}) {
-  const def = kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue;
+  const def = kind === 'hvt' ? COMBAT.bots.hvt : kind === 'guard' ? COMBAT.bots.guard : COMBAT.bots.rogue;
   const arche = def.weapon || BOT_WEAPONS[botSerial % BOT_WEAPONS.length];
   const w = weaponStats(makeWeapon(arche));
   const hp = def.hp;
@@ -2757,7 +2964,7 @@ function updateBots(dt, now) {
     if (b.npc) { if (b.kind !== 'convoy') updateNpc(b, dt, now); continue; }
     if (b.animal) { updateAnimal(b, dt, alive); continue; }
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
-    let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : COMBAT.bots.rogue).sightRange;
+    let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : b.kind === 'guard' ? COMBAT.bots.guard : COMBAT.bots.rogue).sightRange;
     for (const p of alive) {
       if (p.downed) continue;   // rogues move on to whoever is still fighting
       const d = Math.hypot(p.x - b.x, p.z - b.z);
@@ -2772,7 +2979,7 @@ function updateBots(dt, now) {
       if (bestD > 14) { mx = Math.sin(b.yaw); mz = Math.cos(b.yaw); }
       if (now >= b.nextShot) {
         const dir = [best.x - b.x, gy(best) + (best.crouch ? 0.8 : 1.2) - gy(b) - STAND_EYE, best.z - b.z];
-        fire(b, dir, true, Math.max(0.35, 1.2 - bestD / 30));
+        fire(b, dir, true, Math.max(0.35, 1.2 - bestD / 30) / (b.kind === 'guard' ? COMBAT.bots.guard.aim : 1));
         b.burst = (b.burst + 1) % 5;
         b.nextShot = now + (b.burst === 0 ? 1400 : 60_000 / b.weapon.rpm * 1.3);
       }
@@ -3145,6 +3352,7 @@ function nearestInteractable(p) {
   for (const t of map.terminals) if (Math.abs(t.x - p.x) < 4 && Math.abs(t.z - p.z) < 4) consider(Math.hypot(t.x - p.x, t.z - p.z), { kind: 'terminal', ref: t });
   for (const c of map.contacts) if (Math.abs(c.x - p.x) < 5 && Math.abs(c.z - p.z) < 5) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.8, { kind: 'contact', ref: c });
   for (const d of drops.values()) consider(Math.hypot(d.x - p.x, d.z - p.z) - 0.6, { kind: 'drop', ref: d });
+  if (hotZone?.open) for (const c of hotZone.crates) if (!c.opened) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.6, { kind: 'hotcrate', ref: c });
   for (const o of objectives.values()) if (o.owner === p.token) consider(Math.hypot(o.x - p.x, o.z - p.z) - 0.5, { kind: 'crate', ref: o });
   for (const st of structsNear(p.x, p.z, 4)) if (!PIECES[st.type].explosive) consider(boxDist(structBox(st), p.x, p.z) + 0.3, { kind: 'struct', ref: st });
   if (!best) {
@@ -3225,6 +3433,7 @@ function interact(p) {
   }
   const it = nearestInteractable(p);
   // Nothing else here: at a landing zone, E calls the extraction helicopter.
+  if (!it && hotZone?.open && hotZone.extract && Math.hypot(hotZone.extract.x - p.x, hotZone.extract.z - p.z) < EXTRACT.callRange) return callExtraction(p);
   if (!it) {
     if (taxiAt(p) && !map.contacts.some((c) => Math.hypot(c.x - p.x, c.z - p.z) < 8)) return taxiMenu(p);
     const b = buildingAt(p.x, p.z);
@@ -3237,6 +3446,14 @@ function interact(p) {
   }
   if (it.kind === 'terminal') return startHack(p, 'terminal', it.ref.id);
   if (it.kind === 'drop') return startHack(p, 'drop', it.ref.id);
+  if (it.kind === 'hotcrate') {
+    if ((hotZone.opened.get(p.token) || 0) >= HZ.cratesPerPlayer) return toast(p, `You've opened ${HZ.cratesPerPlayer} crates in this zone: leave the rest for someone else`);
+    if (p.inv.pack.length + 3 > PACK_SIZE) return toast(p, 'Make room in your backpack first (a crate holds up to 3 things)');
+    startHack(p, 'hotcrate', it.ref.id, { ms: HZ_CRATE_MS });
+    // The alarm: everyone near the zone sees where the crate is being opened.
+    for (const o of players.values()) if (o !== p && !o.dead && !sameSquad(o, p) && Math.hypot(o.x - it.ref.x, o.z - it.ref.z) < HZ.alarmRange) send(o.ws, { t: 'alert', x: Math.round(it.ref.x), z: Math.round(it.ref.z), text: 'Hot crate alarm' });
+    return toast(p, `🔥 Opening the crate (${Math.round(HZ_CRATE_MS / 1000)}s) — the alarm is going: everyone near the zone knows where you are`);
+  }
   if (it.kind === 'crate') return startHack(p, 'crate', it.ref.id);
   if (it.kind === 'harvest') {
     const tool = it.res === 'wood' ? 'hatchet' : 'pickaxe';
@@ -3558,6 +3775,10 @@ function invAction(p, msg) {
     const it = inv.pack.find((i) => i.id === msg.itemId && i.kind === 'flare');
     if (it) return callExtraction(p, it);
     return;
+  } else if (msg.action === 'hotdrop') {
+    const it = inv.pack.find((i) => i.id === msg.itemId && i.kind === 'hotflare');
+    if (it) return callHotDrop(p, it);
+    return;
   } else if (msg.action === 'eat') {
     return eat(p, msg.good);
   } else if (msg.action === 'use') {
@@ -3658,6 +3879,7 @@ function handleDeploy(p, msg) {
     if (rules && now < rules.crewAt) return toast(p, `You can drop in on your crew again in ${minsLeft(rules.crewAt - now)}`);
     at = { x: m.x + 1.5, z: m.z + 1.5 };
   } else return;
+  if (msg.kind !== 'home' && msg.kind !== 'house' && hotZone && nearHotZone(at.x, at.z)) return toast(p, `Too close to the ${hotZone.name} hot zone: you have to get there yourself. Your stash house is open.`);
   if (rules && msg.kind !== 'home' && msg.kind !== 'house' && nearDeath(rules, at.x, at.z)) return toast(p, `Too close to where you died — that opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. Your stash house is open.`);
   if (rules && msg.kind === 'crew') p.crewDropAt = now;
   if (!p.deploying) {
@@ -3685,7 +3907,8 @@ function handleTravel(p, msg) {
   if (Date.now() - (p.lastHit || 0) < 10_000) return toast(p, 'Can\'t travel while in combat');
   if (hasCargo(p)) return toast(p, 'You can\'t fast travel with freight');
   const rules = respawnRules(p), now = Date.now();
-  const closed = (x, z) => nearDeath(rules, x, z) && (toast(p, `You died near there — fast travel there opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. You can still go on foot.`), true);
+  const closed = (x, z) => (nearHotZone(x, z) && (toast(p, `No fast travel within a mile of the ${hotZone.name} hot zone: get there on foot, by taxi to a mile out, or with a hot-drop flare`), true))
+    || (nearDeath(rules, x, z) && (toast(p, `You died near there — fast travel there opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. You can still go on foot.`), true));
   if (msg.kind === 'contact') {
     if (!p.discovered.includes(msg.id)) return toast(p, 'Discover that Contact on foot first');
     const c = nth(map.contacts, msg.id);
@@ -3734,6 +3957,7 @@ function extractSite(p) {
   let best = null, bd = EXTRACT.callRange;
   for (const c of map.contacts) { const d = Math.hypot(c.x - p.x, c.z - p.z); if (d < bd) { bd = d; best = { x: c.x, z: c.z, name: c.name.replace(/ Contact$/, '') }; } }
   for (const l of map.landingZones) { const d = Math.hypot(l.x - p.x, l.z - p.z); if (d < bd) { bd = d; best = { x: l.x, z: l.z, name: l.name }; } }
+  if (hotZone?.open && hotZone.extract) { const e = hotZone.extract, d = Math.hypot(e.x - p.x, e.z - p.z); if (d < bd) { bd = d; best = { x: e.x, z: e.z, name: `the ${hotZone.name} hot-zone pickup` }; } }
   return best;
 }
 const FLARE = ACTIVITIES.rescueFlare, TAXI = ACTIVITIES.airTaxi, TAXI_WAIT_MS = Number(process.env.TAXI_WAIT_MS || TAXI.waitMs);
@@ -3762,6 +3986,8 @@ function taxiAction(p, msg) {
   if (taxis.has(p.token)) return toast(p, 'Your helicopter is already on its way: stay on the pad');
   if (now - (p.lastHit || 0) < 10_000) return toast(p, 'The pilot won\'t land in a firefight');
   if (hasCargo(p)) return toast(p, 'No freight on the helicopter');
+  if (hasHot(p)) return toast(p, 'The taxi won\'t carry hot loot: extract it (extraction point, rescue flare) or walk it home');
+  if (hotZone?.open && Math.hypot(here.x - hotZone.x, here.z - hotZone.z) < HZ.keepOutM) return toast(p, `The pilot won't land this close to the ${hotZone.name} hot zone`);
   if ((p.taxiReadyAt || 0) > now) return toast(p, `Pilot refuelling: ${Math.ceil((p.taxiReadyAt - now) / 1000)}s`);
   const fare = taxiFare(here, to);
   if ((p.cash || 0) < fare) return toast(p, `The fare to ${to.name} is $${fare}. You have $${p.cash || 0}`);
@@ -3772,17 +3998,24 @@ const COMPASS = ['east', 'southeast', 'south', 'southwest', 'west', 'northwest',
 /** A random open spot some way out from a stop: dry, outdoors, in the county, clear of strangers. */
 function taxiDrop(to, riders) {
   const strangers = [...players.values()].filter((o) => !o.dead && !o.deploying && !riders.some((r) => r === o || sameSquad(r, o)));
+  // Never within a mile of a hot zone: a stop that close is swapped for a spot a mile out on its side.
+  let cx = to.x, cz = to.z;
+  if (hotZone && Math.hypot(to.x - hotZone.x, to.z - hotZone.z) < HZ.keepOutM + TAXI.dropMax) {
+    const a = Math.atan2(to.z - hotZone.z, to.x - hotZone.x) || 0;
+    cx = hotZone.x + Math.cos(a) * (HZ.keepOutM + TAXI.dropMax + 20); cz = hotZone.z + Math.sin(a) * (HZ.keepOutM + TAXI.dropMax + 20);
+  }
   for (let tries = 0; tries < 80; tries++) {
     const a = Math.random() * Math.PI * 2, r = TAXI.dropMin + Math.random() * (TAXI.dropMax - TAXI.dropMin);
-    const x = to.x + Math.cos(a) * r, z = to.z + Math.sin(a) * r;
+    const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+    if (nearHotZone(x, z)) continue;
     if (Math.abs(x) > map.half - 60 || Math.abs(z) > map.half - 60) continue;
     if (terrain.height(x, z) < 0.6 || buildingAt(x, z) >= 0) continue;
     if (strangers.some((o) => Math.hypot(o.x - x, o.z - z) < TAXI.keepClear)) continue;
     const fixed = resolveCircle(x, z, PLAYER_RADIUS * 3, solidsNear(x, z, 5), terrain.height(x, z));
     if (Math.hypot(fixed.x - x, fixed.z - z) > 0.3) continue;
-    return { x, z, dist: r, dir: COMPASS[((Math.round(Math.atan2(z - to.z, x - to.x) / (Math.PI / 4)) % 8) + 8) % 8] };
+    return { x, z, dist: Math.hypot(x - to.x, z - to.z), dir: COMPASS[((Math.round(Math.atan2(z - to.z, x - to.x) / (Math.PI / 4)) % 8) + 8) % 8] };
   }
-  const near = landingSpot(to.x, to.z, 40) || { x: to.x + 3, z: to.z + 3 };
+  const near = landingSpot(cx, cz, 40) || { x: cx + 3, z: cz + 3 };
   return { ...near, dist: 0, dir: '' };
 }
 function tickTaxis(now) {
@@ -3870,6 +4103,7 @@ function tickExtractions(now) {
       o.protectedUntil = now + 5000;
       o.extractReadyAt = now + EXTRACT.cooldownMs;
       award(o, EXTRACT.xp, 'Extracted');
+      if (hasHot(o)) coolHot(o, 'by helicopter');
       send(o.ws, { t: 'extracted', from: e.site });
       dirty(o);
     }
@@ -3926,6 +4160,7 @@ function handleJoin(ws, msg) {
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
+  send(ws, { t: 'hotzone', zone: hotZoneView() });
   send(ws, { t: 'worldEvents', list: [...worldEvents.values()].map(eventView) });
   if (db.characters[token]?.awayLog?.length) { send(ws, { t: 'awayLog', entries: db.characters[token].awayLog }); db.characters[token].awayLog = []; }
   // Contracts whose targets were finished while offline pay out now.
@@ -4269,7 +4504,7 @@ const loop = setInterval(() => {
   for (const p of players.values()) if (p.hop) { p.hop.vy -= JUMP_G * dt; p.hop.alt += p.hop.vy * dt; if (p.hop.alt <= 0 || p.dead || p.downed || p.boat || p.air) p.hop = null; }
   updateBots(dt, now);
   tickHacks(now);
-  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); }
+  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); }
   tickStuns(now);
   tickEvents(now, dt);
   if (tick % 4 === 0) tickDefenses(now);

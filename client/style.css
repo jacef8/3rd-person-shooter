@@ -727,3 +727,9 @@ body.scoped #tloot, body.scoped #prompt { display: none; }
 #prompt kbd.tk svg { width: 15px; height: 15px; }
 /* Phones: the prompt sits just above the weapon strip and grows upward, so it never runs behind it. */
 body.touchui #prompt { top: auto; bottom: calc(76px + env(safe-area-inset-bottom)); }
+
+/* Hot zone: the HUD line, and hot loot in the bag. */
+#tracker .hotc { color: #ffb08a; font-weight: 700; }
+#tracker .hotc.carry { color: #ff7a4d; }
+.irow.hot { border-color: rgba(255, 90, 31, 0.6); }
+.hottag { display: inline-block; padding: 1px 6px; margin-right: 4px; border-radius: 6px; background: #ff5a1f; color: #111; font: 800 11px/1.4 var(--font-text); letter-spacing: 0.06em; vertical-align: middle; }
