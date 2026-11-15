@@ -5,6 +5,7 @@
 //        and trees out to about a mile. main.js draws the far scene first and the near world over
 //        it (the depth buffer is cleared in between), so the two can never fight over depth.
 import * as THREE from 'three';
+import { mergeGeometries } from '/addons/utils/BufferGeometryUtils.js';
 import { coverColor } from './mapview.js';
 
 const CHUNK = 160;
@@ -191,25 +192,47 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   const metalMat = new THREE.MeshStandardMaterial({ map: metalTexture(), vertexColors: true, roughness: 0.6, metalness: 0.25 });
   const plainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
   const roofMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide });
-  const trunkGeo = new THREE.CylinderGeometry(0.25, 0.35, 1, 6);
+  const trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 1, 9);
   trunkGeo.translate(0, 0.5, 0);
-  const crownGeo = new THREE.ConeGeometry(1, 1, 7);
-  crownGeo.translate(0, 0.5, 0);
+  // Crowns: a broadleaf is a few overlapping rounded clumps; a pine is three stacked tiers. Unit-sized,
+  // scaled per tree like before (crown base at 0, top at 1).
+  const blob = (r, x, y, z) => new THREE.IcosahedronGeometry(r, 1).translate(x, y, z);
+  const crownGeo = mergeGeometries([blob(0.62, 0, 0.45, 0), blob(0.48, 0.36, 0.36, 0.1), blob(0.46, -0.3, 0.4, -0.18), blob(0.42, 0.05, 0.72, -0.05), blob(0.4, -0.08, 0.3, 0.38)]);
+  const tier = (r, y0, h) => new THREE.ConeGeometry(r, h, 10).translate(0, y0 + h / 2, 0);
+  const pineGeo = mergeGeometries([tier(1, 0, 0.5), tier(0.78, 0.3, 0.45), tier(0.52, 0.58, 0.42)]);
   const farCrownGeo = new THREE.ConeGeometry(1, 1, 5, 1, true);
   farCrownGeo.translate(0, 0.5, 0);
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
-  const crownMat = new THREE.MeshStandardMaterial({ color: 0x2f5129, roughness: 1 });
-  const pineMat = new THREE.MeshStandardMaterial({ color: 0x1f3a24, roughness: 1 });
+  const crownMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });   // colour per tree (instance colours)
+  const pineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
+  const LEAF = [0x3b6532, 0x467236, 0x3f6a33, 0x4f7a38, 0x37602f], NEEDLE = [0x27482c, 0x2d5132, 0x24432a, 0x325836];
   const waterMat = new THREE.MeshStandardMaterial({ color: 0x2f6b8a, transparent: true, opacity: 0.82, roughness: 0.15, metalness: 0.1 });
   const waterGeo = new THREE.PlaneGeometry(CHUNK, CHUNK);
   waterGeo.rotateX(-Math.PI / 2);
-  const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
+  // The ground: smooth shading, and fine colour variation worked out per pixel from where it is (patches
+  // of lighter and darker grass, soil showing through) so it reads as ground, not flat-coloured tiles.
+  const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 });
+  terrainMat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vWorldP;
+float dzHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(dzHash(i), dzHash(i + vec2(1, 0)), f.x), mix(dzHash(i + vec2(0, 1)), dzHash(i + vec2(1, 1)), f.x), f.y); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+{ vec2 q = vWorldP.xz;
+  float big = dzNoise(q * 0.035) * 0.6 + dzNoise(q * 0.11) * 0.4;     // patches across a field
+  float fine = dzNoise(q * 1.7) * 0.5 + dzNoise(q * 5.3) * 0.5;      // grass and grit underfoot
+  diffuseColor.rgb *= 0.84 + big * 0.26 + (fine - 0.5) * 0.12;
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 0.98, 0.86), smoothstep(0.62, 0.8, big) * 0.5); }`);
+  };
   const canopyGeo = new THREE.IcosahedronGeometry(1, 1);
   const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2d4f25, roughness: 1, flatShading: true });
   const tankGeo = new THREE.CylinderGeometry(1, 1, 1, 20);
   tankGeo.translate(0, 0.5, 0);
   const tankMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, roughness: 0.6, metalness: 0.2 });
-  const shared = new Set([trunkGeo, crownGeo, farCrownGeo, canopyGeo, waterGeo, tankGeo]);
+  const shared = new Set([trunkGeo, crownGeo, pineGeo, farCrownGeo, canopyGeo, waterGeo, tankGeo]);
   // Power line wires, strung between the real towers and poles with a little sag.
   if (map.powerLines?.length) {
     const pos = [];
@@ -593,7 +616,9 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
     const forest = (list, crownMaterial, wide) => {
       if (!list.length) return;
       const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, list.length);
-      const crowns = new THREE.InstancedMesh(crownGeo, crownMaterial, list.length);
+      const crowns = new THREE.InstancedMesh(crownMaterial === pineMat ? pineGeo : crownGeo, crownMaterial, list.length);
+      const tint = new THREE.Color(), palette = crownMaterial === pineMat ? NEEDLE : LEAF;
+      list.forEach((t, i) => crowns.setColorAt(i, tint.setHex(palette[t.id % palette.length])));
       const m = new THREE.Matrix4();
       list.forEach((t, i) => {
         const x = (t.minX + t.maxX) / 2, z = (t.minZ + t.maxZ) / 2, y = t.y0 || 0, h = t.h;

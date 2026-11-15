@@ -4063,6 +4063,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const TLS = process.env.TLS_CERT && process.env.TLS_KEY ? { cert: fs.readFileSync(process.env.TLS_CERT), key: fs.readFileSync(process.env.TLS_KEY) } : null;
 const STATIC = [
   ['/vendor/', path.join(ROOT, 'node_modules', 'three', 'build')],
+  ['/addons/', path.join(ROOT, 'node_modules', 'three', 'examples', 'jsm')],
   ['/fonts/', path.join(ROOT, 'node_modules', '@fontsource', 'archivo', 'files')],
   ['/fonts/', path.join(ROOT, 'node_modules', '@fontsource', 'atkinson-hyperlegible', 'files')],
   ['/shared/', path.join(ROOT, 'shared')],

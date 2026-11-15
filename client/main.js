@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from '/addons/geometries/RoundedBoxGeometry.js';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, JUMP_V, JUMP_G } from '/shared/world.js';
@@ -554,7 +555,8 @@ function boatHud() {
 // the vest colour says who they are (you blue, other players rust, rogues dark with a red visor band,
 // contacts teal). Parts hang from joints so the walk, crouch, seat and prone poses can bend them.
 const CHAR_GEO = new Map(), CHAR_MAT = new Map();
-const cbox = (w, h, d) => { const k = `${w},${h},${d}`; if (!CHAR_GEO.has(k)) CHAR_GEO.set(k, new THREE.BoxGeometry(w, h, d)); return CHAR_GEO.get(k); };
+// Character parts are rounded boxes, smoothly shaded: bodies, not blocks.
+const cbox = (w, h, d) => { const k = `${w},${h},${d}`; if (!CHAR_GEO.has(k)) CHAR_GEO.set(k, new RoundedBoxGeometry(w, h, d, 3, Math.min(w, h, d) * 0.42)); return CHAR_GEO.get(k); };
 const cmat = (color, basic = false) => { const k = `${color}${basic ? 'b' : ''}`; if (!CHAR_MAT.has(k)) CHAR_MAT.set(k, basic ? new THREE.MeshBasicMaterial({ color }) : new THREE.MeshStandardMaterial({ color, roughness: 0.85 })); return CHAR_MAT.get(k); };
 const SKIN = [0xf1c8a5, 0xd9a47c, 0xb57c55, 0x8d5a3b, 0x5f3b26];
 const JACKET = [0x4f5a3a, 0x6b5a41, 0x3e4a55, 0x5b3f33, 0x6f6a5c, 0x394236, 0x7a6248];
@@ -662,9 +664,20 @@ function setCharacterGun(g, gun) {
   if (gun) g.userData.gun.add(buildGunModel(gun));
 }
 
+/** A player as they were 110 ms ago, between the two updates either side: smooth, at the cost of a blink of delay. */
+const SMOOTH_MS = 110;
+function smoothed(r) {
+  const b = r.buf, t = performance.now() - SMOOTH_MS;
+  if (!b || b.length < 2 || t >= b[b.length - 1].t) return r.data;
+  let i = b.length - 2;
+  while (i > 0 && b[i].t > t) i--;
+  const a = b[i], c = b[i + 1], f = Math.max(0, Math.min(1, (t - a.t) / Math.max(1, c.t - a.t)));
+  let dy = c.yaw - a.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+  return { ...r.data, x: a.x + (c.x - a.x) * f, z: a.z + (c.z - a.z) * f, yaw: a.yaw + dy * f, alt: (a.alt || 0) + ((c.alt || 0) - (a.alt || 0)) * f, smooth: 1 };
+}
 function updateCharacterMesh(g, c, dt) {
-  // Interpolate toward the latest snapshot.
-  const k = Math.min(1, dt * 12);
+  // Interpolate toward the latest snapshot (already smoothed for other players: follow it exactly).
+  const k = c.smooth ? 1 : Math.min(1, dt * 12);
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
   g.position.y = c.boat ? 0.15 : (c.y ?? ground(g.position.x, g.position.z)) + (c.alt || 0);
@@ -1137,6 +1150,8 @@ function handle(m) {
         let rec = state.players.get(p.id);
         if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, ground(p.x, p.z), p.z); state.players.set(p.id, rec); }
         rec.data = p;
+        (rec.buf ??= []).push({ t: performance.now(), x: p.x, z: p.z, yaw: p.yaw, alt: p.alt || 0, y: p.y });
+        if (rec.buf.length > 12) rec.buf.shift();
         setCharacterGun(rec.mesh, p.gun);
         setCharacterStowed(rec.mesh, p.stowed);
         setLabel(rec.mesh.userData.label, `${p.sq ? '◆ ' : ''}${p.name}  [${p.level}]${p.sh ? ' 🛡' : ''}${p.hacking ? '  ⌁ hacking' : ''}`, p.sq ? '#7dff9a' : '#ffb27a');
@@ -3789,11 +3804,17 @@ function frame(now) {
         sfx.step(gh < 0.2 ? 'water' : onRoad ? 'road' : 'grass', state.crouch);
       }
     }
-    if (len > 0.05 && !stunnedNow) {
-      if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
-      const p = moveWithCollision(state.x, state.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, myY(), state.hop ? state.hop.alt : 0);
+    // Momentum: you reach full speed in about a tenth of a second and slide a step when you let go,
+    // instead of starting and stopping dead.
+    if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
+    const want = len > 0.05 && !stunnedNow ? [mx * speed, mz * speed] : [0, 0];
+    const v = state.vel || (state.vel = [0, 0]), rate = Math.min(1, dt * (len > 0.05 ? 11 : 9));
+    v[0] += (want[0] - v[0]) * rate; v[1] += (want[1] - v[1]) * rate;
+    if (Math.hypot(v[0], v[1]) > 0.05) {
+      const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, myY(), state.hop ? state.hop.alt : 0);
+      if (dt > 0 && Math.hypot(p.x - state.x - v[0] * dt, p.z - state.z - v[1] * dt) > 0.01) { v[0] = (p.x - state.x) / dt; v[1] = (p.z - state.z) / dt; }   // walked into something: keep only the slide along it
       state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
-    }
+    } else { v[0] = 0; v[1] = 0; }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
     else if (state.mouseDown && !me.downed && !stunnedNow) tryFire(now); else state.firedThisPress = false;
   }
@@ -3819,7 +3840,7 @@ function frame(now) {
   updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
-  for (const [, r] of state.players) updateCharacterMesh(r.mesh, r.data, dt);
+  for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
   for (const [, r] of state.bots) {
     if (!r.animal) { updateCharacterMesh(r.mesh, r.data, dt); continue; }
     // Wildlife: glide toward the latest position and face where it's going.
@@ -3845,14 +3866,19 @@ function frame(now) {
   toCam.normalize();
   const hit = rayAgainstBoxes(pivot.x, pivot.y, pivot.z, toCam.x, toCam.y, toCam.z, solidsNear(pivot.x, pivot.z, tl + 1), tl);
   const camDist = Math.max(0.3, Math.min(tl, hit.t - 0.25));
-  camera.position.copy(pivot).addScaledVector(toCam, camDist);
+  // Ease the camera out to its distance (walls still pull it in at once, so it never clips through).
+  state.camDist = aim ? camDist : Math.min(camDist, (state.camDist ?? camDist) + (camDist - (state.camDist ?? camDist)) * Math.min(1, dt * 8));
+  camera.position.copy(pivot).addScaledVector(toCam, state.camDist);
+  // A soft lag on the pivot itself, so the view glides behind you instead of being bolted on.
+  if (!aim && state.camLag && camera.position.distanceTo(state.camLag) < 3) camera.position.lerp(state.camLag, Math.max(0, 1 - dt * 22));
+  state.camLag = camera.position.clone();
   const camGround = Math.max(ground(camera.position.x, camera.position.z), 0);
   if (camera.position.y < camGround + 0.4) camera.position.y = camGround + 0.4;
   camera.lookAt(camera.position.clone().add(d));
   sfx.setListener(camera.position.x, camera.position.y, camera.position.z, state.yaw);
   // Optic zoom sets ADS field of view; handling sets how fast you get there.
   const ws = me && weaponStats(me.inv[me.active]);
-  const fov = aim && ws ? 70 / Math.max(1.4, ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : 70;
+  const fov = aim && ws ? 70 / Math.max(1.4, ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : state.sprint ? 76 : 70;   // a touch wider at a sprint
   updateSight(aim ? ws : null, now);
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
