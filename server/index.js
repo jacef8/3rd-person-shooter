@@ -2294,8 +2294,8 @@ function tickHacks(now) {
       hv.uses++;
       if (hv.uses >= BUILD.harvest.uses) {
         hv.regrowAt = now + Number(process.env.HARVEST_REGROW_MS || BUILD.harvest.regrowMs);
-        // A tree with nothing left comes down to a stump for everyone until it grows back.
-        if (h.box && (h.box.type === 'tree' || h.box.type === 'pine')) { hv.box = h.box; h.box.gone = 1; map.felled.add(h.box.id); broadcast({ t: 'felled', id: h.box.id, on: 1 }); }
+        // A tree with nothing left comes down to a stump (a rock crumbles to rubble) for everyone until it's back.
+        if (h.box && h.box.nature && ['tree', 'pine', 'rock', 'boulder'].includes(h.box.type)) { hv.box = h.box; h.box.gone = 1; map.felled.add(h.box.id); broadcast({ t: 'felled', id: h.box.id, on: 1 }); }
       }
       harvested.set(h.id, hv);
       const n = BUILD.harvest[h.res];

@@ -530,9 +530,17 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
 
   // Each drawn tree's place in its chunk's instanced meshes, so one can be cut to a stump (or regrow) in place.
   const treeSlots = new WeakMap(), tm = new THREE.Matrix4();
+  const rockGeo = new THREE.DodecahedronGeometry(0.62, 0), rockMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
   function setTreeMatrix(t) {
     const sl = treeSlots.get(t);
     if (!sl) return;
+    if (sl.rock) {   // a stone, or when mined out a low spread of rubble
+      const { rock, i, x, y, z, w, d, h } = sl;
+      if (t.gone) tm.makeScale(w * 1.25, 0.3, d * 1.25).setPosition(x, y + 0.35, z);
+      else tm.makeScale(w, h, d).setPosition(x, y + h / 2, z);
+      rock.setMatrixAt(i, tm); rock.instanceMatrix.needsUpdate = true;
+      return;
+    }
     const { trunks, crowns, i, x, y, z, h, w } = sl;
     if (t.gone) {   // a stump knee-high, and no crown
       tm.makeScale(1.15, 0.55, 1.15).setPosition(x, y + 0.3, z); trunks.setMatrixAt(i, tm);
@@ -547,10 +555,11 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
     const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), plain = newBuf(false), roof = newBuf(false);
-    const trees = [], pines = [], canopies = [], tanks = [];
+    const trees = [], pines = [], canopies = [], tanks = [], rocks = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
       if (b.type === 'tree') { trees.push(b); continue; }
+      if (b.nature && (b.type === 'rock' || b.type === 'boulder')) { rocks.push(b); continue; }
       if (b.type === 'pine') { pines.push(b); continue; }
       if (b.type === 'canopy') { canopies.push(b); continue; }
       if (b.type === 'tank') { tanks.push(b); continue; }
@@ -595,6 +604,13 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
       trunks.castShadow = crowns.castShadow = !mobile;
       group.add(trunks, crowns);
     };
+    // Rocks you can mine: chunky stones, one batch per chunk, so a mined-out one can crumble in place.
+    if (rocks.length) {
+      const im = new THREE.InstancedMesh(rockGeo, rockMat, rocks.length);
+      rocks.forEach((r, i) => { im.setColorAt(i, new THREE.Color(...(r.type === 'boulder' ? COLORS.boulder : COLORS.rock))); treeSlots.set(r, { rock: im, i, x: (r.minX + r.maxX) / 2, y: r.y0 || 0, z: (r.minZ + r.maxZ) / 2, w: r.maxX - r.minX, d: r.maxZ - r.minZ, h: r.h }); setTreeMatrix(r); });
+      im.castShadow = true; im.receiveShadow = true;
+      group.add(im);
+    }
     forest(trees, crownMat, 2.2);
     forest(pines, pineMat, 1.4);
     for (const t of tanks) {   // water tower tanks and storage tanks are round

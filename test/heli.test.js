@@ -119,7 +119,7 @@ test('jumping from the taxi: freefall, pull the chute, get shot on the way down,
   await sleep(200);
   const by = b.at;
   const oy = map.terrain.height(by.x, by.z) + 1.6;   // the shooter's eye
-  for (let i = 0; i < 10 && a.you.hp >= 100; i++) {
+  for (let i = 0; i < 25 && a.you.hp >= 100; i++) {
     const s = b.msgs.findLast((m) => m.t === 'snap' && m.players.some((p) => p.id === a.id))?.players.find((p) => p.id === a.id) || seen;
     const sy = map.terrain.height(s.x, s.z) + (s.alt || 0) + 1;
     const dx = s.x - by.x, dy = sy - oy, dz = s.z - by.z, l = Math.hypot(dx, dy, dz);

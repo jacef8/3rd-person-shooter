@@ -81,3 +81,39 @@ test('a tree chopped out comes down to a stump for everyone, and grows back', as
   await until(() => b.msgs.find((m) => m.t === 'felled' && m.on === 0 && m.id === tree.id), 10000);
   c.close();
 });
+
+test('a rock mined out crumbles to rubble for everyone', async (t) => {
+  let rock = null;
+  for (const c of map.campSites.slice(0, 120)) {
+    for (const b of map.grid.near(c.x, c.z, 150)) {
+      if (b.type !== 'rock' && b.type !== 'boulder') continue;
+      const sx = b.maxX + 1.2, sz = (b.minZ + b.maxZ) / 2;
+      if (map.terrain.height(sx, sz) < 1 || map.grid.near(sx, sz, 3).some((o) => o !== b)) continue;
+      rock = b; break;
+    }
+    if (rock) break;
+  }
+  assert.ok(rock, 'found a lone rock');
+  const A = 'f4'.repeat(16), sx = rock.maxX + 1.2, sz = (rock.minZ + rock.maxZ) / 2;
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzrock-')), 'w.json');
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Miner', x: sx, z: sz, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [{ id: 'tp', kind: 'tool', tool: 'pickaxe', name: 'pickaxe' }] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), cash: 50, comms: 0, food: 90, field: [], discovered: [], contracts: [], stone: 0 } } }));
+  const port = 30850 + Math.floor(Math.random() * 100);
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => proc.kill('SIGKILL'));
+  await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));
+  const ws = new WebSocket(`ws://localhost:${port}`);
+  const msgs = [];
+  let you = null;
+  ws.on('message', (raw) => { const m = JSON.parse(raw); msgs.push(m); if (m.t === 'you') you = m; });
+  await new Promise((r) => ws.on('open', r));
+  ws.send(JSON.stringify({ t: 'join', name: 'Miner', token: A }));
+  await until(() => you && !you.dead);
+  for (let i = 0; i < BUILD.harvest.uses; i++) {
+    const st = you.stone;
+    ws.send(JSON.stringify({ t: 'interact' }));
+    await until(() => you.stone === st + BUILD.harvest.stone);
+  }
+  const fell = await until(() => msgs.find((m) => m.t === 'felled' && m.on === 1));
+  assert.equal(fell.id, rock.id);
+  ws.close();
+});
