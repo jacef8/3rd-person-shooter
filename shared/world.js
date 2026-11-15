@@ -21,9 +21,9 @@ export const CROUCH_EYE = 1.05;
 export const PRONE_EYE = 0.45;
 export const PRONE_HEIGHT = 0.6;
 export const PRONE_SPEED = 1.3;
-export const WALK_SPEED = 4.5;
-export const SPRINT_SPEED = 7.0;
-export const CROUCH_SPEED = 2.4;
+export const WALK_SPEED = 5.4;
+export const SPRINT_SPEED = 8.6;
+export const CROUCH_SPEED = 2.9;
 export const INTERACT_RANGE = 2.4;
 
 export function mulberry32(seed) {

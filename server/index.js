@@ -2824,6 +2824,7 @@ function applyDamage(target, amount, attacker, isBot, headshot = false, ammo = n
   if (target.animal) { target.hurtUntil = Date.now() + 6000; target.lastAttacker = attacker; }
   if (target.eventId && attacker && !attacker.isBot) worldEvents.get(target.eventId)?.hitters.add(attacker.token);
   if (!isBot) { breakCamo(target, 3000); dirty(target); }
+  if (isBot && !target.animal && !target.npc && !target.dog && attacker && !attacker.isBot) botProvoked(target, attacker);
   if (target.hp <= 0) { target.hp = 0; if (isBot) killBot(target, attacker, headshot); else if (canGoDown(target)) goDown(target, attacker, headshot); else killPlayer(target, attacker, headshot); }
 }
 function dropBag(x, z, items, res = {}, label = 'Bag') {
@@ -3040,7 +3041,7 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1, opts = {}) {
       if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2] });
     }
   }
-  if (!isBot) { breakCamo(shooter, 2000); shooter.protectedUntil = 0; }
+  if (!isBot) { breakCamo(shooter, 2000); shooter.protectedUntil = 0; botsHear(shooter, s.suppressed ? (s.subsonic ? 8 : 22) : 70); }
   const msg = JSON.stringify({ t: 'shot', from: shooter.id, sup: s.suppressed ? (s.subsonic ? 2 : 1) : 0, o: [+ox.toFixed(2), +oy.toFixed(2), +oz.toFixed(2)], hits: tracers });
   for (const p of players.values()) if (p.ws.readyState === 1 && Math.abs(p.x - ox) < INTEREST && Math.abs(p.z - oz) < INTEREST) p.ws.send(msg);
 }
@@ -3161,6 +3162,27 @@ function manageAmbientBots() {
   }
 }
 
+// ---- Rogues react: shot at, they turn on the shooter (from any range they can reach) and call the
+// squad nearby; a shot they hear brings them to look. In a fight they strafe, close in or back off to
+// a good range, rush the last place they saw you when you break line of sight, and pull back to cover
+// when hurt. They give up after a while and drift home.
+const BOT_AI = { aggroMs: 25_000, callRange: 40, chaseRange: 160, fireRange: 70, bestMin: 9, bestMax: 26, runSpeed: 4.8, walkSpeed: 3.2, flinchMs: 280, hurtBelow: 0.35 };
+const fighter = (b) => !b.dead && !b.animal && !b.npc && !b.dog;
+function botProvoked(b, attacker, call = true) {
+  const now = Date.now();
+  b.aggro = { id: attacker.id, until: now + BOT_AI.aggroMs, x: attacker.x, z: attacker.z };
+  b.flinchUntil = now + BOT_AI.flinchMs;
+  b.nextShot = Math.max(b.nextShot || 0, now + 250);   // a beat to react, not an instant reply
+  if (!call) return;
+  for (const o of bots.values()) if (o !== b && fighter(o) && !o.aggro && Math.hypot(o.x - b.x, o.z - b.z) < BOT_AI.callRange) botProvoked(o, attacker, false);
+}
+function botsHear(shooter, range) {
+  const now = Date.now();
+  for (const b of bots.values()) {
+    if (!fighter(b) || (b.aggro && b.aggro.until > now)) continue;
+    if (Math.hypot(b.x - shooter.x, b.z - shooter.z) < range) b.aggro = { id: shooter.id, until: now + BOT_AI.aggroMs * 0.6, x: shooter.x, z: shooter.z, heard: true };
+  }
+}
 function updateBots(dt, now) {
   const alive = [...players.values()].filter((p) => !p.dead);
   for (const b of bots.values()) {
@@ -3169,25 +3191,51 @@ function updateBots(dt, now) {
     if (b.npc) { if (b.kind !== 'convoy') updateNpc(b, dt, now); continue; }
     if (b.animal) { updateAnimal(b, dt, alive); continue; }
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
-    let best = null, bestD = (b.kind === 'hvt' ? COMBAT.bots.hvt : b.kind === 'guard' ? COMBAT.bots.guard : COMBAT.bots.rogue).sightRange;
+    const sight = (b.kind === 'hvt' ? COMBAT.bots.hvt : b.kind === 'guard' ? COMBAT.bots.guard : COMBAT.bots.rogue).sightRange;
+    const sees = (p) => lineOfSight(b.x, gy(b) + STAND_EYE, b.z, p.x, gy(p) + (p.crouch ? 0.9 : 1.3), p.z);
+    let best = null, bestD = sight;
     for (const p of alive) {
       if (p.downed) continue;   // rogues move on to whoever is still fighting
       const d = Math.hypot(p.x - b.x, p.z - b.z);
       if (d >= bestD) continue;
       if (camoActive(p) && d > 6) continue;
       if ((p.protectedUntil || 0) > now) continue;
-      if (lineOfSight(b.x, gy(b) + STAND_EYE, b.z, p.x, gy(p) + (p.crouch ? 0.9 : 1.3), p.z)) { best = p; bestD = d; }
+      if (sees(p)) { best = p; bestD = d; }
     }
-    let mx = 0, mz = 0;
-    if (best) {
-      b.yaw = Math.atan2(best.x - b.x, best.z - b.z);
-      if (bestD > 14) { mx = Math.sin(b.yaw); mz = Math.cos(b.yaw); }
-      if (now >= b.nextShot) {
-        const dir = [best.x - b.x, gy(best) + (best.crouch ? 0.8 : 1.2) - gy(b) - STAND_EYE, best.z - b.z];
-        fire(b, dir, true, Math.max(0.35, 1.2 - bestD / 30) / (b.kind === 'guard' ? COMBAT.bots.guard.aim : 1));
+    // Whoever shot at us (or whose shot we heard) comes first, from much further away.
+    if (b.aggro && b.aggro.until < now) b.aggro = null;
+    let foe = best;
+    if (b.aggro) {
+      const a = players.get(b.aggro.id);
+      if (!a || a.dead || a.downed || Math.hypot(a.x - b.x, a.z - b.z) > BOT_AI.chaseRange) { if (!a || a.dead) b.aggro = null; }
+      else if (sees(a)) { foe = a; bestD = Math.hypot(a.x - b.x, a.z - b.z); b.aggro.x = a.x; b.aggro.z = a.z; b.aggro.heard = false; b.aggro.until = Math.max(b.aggro.until, now + 8000); }
+    }
+    let mx = 0, mz = 0, speed = BOT_AI.walkSpeed;
+    const hurt = b.hp < b.maxHp * BOT_AI.hurtBelow;
+    if (foe) {
+      b.yaw = Math.atan2(foe.x - b.x, foe.z - b.z);
+      const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
+      // Strafe side to side, switching every second or two.
+      if (!b.strafeAt || now > b.strafeAt) { b.strafe = Math.random() < 0.5 ? -1 : 1; b.strafeAt = now + 900 + Math.random() * 1300; }
+      let fwd = 0;
+      if (hurt) fwd = -0.9;                                   // pull back, still shooting
+      else if (bestD > BOT_AI.bestMax) fwd = 1;               // close in
+      else if (bestD < BOT_AI.bestMin) fwd = -0.7;            // too close: give ground
+      mx = fx * fwd + fz * b.strafe * 0.75; mz = fz * fwd - fx * b.strafe * 0.75;
+      speed = fwd > 0.5 ? BOT_AI.runSpeed : BOT_AI.walkSpeed;
+      b.crouch = hurt || (bestD > 20 && b.serial % 3 === 0);
+      if (now >= b.nextShot && now >= (b.flinchUntil || 0) && bestD < BOT_AI.fireRange) {
+        const dir = [foe.x - b.x, gy(foe) + (foe.crouch ? 0.8 : 1.2) - gy(b) - STAND_EYE, foe.z - b.z];
+        fire(b, dir, true, Math.max(0.3, 1.2 - bestD / 30) * (b.crouch ? 1.15 : 1) / (b.kind === 'guard' ? COMBAT.bots.guard.aim : 1));
         b.burst = (b.burst + 1) % 5;
-        b.nextShot = now + (b.burst === 0 ? 1400 : 60_000 / b.weapon.rpm * 1.3);
+        b.nextShot = now + (b.burst === 0 ? 1100 + Math.random() * 600 : 60_000 / b.weapon.rpm * 1.3);
       }
+    } else if (b.aggro) {
+      // Lost sight (or only heard it): go to where they were last, at a run.
+      const dx = b.aggro.x - b.x, dz = b.aggro.z - b.z, d = Math.hypot(dx, dz);
+      b.crouch = false;
+      if (d > 2) { b.yaw = Math.atan2(dx, dz); mx = dx / d; mz = dz / d; speed = BOT_AI.runSpeed; }
+      else b.aggro.until = Math.min(b.aggro.until, now + 3000);   // nobody here: look about a moment, then give up
     } else {
       const leash = b.kind === 'ambient' ? 30 : b.kind === 'guard' ? HZ.guardLeash : 12;
       if (!b.wander || Math.hypot(b.wander.x - b.x, b.wander.z - b.z) < 1 || Math.random() < 0.003) {
@@ -3195,9 +3243,12 @@ function updateBots(dt, now) {
       }
       b.yaw = Math.atan2(b.wander.x - b.x, b.wander.z - b.z);
       mx = Math.sin(b.yaw) * 0.45; mz = Math.cos(b.yaw) * 0.45;
+      b.crouch = false;
     }
-    const np = moveWithCollision(b.x, b.z, mx * 3.2 * dt, mz * 3.2 * dt, PLAYER_RADIUS, solidsNear(b.x, b.z, 3), terrain);
-    if (Math.hypot(np.x - b.x, np.z - b.z) < 0.001 && (mx || mz)) b.wander = null;
+    const ml = Math.hypot(mx, mz);
+    if (ml > 1) { mx /= ml; mz /= ml; }
+    const np = moveWithCollision(b.x, b.z, mx * speed * dt, mz * speed * dt, PLAYER_RADIUS, solidsNear(b.x, b.z, 3), terrain);
+    if (Math.hypot(np.x - b.x, np.z - b.z) < 0.001 && (mx || mz)) { b.wander = null; b.strafe = -(b.strafe || 1); }
     b.x = np.x; b.z = np.z;
   }
 }
@@ -4652,6 +4703,7 @@ wss.on('connection', (ws) => {
         if (process.env.ALLOW_DEV !== '1') return;
         if (msg.kill) return !p.dead && killPlayer(p, null);
         if (Number.isFinite(msg.damage)) return applyDamage(p, msg.damage, null, false);
+        if (Array.isArray(msg.spawnBots)) { for (const q of msg.spawnBots.slice(0, 6)) if (Number.isFinite(q.x) && Number.isFinite(q.z)) spawnBot(q.x, q.z, 'ambient', { hp: q.hp || 140, maxHp: q.hp || 140 }); return; }
         if (msg.event) { const e = startEvent(msg.event); if (e && Number.isFinite(msg.x)) { e.x = msg.x; e.z = msg.z; } return; }
         if (msg.endEvent) { const e = [...worldEvents.values()].find((x) => x.type === msg.endEvent); if (e) endEvent(e, 'expired'); return; }
         if (typeof msg.giveGun === 'string' && ARCHETYPE_KEYS.includes(msg.giveGun)) { const w = makeWeapon(msg.giveGun); p.inv.pack.push(w); p.mags[w.id] = weaponStats(w).mag; dirty(p); return; }
@@ -4704,7 +4756,7 @@ function snapshotFor(r, views, now) {
   }
   const fast = JSON.stringify({
     t: 'snap', players: 0,
-    bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp, stun: isStunned(b, now) ? 1 : 0 })),
+    bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp, stun: isStunned(b, now) ? 1 : 0, ...(b.crouch ? { crouch: true } : {}) })),
     boats: db.boats.filter((b) => near(b) || (BOATS[b.type].loud && rtOf(b).speed > 1 && Math.hypot(b.x - r.x, b.z - r.z) < BOATS[b.type].loud)).map((b) => ({ id: b.id, type: b.type, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), max: BOATS[b.type].hp, owner: b.ownerName, mine: canUseBoat(r, b) ? 1 : 0, seats: rtOf(b).seats, fast: rtOf(b).speed > 1 ? 1 : 0 })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   });
