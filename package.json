@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server/hub.js",
-    "test": "DEV_KIT=0 node --test test/*.test.js",
+    "test": "DEV_KIT=0 RESPAWN_WAIT_S=0 RESPAWN_KEEPAWAY_M=0 node --test test/*.test.js",
     "start:world": "node server/index.js"
   },
   "engines": {

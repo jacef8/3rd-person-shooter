@@ -1933,6 +1933,7 @@ function mapPing(x, z) {
 function openMapScreen(mode, opts = null) {
   state.mapOpen = true;
   state.mapMode = mode;
+  if (opts) opts.at = performance.now();
   state.deployOpts = opts || state.deployOpts;
   state.mapPick = null; state.mapHover = null;
   $('mapscreen').hidden = false;
@@ -1956,6 +1957,12 @@ function homeLabel(id, icon = false) {
   return `${icon ? HOME_ICONS[h.kind] + ' ' : ''}${HOME_NAMES[h.kind]} near ${near.name}`;
 }
 /** The options the side list shows for the current mode. */
+/** What's still counting down on the redeploy screen (ms), from when the options arrived. */
+function respawnLeft() {
+  const r = state.deployOpts?.respawn, since = performance.now() - (state.deployOpts?.at || 0);
+  if (!r) return { wait: 0, crew: 0, away: 0 };
+  return { wait: Math.max(0, r.waitMs - since), crew: Math.max(0, r.crewWaitMs - since), away: r.away ? Math.max(0, r.away.ms - since) : 0, spot: r.away, radius: r.keepAway, deaths: r.deaths };
+}
 /** Landing zones by the area they're named for ("LZ H (Bristol)" → Bristol), in map order. */
 function lzGroups(ids) {
   const groups = new Map();
@@ -1993,11 +2000,20 @@ function mapOptions() {
     ];
   }
   if (state.mapMode === 'redeploy') {
-    const list = (o.crew || []).map((m) => ({ label: `👥 Deploy with ${m.name}`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' }));
-    if (o.claim) list.push({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' });
-    for (const id of o.contacts || []) list.push({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' });
-    for (const c of o.crates || []) list.push({ label: 'Your stash crate', x: c.x, z: c.z, msg: { t: 'deploy', kind: 'crate', id: c.id }, color: '#c9a36b' });
-    list.push(...lzRows(o.lzs || []));
+    // After a death: a wait first, and nothing near where you died for a while except home.
+    const rs = respawnLeft();
+    const shut = (opt, { home = false, crew = false } = {}) => {
+      if (rs.wait > 0) return Object.assign(opt, { disabled: true, why: `in ${Math.ceil(rs.wait / 1000)}s` });
+      if (crew && rs.crew > 0) return Object.assign(opt, { disabled: true, why: `crew drop again in ${Math.ceil(rs.crew / 60000)} min` });
+      if (!home && rs.away > 0 && Math.hypot(opt.x - rs.spot.x, opt.z - rs.spot.z) < rs.radius) return Object.assign(opt, { disabled: true, why: `too close to where you died · ${Math.ceil(rs.away / 60000)} min` });
+      return opt;
+    };
+    const list = [];
+    if (o.claim) list.push(shut({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' }, { home: true }));
+    for (const m of o.crew || []) list.push(shut({ label: `👥 Deploy with ${m.name}`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' }, { crew: true }));
+    for (const id of o.contacts || []) list.push(shut({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' }));
+    for (const c of o.crates || []) list.push(shut({ label: 'Your stash crate', x: c.x, z: c.z, msg: { t: 'deploy', kind: 'crate', id: c.id }, color: '#c9a36b' }));
+    list.push(shut({ label: '🪂 A random landing zone', x: 1e9, z: 1e9, noMarker: true, msg: { t: 'deploy', kind: 'lz', id: 0 }, color: '#e0e0e0' }));
     return list;
   }
   if (state.mapMode === 'taxi' && state.taxi) {
@@ -2020,14 +2036,18 @@ function renderMapScreen() {
   const titles = { taxi: state.taxi ? `Helicopter from ${state.taxi.fromName}` : 'Helicopter', first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
     first: 'Pick a town, or a landing zone out in the woods. Then find somewhere to call home and plant your claim marker: a house, cave, fish camp, old RV or houseboat, or open ground.',
-    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
+    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. Your stash house is always open; for 5 minutes nothing else within about a mile of where you died is (the red circle). Landing zones are random after a death.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
     taxi: `Pick where to fly. You jump from ${feet(HELI.airTaxi.jump.alt, 50)} over a random spot ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it and steer down by parachute or squirrel suit, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
     view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
-  if (state.mapMode === 'first' || state.mapMode === 'redeploy') $('mapNote').textContent += ' Tap a spot on the map to pick it exactly.';
+  if (state.mapMode === 'first') $('mapNote').textContent += ' Tap a spot on the map to pick it exactly.';
+  if (state.mapMode === 'redeploy') {
+    const rs = respawnLeft();
+    if (rs.wait > 0) $('mapNote').textContent = `Back in ${Math.ceil(rs.wait / 1000)}s${rs.deaths > 1 ? ` — that's ${rs.deaths} deaths in 10 minutes, so the wait is longer` : ''}. ` + $('mapNote').textContent;
+  }
   const list = $('mapList'); list.innerHTML = '';
   const pick = state.mapPick;
   if (pick) {
@@ -2036,13 +2056,15 @@ function renderMapScreen() {
     box.className = 'mappick';
     box.append(Object.assign(document.createElement('div'), { className: 'nm', textContent: pick.label }));
     const go = btn(state.mapMode === 'taxi' ? 'Fly here' : 'Start here', () => { state.mapPick = null; send(pick.msg); if (pick.close) closeMapScreen(); }, '');
+    go.disabled = !!pick.disabled;
     box.append(go, btn('Cancel', () => { state.mapPick = null; renderMapScreen(); }, 'ghost'));
     list.append(box);
   }
   const opts = mapOptions();
   for (const o of opts) {
-    const b = btn(o.label, () => { state.mapPick = null; send(o.msg); if (o.close) closeMapScreen(); });
+    const b = btn(o.why ? `${o.label} — ${o.why}` : o.label, () => { state.mapPick = null; send(o.msg); if (o.close) closeMapScreen(); });
     b.className = 'gsweapon';
+    b.disabled = !!o.disabled;
     b.onmouseenter = () => { state.mapHover = o; drawMapCanvas(); };
     list.append(b);
   }
@@ -2057,6 +2079,15 @@ function renderMapScreen() {
   if (state.mapMode === 'view' || state.mapMode === 'travel' || state.mapMode === 'taxi') list.append(btn('Close', closeMapScreen));
   drawMapCanvas();
 }
+setInterval(() => {
+  if (!state.mapOpen || state.mapMode !== 'redeploy') return;
+  const rs = respawnLeft();
+  if (rs.wait <= 0 && !state.respawnTicking) return;
+  state.respawnTicking = rs.wait > 0;
+  const focus = document.activeElement && $('mapList').contains(document.activeElement) ? [...$('mapList').querySelectorAll('button')].indexOf(document.activeElement) : -1;
+  renderMapScreen();
+  if (focus >= 0) $('mapList').querySelectorAll('button')[focus]?.focus();
+}, 1000);
 function drawMapCanvas() {
   const cv = $('mapcanvas');
   const w = cv.clientWidth, h = cv.clientHeight;
@@ -2065,8 +2096,12 @@ function drawMapCanvas() {
   const dim = new Set(state.me?.discovered || []);
   for (const c of map.contacts) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: dim.has(c.id) ? '#7fd6ff' : '#3a5560', size: 5 });
   const deploying = state.mapMode === 'first' || state.mapMode === 'redeploy';
+  if (state.mapMode === 'redeploy') {
+    const rs = respawnLeft();
+    if (rs.away > 0) { markers.push({ x: rs.spot.x, z: rs.spot.z, kind: 'ring', radius: rs.radius, color: '#ff4d4d' }); markers.push({ x: rs.spot.x, z: rs.spot.z, kind: 'diamond', color: '#ff4d4d', size: 7, label: 'Where you died', labelMin: 0 }); }
+  }
   const lit = new Set(state.mapHover?.group || []);
-  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: deploying ? 6 : 4, highlight: lit.has(lz.id), label: deploying ? lz.name.split(' (')[0] : '', labelMin: 0 });
+  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: state.mapMode === 'first' ? 6 : 4, highlight: lit.has(lz.id), label: state.mapMode === 'first' ? lz.name.split(' (')[0] : '', labelMin: 0 });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
   for (const d of map.docks) markers.push({ x: d.x, z: d.z, color: '#7fd6ff', size: 4, label: d.campId != null ? '' : `⚓ ${d.name}` });

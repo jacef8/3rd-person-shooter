@@ -442,5 +442,15 @@
       "chuteSpeed": 9,
       "autoChute": 55
     }
+  },
+  "respawn": {
+    "_about": "Coming back after you die. You wait waitS, plus perDeathS for each other death in the last streakMin minutes (up to maxWaitS). For keepAwayMin minutes nothing within keepAwayM of where you died is open, except your own stash house: not Contacts, crates, crewmates, landing zones, or fast travel from home. Landing zones after a death are random. Dropping in on a crewmate works once every crewEveryMin minutes.",
+    "waitS": 10,
+    "perDeathS": 20,
+    "maxWaitS": 120,
+    "streakMin": 10,
+    "keepAwayM": 1500,
+    "keepAwayMin": 5,
+    "crewEveryMin": 5
   }
 }

@@ -415,7 +415,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', ...RESOURCES];
+const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -2441,7 +2441,26 @@ function markAssist(target, killer) {
  * Death: everything you carry (gear, ammo, parts, tech, salvage, intel) drops in a bag where you fell.
  * You keep your level, unlocks, commendations, field gear and everything in your stash house.
  */
+// ---------------------------------------------------------------- coming back after a death
+const RESPAWN = { ...ACTIVITIES.respawn };
+if (process.env.RESPAWN_WAIT_S) RESPAWN.waitS = RESPAWN.perDeathS = Number(process.env.RESPAWN_WAIT_S);
+if (process.env.RESPAWN_KEEPAWAY_M) RESPAWN.keepAwayM = Number(process.env.RESPAWN_KEEPAWAY_M);
+/** When you can come back, and the circle round where you died that's closed for now. */
+function respawnRules(p, now = Date.now()) {
+  const recent = (p.deaths || []).filter((t) => now - t < RESPAWN.streakMin * 60_000);
+  const wait = Math.min(RESPAWN.maxWaitS, RESPAWN.waitS + RESPAWN.perDeathS * Math.max(0, recent.length - 1));
+  const away = p.deathSpot && now - p.deathSpot.t < RESPAWN.keepAwayMin * 60_000 && RESPAWN.keepAwayM > 0 ? p.deathSpot : null;
+  return { readyAt: (p.diedAt || 0) + wait * 1000, away, deaths: recent.length, crewAt: (p.crewDropAt || 0) + RESPAWN.crewEveryMin * 60_000 };
+}
+const nearDeath = (r, x, z) => !!r.away && Math.hypot(x - r.away.x, z - r.away.z) < RESPAWN.keepAwayM;
+const minsLeft = (ms) => `${Math.max(1, Math.ceil(ms / 60_000))} min`;
 function killPlayer(p, attacker, headshotKill) {
+  {
+    const now = Date.now();
+    p.deaths = [...(p.deaths || []).filter((t) => now - t < RESPAWN.streakMin * 60_000), now];
+    p.diedAt = now;
+    p.deathSpot = { x: Math.round(p.x), z: Math.round(p.z), t: now };
+  }
   if (p.air) { p.air = null; send(p.ws, { t: 'air', mode: null }); }
   if (p.boat) unseat(p);
   p.dead = true;
@@ -3547,6 +3566,11 @@ function deployOptions(p) {
     lzs: map.landingZones.map((l) => l.id),
     crew: squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.downed && !m.deploying).map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z) })),
     crates: [...structs.values()].filter((st) => st.owner === p.token && PIECES[st.type].container).map((st) => ({ id: st.id, x: st.x, z: st.z })),
+    respawn: (() => {
+      if (p.deploying) return null;
+      const now = Date.now(), r = respawnRules(p, now);
+      return { waitMs: Math.max(0, r.readyAt - now), deaths: r.deaths, keepAway: RESPAWN.keepAwayM, away: r.away ? { x: r.away.x, z: r.away.z, ms: r.away.t + RESPAWN.keepAwayMin * 60_000 - now } : null, crewWaitMs: Math.max(0, r.crewAt - now) };
+    })(),
   };
 }
 function placeAt(p, x, z) {
@@ -3560,6 +3584,8 @@ function placeAt(p, x, z) {
 function handleDeploy(p, msg) {
   if (!p.dead && !p.deploying) return;
   const claim = claimOf(p);
+  const now = Date.now(), rules = p.deploying ? null : respawnRules(p, now);
+  if (rules && now < rules.readyAt) return toast(p, `You can redeploy in ${Math.ceil((rules.readyAt - now) / 1000)}s`);
   let at = null;
   if (msg.kind === 'claim') {
     return toast(p, 'Deploy first, then plant your claim marker where you want your stash house');
@@ -3577,15 +3603,20 @@ function handleDeploy(p, msg) {
     if (!st || st.owner !== p.token || !PIECES[st.type].container) return;
     at = { x: st.x, z: st.z + 1.4 };
   } else if (msg.kind === 'lz') {
-    at = nth(map.landingZones, msg.id);
+    // After a death it's a random one, away from where you died; the first time you pick.
+    if (rules) { const ok = map.landingZones.filter((l) => !nearDeath(rules, l.x, l.z)); at = ok[Math.floor(Math.random() * ok.length)]; }
+    else at = nth(map.landingZones, msg.id);
     if (!at) return;
   } else if (msg.kind === 'crew') {
     // Drop in next to a crewmate (not while they're in a firefight).
     const m = players.get(msg.id);
     if (!m || !sameSquad(m, p) || m === p || m.dead || m.downed || m.deploying) return toast(p, 'They can\'t take you right now');
     if (Date.now() - (m.lastHit || 0) < 10_000) return toast(p, `${m.name} is in a fight — try again in a moment`);
+    if (rules && now < rules.crewAt) return toast(p, `You can drop in on your crew again in ${minsLeft(rules.crewAt - now)}`);
     at = { x: m.x + 1.5, z: m.z + 1.5 };
   } else return;
+  if (rules && msg.kind !== 'home' && msg.kind !== 'house' && nearDeath(rules, at.x, at.z)) return toast(p, `Too close to where you died — that opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. Your stash house is open.`);
+  if (rules && msg.kind === 'crew') p.crewDropAt = now;
   if (!p.deploying) {
     const keepIntel = p.intel;
     Object.assign(p, { hp: 100, armor: 0, ...starterLoadout(), food: HOMESTEAD.hunger.start });
@@ -3610,14 +3641,20 @@ function handleTravel(p, msg) {
   if (p.dead || !atOwnStash(p)) return toast(p, 'Fast travel leaves from your stash house');
   if (Date.now() - (p.lastHit || 0) < 10_000) return toast(p, 'Can\'t travel while in combat');
   if (hasCargo(p)) return toast(p, 'You can\'t fast travel with freight');
+  const rules = respawnRules(p), now = Date.now();
+  const closed = (x, z) => nearDeath(rules, x, z) && toast(p, `You died near there — fast travel there opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. You can still go on foot.`);
   if (msg.kind === 'contact') {
     if (!p.discovered.includes(msg.id)) return toast(p, 'Discover that Contact on foot first');
     const c = nth(map.contacts, msg.id);
+    if (!c || closed(c.x, c.z)) return;
     placeAt(p, c.x + 3, c.z + 3);
   } else if (msg.kind === 'squad') {
     const m = players.get(msg.id);
     if (!m || !sameSquad(p, m) || m === p || m.dead) return;
     if (Date.now() - (m.lastHit || 0) < 10_000) return toast(p, `${m.name} is in combat`);
+    if (now < rules.crewAt) return toast(p, `You can join your crew by fast travel again in ${minsLeft(rules.crewAt - now)}`);
+    if (closed(m.x, m.z)) return;
+    p.crewDropAt = now;
     placeAt(p, m.x + 1.5, m.z + 1.5);
   } else return;
   p.protectedUntil = Date.now() + 5000;
