@@ -149,11 +149,13 @@ test('open world loop: deploy, contracts, supply drop, upgrades, fast travel, de
   q.send({ t: 'dev', kill: true });
   const died = await q.got((m) => m.t === 'died');
   assert.equal(died.deploy.houseId, home.id);
-  assert.ok(died.deploy.contacts.length >= 2 && died.deploy.lzs.length >= 9);
+  assert.ok(died.deploy.claim && died.deploy.contacts.length === 0 && died.deploy.lzs.length === 0, 'after a death: home only');
   await until(() => q.you.dead && q.you.salvage === 0);
   assert.equal(q.you.comms, 2, 'commendations are kept on death');
   assert.ok(q.you.field.includes('intSup'), 'field unlocks are kept on death');
   q.send({ t: 'deploy', kind: 'lz', id: 2 });
+  await q.got((m) => m.t === 'toast' && /come back at your stash house/.test(m.text));
+  q.send({ t: 'deploy', kind: 'home' });
   await until(() => !q.you.dead);
   void carried;
   for (const c of [nina, q]) c.ws.close();

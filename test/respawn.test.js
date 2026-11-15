@@ -40,27 +40,35 @@ test('respawn: a growing wait, no coming back near where you died (home excepted
   send({ t: 'join', name: 'Again', token: A });
   await until(() => you && !you.dead);
 
-  // First death, by the Contact: a short wait, and the Contact is closed.
+  // First death, by the Contact: a short wait, then home is the only way back.
   send({ t: 'dev', kill: true });
   const died = await until(() => msgs.find((m) => m.t === 'died'));
   const r1 = died.deploy.respawn;
   assert.ok(r1.waitMs > 1000 && r1.waitMs <= 2000, `first wait ${r1.waitMs}`);
   assert.equal(r1.keepAway, ACT.respawn.keepAwayM);
   assert.ok(Math.hypot(r1.away.x - ct.x, r1.away.z - ct.z) < 10, 'the closed circle is where you died');
+  assert.ok(died.deploy.claim && !died.deploy.contacts.length && !died.deploy.lzs.length && !died.deploy.crew.length, 'home only');
   send({ t: 'deploy', kind: 'home' });
   await toast(/You can redeploy in \ds/);
   await sleep(2100);
-  send({ t: 'deploy', kind: 'contact', id: ct.id });
-  await toast(/Too close to where you died/);
-  assert.ok(you.dead, 'still waiting');
-  // A landing zone: whichever you ask for, it's a random one well away from where you died.
-  const nearLz = map.landingZones.reduce((a, l) => (Math.hypot(l.x - ct.x, l.z - ct.z) < Math.hypot(a.x - ct.x, a.z - ct.z) ? l : a));
-  send({ t: 'deploy', kind: 'lz', id: nearLz.id });
+  for (const m of [{ kind: 'contact', id: ct.id }, { kind: 'lz', id: 0 }]) send({ t: 'deploy', ...m });
+  await toast(/come back at your stash house/);
+  assert.ok(you.dead, 'not back yet');
+  send({ t: 'deploy', kind: 'home' });
   await until(() => !you.dead);
-  await sleep(200);
-  assert.ok(Math.hypot(at.x - ct.x, at.z - ct.z) >= ACT.respawn.keepAwayM - 50, `landed ${Math.round(Math.hypot(at.x - ct.x, at.z - ct.z))} m from where you died`);
+  await sleep(300);
+  assert.ok(Math.hypot(at.x - home.crate.x, at.z - home.crate.z) < 5, 'back at the stash house');
 
-  // Second death within 10 minutes: the wait is longer. Home is open even though it's close by.
+  // Fast travel from home: not back to where you died for a while, but anywhere else.
+  send({ t: 'travel', kind: 'contact', id: ct.id });
+  await toast(/You died near there/);
+  await sleep(200);
+  assert.ok(Math.hypot(at.x - home.crate.x, at.z - home.crate.z) < 5, 'refused: still at home');
+  const far = map.landingZones.find((l) => Math.hypot(l.x - ct.x, l.z - ct.z) > ACT.respawn.keepAwayM + 100);
+  send({ t: 'travel', kind: 'lz', id: far.id });
+  await until(() => Math.hypot(at.x - far.x, at.z - far.z) < 6);
+
+  // Second death within 10 minutes: the wait is longer.
   msgs.length = 0;
   send({ t: 'dev', kill: true });
   const died2 = await until(() => msgs.find((m) => m.t === 'died'));
@@ -69,4 +77,31 @@ test('respawn: a growing wait, no coming back near where you died (home excepted
   await sleep(died2.deploy.respawn.waitMs + 150);
   send({ t: 'deploy', kind: 'home' });
   await until(() => !you.dead);
+});
+
+test('respawn with no stash house yet: a random landing zone away from where you died', async (t) => {
+  const B = 'b8'.repeat(16), ct = map.contacts[0];
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzresp2-')), 'w.json');
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {},
+    characters: { [B]: { name: 'Homeless', x: ct.x + 4, z: ct.z + 4, yaw: 0, hp: 100, armor: 0, inv: { primary: null, primary2: null, secondary: makeWeapon('sidearm'), armor: null, pack: [] }, ammo: 90, mags: {}, active: 'secondary', dead: false, kills: 0, xp: xpForLevel(6), cash: 50, comms: 0, food: 90, field: [], discovered: [ct.id], contracts: [] } } }));
+  const port = 29990 + Math.floor(Math.random() * 9);
+  const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', RESPAWN_WAIT_S: '0', RESPAWN_KEEPAWAY_M: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => proc.kill('SIGKILL'));
+  await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));
+  const ws = new WebSocket(`ws://localhost:${port}`);
+  const msgs = [];
+  let you = null, at = null;
+  ws.on('message', (raw) => { const m = JSON.parse(raw); msgs.push(m); if (m.t === 'you') you = m; if (m.t === 'correct' && m.force) at = m; });
+  await new Promise((r) => ws.on('open', r));
+  const send = (m) => ws.send(JSON.stringify(m));
+  send({ t: 'join', name: 'Homeless', token: B });
+  await until(() => you && !you.dead);
+  send({ t: 'dev', kill: true });
+  const died = await until(() => msgs.find((m) => m.t === 'died'));
+  assert.ok(!died.deploy.claim && died.deploy.lzs.length > 0);
+  const nearLz = map.landingZones.reduce((a, l) => (Math.hypot(l.x - ct.x, l.z - ct.z) < Math.hypot(a.x - ct.x, a.z - ct.z) ? l : a));
+  send({ t: 'deploy', kind: 'lz', id: nearLz.id });   // asks for the closest: gets a random one outside the circle
+  await until(() => !you.dead);
+  await sleep(200);
+  assert.ok(Math.hypot(at.x - ct.x, at.z - ct.z) >= ACT.respawn.keepAwayM - 50, `landed ${Math.round(Math.hypot(at.x - ct.x, at.z - ct.z))} m from where you died`);
 });

@@ -3561,11 +3561,13 @@ function deployOptions(p) {
   return {
     houseId: own,
     claim: c ? { kind: c.kind, id: c.id, x: c.x, z: c.z, name: claimName(c) } : null,
+    // First time in: any town, landing zone or crewmate. After a death: your stash house only (or a
+    // random landing zone if you have none yet); the rest is fast travel from home.
     towns: p.deploying ? map.contacts.map((ct) => ct.id) : [],
-    contacts: p.discovered,
-    lzs: map.landingZones.map((l) => l.id),
-    crew: squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.downed && !m.deploying).map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z) })),
-    crates: [...structs.values()].filter((st) => st.owner === p.token && PIECES[st.type].container).map((st) => ({ id: st.id, x: st.x, z: st.z })),
+    contacts: [],
+    lzs: p.deploying || !c ? map.landingZones.map((l) => l.id) : [],
+    crew: p.deploying ? squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.downed && !m.deploying).map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z) })) : [],
+    crates: [],
     respawn: (() => {
       if (p.deploying) return null;
       const now = Date.now(), r = respawnRules(p, now);
@@ -3586,6 +3588,7 @@ function handleDeploy(p, msg) {
   const claim = claimOf(p);
   const now = Date.now(), rules = p.deploying ? null : respawnRules(p, now);
   if (rules && now < rules.readyAt) return toast(p, `You can redeploy in ${Math.ceil((rules.readyAt - now) / 1000)}s`);
+  if (rules && msg.kind !== 'home' && msg.kind !== 'house' && !(msg.kind === 'lz' && !claim)) return toast(p, claim ? 'After a death you come back at your stash house. From there, fast travel takes you to Contacts, landing zones and your crew.' : 'With no stash house yet you come back at a random landing zone');
   let at = null;
   if (msg.kind === 'claim') {
     return toast(p, 'Deploy first, then plant your claim marker where you want your stash house');
@@ -3642,12 +3645,16 @@ function handleTravel(p, msg) {
   if (Date.now() - (p.lastHit || 0) < 10_000) return toast(p, 'Can\'t travel while in combat');
   if (hasCargo(p)) return toast(p, 'You can\'t fast travel with freight');
   const rules = respawnRules(p), now = Date.now();
-  const closed = (x, z) => nearDeath(rules, x, z) && toast(p, `You died near there — fast travel there opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. You can still go on foot.`);
+  const closed = (x, z) => nearDeath(rules, x, z) && (toast(p, `You died near there — fast travel there opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. You can still go on foot.`), true);
   if (msg.kind === 'contact') {
     if (!p.discovered.includes(msg.id)) return toast(p, 'Discover that Contact on foot first');
     const c = nth(map.contacts, msg.id);
     if (!c || closed(c.x, c.z)) return;
     placeAt(p, c.x + 3, c.z + 3);
+  } else if (msg.kind === 'lz') {
+    const l = nth(map.landingZones, msg.id);
+    if (!l || closed(l.x, l.z)) return;
+    placeAt(p, l.x + 2, l.z + 2);
   } else if (msg.kind === 'squad') {
     const m = players.get(msg.id);
     if (!m || !sameSquad(p, m) || m === p || m.dead) return;

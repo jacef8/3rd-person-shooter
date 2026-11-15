@@ -1974,17 +1974,17 @@ function lzGroups(ids) {
   return groups;
 }
 /** One row per area: drop at a random landing zone there (pick a particular one on the map). */
-function lzRows(ids) {
-  return [...lzGroups(ids)].map(([area, lzs]) => ({
+function lzRows(ids, t = 'deploy') {
+  return [...lzGroups(ids)].map(([area, lzs]) => ({ t,
     label: `🪂 Landing zone near ${area} (${lzs.length})`, group: lzs.map((l) => l.id), noMarker: true, color: '#e0e0e0',
     x: lzs.reduce((a, l) => a + l.x, 0) / lzs.length, z: lzs.reduce((a, l) => a + l.z, 0) / lzs.length,
-    get msg() { return { t: 'deploy', kind: 'lz', id: lzs[Math.floor(Math.random() * lzs.length)].id }; },
+    get msg() { return { t: this.t, kind: 'lz', id: lzs[Math.floor(Math.random() * lzs.length)].id }; },
   }));
 }
 /** Every single place on the map you can tap to pick (the list's area rows split into their zones). */
 function mapTargets() {
   const out = mapOptions().filter((o) => !o.noMarker);
-  for (const o of mapOptions()) if (o.group) for (const id of o.group) { const lz = state.map.landingZones[id]; out.push({ label: `🪂 ${lz.name}`, x: lz.x, z: lz.z, msg: { t: 'deploy', kind: 'lz', id }, color: '#e0e0e0' }); }
+  for (const o of mapOptions()) if (o.group) for (const id of o.group) { const lz = state.map.landingZones[id]; out.push({ label: `🪂 ${lz.name}`, x: lz.x, z: lz.z, msg: { t: o.t || 'deploy', kind: 'lz', id }, color: '#e0e0e0' }); }
   return out;
 }
 function mapOptions() {
@@ -2010,10 +2010,7 @@ function mapOptions() {
     };
     const list = [];
     if (o.claim) list.push(shut({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' }, { home: true }));
-    for (const m of o.crew || []) list.push(shut({ label: `👥 Deploy with ${m.name}`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' }, { crew: true }));
-    for (const id of o.contacts || []) list.push(shut({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' }));
-    for (const c of o.crates || []) list.push(shut({ label: 'Your stash crate', x: c.x, z: c.z, msg: { t: 'deploy', kind: 'crate', id: c.id }, color: '#c9a36b' }));
-    list.push(shut({ label: '🪂 A random landing zone', x: 1e9, z: 1e9, noMarker: true, msg: { t: 'deploy', kind: 'lz', id: 0 }, color: '#e0e0e0' }));
+    else list.push(shut({ label: '🪂 A random landing zone (you have no stash house yet)', x: 1e9, z: 1e9, noMarker: true, msg: { t: 'deploy', kind: 'lz', id: 0 }, color: '#e0e0e0' }));
     return list;
   }
   if (state.mapMode === 'taxi' && state.taxi) {
@@ -2027,6 +2024,7 @@ function mapOptions() {
   if (state.mapMode === 'travel') {
     const list = (state.me?.discovered || []).map((id) => ({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'travel', kind: 'contact', id }, color: '#7fd6ff' }));
     for (const m of state.squad.members) if (m.online && m.id !== state.id) list.push({ label: `Join ${m.name}`, x: m.x, z: m.z, msg: { t: 'travel', kind: 'squad', id: m.id }, color: '#7dff9a' });
+    list.push(...lzRows(map.landingZones.map((l) => l.id), 'travel'));
     return list;
   }
   return [];
@@ -2036,8 +2034,8 @@ function renderMapScreen() {
   const titles = { taxi: state.taxi ? `Helicopter from ${state.taxi.fromName}` : 'Helicopter', first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
     first: 'Pick a town, or a landing zone out in the woods. Then find somewhere to call home and plant your claim marker: a house, cave, fish camp, old RV or houseboat, or open ground.',
-    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. Your stash house is always open; for 5 minutes nothing else within about a mile of where you died is (the red circle). Landing zones are random after a death.',
-    travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
+    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. You come back at your stash house; from there, fast travel takes you to Contacts, landing zones and your crew, but not inside the red circle round where you died for 5 minutes. No stash house yet? A random landing zone.',
+    travel: 'Fast travel goes out from your stash house to Contacts you have found, landing zones (tap one on the map for an exact one) and your crew. Getting loot home is still on foot. Not within about a mile of where you last died for 5 minutes, and joining your crew works once every 5 minutes.',
     taxi: `Pick where to fly. You jump from ${feet(HELI.airTaxi.jump.alt, 50)} over a random spot ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it and steer down by parachute or squirrel suit, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
     view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
@@ -2101,7 +2099,8 @@ function drawMapCanvas() {
     if (rs.away > 0) { markers.push({ x: rs.spot.x, z: rs.spot.z, kind: 'ring', radius: rs.radius, color: '#ff4d4d' }); markers.push({ x: rs.spot.x, z: rs.spot.z, kind: 'diamond', color: '#ff4d4d', size: 7, label: 'Where you died', labelMin: 0 }); }
   }
   const lit = new Set(state.mapHover?.group || []);
-  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: state.mapMode === 'first' ? 6 : 4, highlight: lit.has(lz.id), label: state.mapMode === 'first' ? lz.name.split(' (')[0] : '', labelMin: 0 });
+  const lzPick = state.mapMode === 'first' || state.mapMode === 'travel';
+  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: lzPick ? 6 : 4, highlight: lit.has(lz.id), label: lzPick ? lz.name.split(' (')[0] : '', labelMin: 0 });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
   for (const d of map.docks) markers.push({ x: d.x, z: d.z, color: '#7fd6ff', size: 4, label: d.campId != null ? '' : `⚓ ${d.name}` });
