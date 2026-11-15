@@ -16,6 +16,7 @@ import { WebSocketServer } from 'ws';
 import { biomeName, DEEP_WATER, parseElevation, parseLandcover } from '../shared/terrain.js';
 import zlib from 'node:zlib';
 import { serveStatic } from './static.js';
+import webpush from 'web-push';
 import { BOATS, floats, seatPos } from '../shared/boats.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
@@ -691,7 +692,7 @@ const townContact = (t) => map.contacts.find((c) => c.townId === t.id);
 
 // ---- offline log: what happened to your stuff while you were away
 function teamTokensOf(token) { const s = squads.get(squadOfToken.get(token)); return s ? [...s.members] : [token]; }
-function logAway(ownerToken, text) {
+function logAway(ownerToken, text, alert = true) {
   const now = Date.now();
   for (const tok of teamTokensOf(ownerToken)) {
     const online = onlineByToken(tok);
@@ -699,7 +700,46 @@ function logAway(ownerToken, text) {
     const c = db.characters[tok];
     if (!c) continue;
     c.awayLog = [...(c.awayLog || []), { at: now, text }].slice(-DEF.logMax);
+    if (alert) pushTo(tok, text);
   }
+}
+// ---- phone notifications (Web Push): your base is under attack and you're not in the game.
+// Each device that turned base alerts on is a subscription, kept with your character. At most one
+// notification every PUSH_EVERY_MS per player, so a raid doesn't bury your phone.
+const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY || null;
+let pushReady = false;
+{
+  let pub = VAPID_PUBLIC, priv = process.env.VAPID_PRIVATE_KEY;
+  if (!pub || !priv) { const k = webpush.generateVAPIDKeys(); pub = k.publicKey; priv = k.privateKey; process.env.VAPID_PUBLIC_KEY = pub; }   // run alone (tests): keys for this run
+  try { webpush.setVapidDetails(process.env.VAPID_SUBJECT || `https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'deadzone.game'}`, pub, priv); pushReady = true; } catch (e) { console.log('Push notifications off:', e.message); }
+}
+const PUSH_EVERY_MS = Number(process.env.PUSH_EVERY_MS || 180_000);
+const lastPush = new Map();
+function pushTo(token, text, force = false) {
+  const subs = db.pushSubs?.[token];
+  if (!pushReady || !subs?.length) return;
+  const now = Date.now();
+  if (!force) {
+    if (now - (lastPush.get(token) || 0) < PUSH_EVERY_MS) return;
+    lastPush.set(token, now);   // a test doesn't use up the allowance
+  }
+  const payload = JSON.stringify({ title: `Deadzone · ${WORLD_NAME}`, body: text, tag: force ? 'test' : 'base' });
+  for (const sub of [...subs]) {
+    webpush.sendNotification(sub, payload, { TTL: 3600, urgency: 'high' }).catch((e) => {
+      // Gone (uninstalled, permission taken back): forget it.
+      if (e.statusCode === 404 || e.statusCode === 410) db.pushSubs[token] = (db.pushSubs[token] || []).filter((q) => q.endpoint !== sub.endpoint);
+    });
+  }
+}
+function pushSubscribe(p, msg) {
+  const sub = msg.sub;
+  if (!sub || typeof sub.endpoint !== 'string' || sub.endpoint.length > 1000 || !/^https:\/\//.test(sub.endpoint)) return;
+  if (typeof sub.keys?.p256dh !== 'string' || typeof sub.keys?.auth !== 'string' || sub.keys.p256dh.length > 200 || sub.keys.auth.length > 100) return;
+  db.pushSubs ??= {};
+  const list = (db.pushSubs[p.token] || []).filter((q) => q.endpoint !== sub.endpoint);
+  list.push({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
+  db.pushSubs[p.token] = list.slice(-5);   // a few devices each
+  if (msg.fresh) toast(p, '🔔 Base alerts are on for this device: you\'ll get a notification if your base is attacked while you\'re out of the game');
 }
 function warnTeam(ownerToken, text, x, z, alert = 'Intruder') {
   for (const o of teamOfToken(ownerToken)) { toast(o, text); send(o.ws, { t: 'alert', x, z, text: alert }); }
@@ -1688,7 +1728,7 @@ function stallAction(p, msg) {
     toast(p, `Bought ${qty} ${HOMESTEAD.goods[l.res]?.name || l.res} for $${cost}`);
     const owner = onlineByToken(st.owner);
     if (owner && owner !== p) toast(owner, `💰 ${p.name} bought ${qty} ${HOMESTEAD.goods[l.res]?.name || l.res} at your stall (+$${cost})`);
-    else logAway(st.owner, `${p.name} bought ${qty} ${HOMESTEAD.goods[l.res]?.name || l.res} at your stall for $${cost}`);
+    else logAway(st.owner, `${p.name} bought ${qty} ${HOMESTEAD.goods[l.res]?.name || l.res} at your stall for $${cost}`, false);
   } else return;
   dirty(p);
   send(p.ws, stallView(p, st));
@@ -2486,7 +2526,11 @@ function startHack(p, kind, id, extra = {}) {
     if (kind === 'raid' || kind === 'gatehack') {
       const st = structs.get(id);
       const team = st ? teamOfToken(st.owner) : [];
-      if (team.length && (!st.raidAlert || now - st.raidAlert > 20_000)) { st.raidAlert = now; for (const o of team) { toast(o, `⚠ ${p.name} is breaking into your base!`); send(o.ws, { t: 'alert', x: st.x, z: st.z, text: 'Base under attack' }); } }
+      if (!st.raidAlert || now - st.raidAlert > 20_000) {
+        st.raidAlert = now;
+        for (const o of team) { toast(o, `⚠ ${p.name} is breaking into your base!`); send(o.ws, { t: 'alert', x: st.x, z: st.z, text: 'Base under attack' }); }
+        logAway(st.owner, `${p.name} is breaking into your base`);
+      }
     }
     return;
   }
@@ -3371,7 +3415,11 @@ function damageStruct(st, dmg, by) {
   st.hp -= dmg;
   if (PIECES[st.type].defense === 'mine' && st.hp <= 0) return mineBlast(st, null);
   const owner = onlineByToken(st.owner);
-  if (owner && by !== owner && (!st.alertedAt || Date.now() - st.alertedAt > 20_000)) { st.alertedAt = Date.now(); toast(owner, `⚠ Your ${stageDef(st).name.toLowerCase()} is under attack${by ? ` by ${by.name}` : ''}!`); }
+  if (by !== owner && st.owner !== by?.token && (!st.alertedAt || Date.now() - st.alertedAt > 20_000)) {
+    st.alertedAt = Date.now();
+    if (owner) toast(owner, `⚠ Your ${stageDef(st).name.toLowerCase()} is under attack${by ? ` by ${by.name}` : ''}!`);
+    else for (const tok of teamTokensOf(st.owner)) if (!onlineByToken(tok)) pushTo(tok, `Your ${stageDef(st).name.toLowerCase()} is under attack${by ? ` by ${by.name}` : ''}!`);
+  }
   if (st.hp > 0) return;
   const who = by ? by.name : 'Someone';
   if (PIECES[st.type].claim) {
@@ -3830,7 +3878,7 @@ function tickHouses(now) {
     const h = c.store;
     const was = rsCache.get(h)?.mode, rs = raidState(h, now);
     rsCache.set(h, rs);
-    if (was && was !== rs.mode && was !== 'home' && rs.mode !== 'home') logAway(h.owner, rs.mode === 'window' ? `Your raid window opened (${windowText(rs.start)}): your base can be raided, at reduced damage, while you're all away` : 'Your raid window closed: your base is sealed again');
+    if (was && was !== rs.mode && was !== 'home' && rs.mode !== 'home') logAway(h.owner, rs.mode === 'window' ? `Your raid window opened (${windowText(rs.start)}): your base can be raided, at reduced damage, while you're all away` : 'Your raid window closed: your base is sealed again', false);
     if (c.kind === 'home') {
       const max = doorMax(c.id);
       if (h.doorHp > 0 && h.doorHp < max && now - (h.lastDamaged || 0) > 60_000) h.doorHp = Math.min(max, h.doorHp + max * 0.02);
@@ -4283,7 +4331,7 @@ function handleJoin(ws, msg) {
     } else if (!host) toast(p, `${tk.fromName} has left this world — find them on your friends list`);
   }
   send(ws, {
-    t: 'welcome', id: p.id, token, world: WORLD_ID, worldName: WORLD_NAME, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
+    t: 'welcome', id: p.id, token, pushKey: process.env.VAPID_PUBLIC_KEY || null, world: WORLD_ID, worldName: WORLD_NAME, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
     x: p.x, z: p.z, yaw: p.yaw, felled: [...map.felled], packSize: PACK_SIZE, devKit: DEV_KIT, doorBase: DOOR_HP,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
@@ -4496,6 +4544,15 @@ wss.on('connection', (ws) => {
         if (!p.dead && p.reloadUntil < Date.now() && GUN_SLOTS.includes(msg.slot) && p.inv[msg.slot]) { p.active = msg.slot; dirty(p); }
         return;
       case 'interact': p.buildIntent = !!msg.build; return !p.dead && interact(p);
+      case 'pushSub': return pushSubscribe(p, msg);
+      case 'pushUnsub': if (db.pushSubs?.[p.token] && typeof msg.endpoint === 'string') db.pushSubs[p.token] = db.pushSubs[p.token].filter((q) => q.endpoint !== msg.endpoint); return;
+      case 'pushTest': {
+        if (!db.pushSubs?.[p.token]?.length) return toast(p, 'Turn base alerts on first');
+        if (Date.now() - (p.pushTestAt || 0) < 15_000) return;
+        p.pushTestAt = Date.now();
+        pushTo(p.token, 'Test alert: this is what you\'ll see if your base is attacked while you\'re away', true);
+        return toast(p, 'Test alert sent: it should show up on every device you turned alerts on');
+      }
       case 'takeLoot': {   // a tap on the nearby-loot list, or auto-pickup walking over it
         const l = loot.get(msg.id);
         if (!l || p.dead || p.downed || Math.hypot(l.x - p.x, l.z - p.z) > 5) return;

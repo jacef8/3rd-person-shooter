@@ -1262,6 +1262,8 @@ function handle(m) {
       localStorage.setItem('dz_token', m.token);
       state.myName = lobby.account?.name || $('name').value.trim() || 'Agent';
       Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, devKit: !!m.devKit, doorBase: m.doorBase });
+      state.pushKey = m.pushKey || null;
+      syncPush();
       if (!state.map) initWorld(m);
       selfMesh.visible = true;
       selfMesh.position.set(m.x, ground(m.x, m.z), m.z);
@@ -3313,7 +3315,7 @@ function renderPadSettings() {
     b.dataset.pad = `gfx-${m}`;
     row5.append(b);
   }
-  box.append(row5, row, row2, row3, row4);
+  box.append(row5, row, row2, row3, row4, pushRow());
   if (touchCapable) {
     const t1 = document.createElement('div'); t1.className = 'item';
     t1.innerHTML = '<div class="meta"><div class="nm">Phone controls: layout</div><div class="st">Move any button where your thumbs want it, make them bigger or smaller, more or less see-through.</div></div>';
@@ -4416,6 +4418,49 @@ function lootCategory(kind) {
   return 'supplies';
 }
 const lootTried = new Map();
+// ---- base alerts: a phone notification when your base is attacked while you're out of the game
+const pushOk = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64u = (s) => { const pad = '='.repeat((4 - s.length % 4) % 4), raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, (c) => c.charCodeAt(0)); };
+async function pushSubscription(create) {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  const key = b64u(state.pushKey);
+  const same = (a) => a && new Uint8Array(a).length === key.length && new Uint8Array(a).every((v, i) => v === key[i]);
+  if (sub && !same(sub.options?.applicationServerKey)) { await sub.unsubscribe(); sub = null; }   // the server's key changed
+  if (!sub && create) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  return sub;
+}
+async function enablePush() {
+  if (!pushOk() || !state.pushKey) return toast('This browser can\'t show notifications. On iPhone, add Deadzone to your Home Screen first.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { toast('Notifications are blocked for Deadzone: allow them in your phone\'s settings for this site, then try again'); renderPadSettings(); return; }
+  try {
+    const sub = await pushSubscription(true);
+    send({ t: 'pushSub', sub: sub.toJSON(), fresh: 1 });
+    localStorage.setItem('dz_push', '1');
+  } catch (e) { toast(`Couldn't turn on base alerts: ${e.message}`); }
+  renderPadSettings();
+}
+async function disablePush() {
+  try { const sub = await pushSubscription(false); if (sub) { send({ t: 'pushUnsub', endpoint: sub.endpoint }); await sub.unsubscribe(); } } catch { /* already gone */ }
+  localStorage.removeItem('dz_push');
+  toast('Base alerts are off for this device');
+  renderPadSettings();
+}
+/** Every time you join a world: make sure it knows where to reach this device. */
+async function syncPush() {
+  if (!pushOk() || !state.pushKey || localStorage.getItem('dz_push') !== '1' || Notification.permission !== 'granted') return;
+  try { const sub = await pushSubscription(true); if (sub) send({ t: 'pushSub', sub: sub.toJSON() }); } catch { /* try again next time */ }
+}
+function pushRow() {
+  const r = document.createElement('div'); r.className = 'item';
+  const on = pushOk() && localStorage.getItem('dz_push') === '1' && Notification.permission === 'granted';
+  const blocked = pushOk() && Notification.permission === 'denied';
+  r.innerHTML = `<div class="meta"><div class="nm">Base alerts on this device: ${on ? 'on' : 'off'}</div><div class="st">${!pushOk() ? 'This browser can\'t show notifications (on iPhone, add Deadzone to your Home Screen first).' : blocked ? 'Notifications are blocked for Deadzone: allow them in your phone\'s settings for this site.' : 'A notification on this phone or computer when your base or your crew\'s is attacked while you\'re out of the game (at most one every few minutes).'}</div></div>`;
+  if (pushOk() && !on) { const b = btn('Turn on', enablePush); b.dataset.pad = 'pushon'; r.append(b); }
+  if (on) { const t2 = btn('Send a test', () => send({ t: 'pushTest' })); const off = btn('Turn off', disablePush, 'ghost'); t2.dataset.pad = 'pushtest'; off.dataset.pad = 'pushoff'; r.append(t2, off); }
+  return r;
+}
 /** Phones: things on the ground within reach, as a tap-to-take list; walking over the kinds you chose
  *  in Settings picks them up for you. */
 function updateTouchLoot() {

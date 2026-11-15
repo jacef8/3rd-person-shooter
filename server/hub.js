@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { serveStatic } from './static.js';
+import webpush from 'web-push';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
@@ -27,6 +28,20 @@ const PORT = Number(process.env.PORT || 8080);
 const DATA_FILE = process.env.DATA_FILE || path.join(ROOT, 'data', 'world.json');
 const DATA_DIR = path.dirname(DATA_FILE);
 const HUB_FILE = process.env.HUB_FILE || path.join(DATA_DIR, 'hub.json');
+// Phone notifications are signed with one key pair (VAPID). From the environment if it's set there;
+// otherwise made once and kept beside the hub's data, so phones stay subscribed across restarts.
+// Every world inherits it.
+if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+  const file = path.join(DATA_DIR, 'vapid.json');
+  let keys = null;
+  try { keys = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first run */ }
+  if (!keys?.publicKey) {
+    keys = webpush.generateVAPIDKeys();
+    try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(file, JSON.stringify(keys)); } catch { /* read-only: keys last until restart */ }
+  }
+  process.env.VAPID_PUBLIC_KEY = keys.publicKey;
+  process.env.VAPID_PRIVATE_KEY = keys.privateKey;
+}
 const WORLD_PORT_BASE = Number(process.env.WORLD_PORT_BASE || 9100);
 const WORLD_COUNT = Number(process.env.WORLDS || 1);   // one shared living world; more regions come later
 const WORLD_CAP = Number(process.env.WORLD_CAP || 100);   // load-tested: see tools/load-test.mjs
