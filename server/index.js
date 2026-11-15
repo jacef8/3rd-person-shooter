@@ -2802,6 +2802,15 @@ function refillLoot(now) {
     lootAtSpawn.set(i, id);
   });
 }
+/** Pick up one thing lying in the world (Use, a tap on the nearby list, or walking over it). */
+function takeLoot(p, l, quiet = false) {
+  if (!addToPack(p, l.item)) return quiet ? null : toast(p, 'Backpack full');
+  loot.delete(l.id);
+  lootAtSpawn.delete(l.spawnIndex);
+  spawnReadyAt.set(l.spawnIndex, Date.now() + LOOT_RESPAWN_MS);
+  award(p, XP.pickup, l.item.name);
+  dirty(p);
+}
 function addToPack(p, item) {
   if (RESOURCES.includes(item.kind)) { p[item.kind] += item.amount || 10; return true; }
   if (p.inv.pack.length >= PACK_SIZE) return false;
@@ -3251,12 +3260,7 @@ function interact(p) {
     return send(p.ws, contactView(p, it.ref.id));
   }
   if (it.kind === 'loot') {
-    if (!addToPack(p, it.ref.item)) return toast(p, 'Backpack full');
-    loot.delete(it.ref.id);
-    lootAtSpawn.delete(it.ref.spawnIndex);
-    spawnReadyAt.set(it.ref.spawnIndex, Date.now() + LOOT_RESPAWN_MS);
-    award(p, XP.pickup, it.ref.item.name);
-    dirty(p);
+    takeLoot(p, it.ref);
   } else if (it.kind === 'stash' && !db.houses[it.ref.id].owner) {
     return startClaim(p, it.ref.id);
   } else if (it.kind === 'stash' && map.houses[it.ref.id].kind === 'vehicle' && !tokenInSquadWith(p, db.houses[it.ref.id].owner)) {
@@ -4129,6 +4133,11 @@ wss.on('connection', (ws) => {
         if (!p.dead && p.reloadUntil < Date.now() && GUN_SLOTS.includes(msg.slot) && p.inv[msg.slot]) { p.active = msg.slot; dirty(p); }
         return;
       case 'interact': p.buildIntent = !!msg.build; return !p.dead && interact(p);
+      case 'takeLoot': {   // a tap on the nearby-loot list, or auto-pickup walking over it
+        const l = loot.get(msg.id);
+        if (!l || p.dead || p.downed || Math.hypot(l.x - p.x, l.z - p.z) > 5) return;
+        return takeLoot(p, l, !!msg.auto);
+      }
       case 'container': return !p.dead && containerAction(p, msg);
       case 'closeContainer': p.openContainer = null; return;
       case 'inv': return !p.dead && invAction(p, msg);

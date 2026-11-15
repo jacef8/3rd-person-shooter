@@ -666,3 +666,64 @@ body.touchui .tbtn.aim, body.touchui .tbtn.jump, body.touchui .tbtn.r4, body.tou
 .mapkey div { font-size: 14px; color: var(--ink-2, #c9ced6); }
 
 #xptext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Phone controls, shooter-standard pass: icon buttons, contextual extras, pickers, loot list, scope view ---- */
+#touch .tbtn[data-key] { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+#touch .tbtn[data-key] svg { width: 46%; height: 46%; flex: 0 0 auto; }
+#touch .tbtn[data-key] .tl { font: 700 9px/1 var(--font-text); letter-spacing: 0.06em; }
+#touch .tbtn.big svg { width: 44%; height: 44%; }
+#touch .tbtn.big .tl { font-size: 11px; }
+#touch .tbtn.use .tl { font-size: 10px; }
+body.touchui .tbtn.look { right: calc(132px + env(safe-area-inset-right)); top: 12px; bottom: auto; width: 44px; height: 44px; }
+body.touchui .tbtn.zoom { right: calc(208px + env(safe-area-inset-right)); bottom: 128px; width: 52px; height: 52px; background: rgba(255, 138, 42, 0.45); }
+#tpick { position: absolute; z-index: 4; display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 200px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 14px; }
+#tpick[hidden], #tloot[hidden] { display: none; }
+#tpick button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 48px; padding: 8px 12px; text-align: left; background: var(--surface-2, #1b2129); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font: 600 14px/1.2 var(--font-text); }
+#tpick button b { font-size: 15px; }
+#tpick button small { color: var(--ink-2); font-size: 13px; }
+#tpick button:disabled { opacity: 0.7; }
+#tloot { position: absolute; right: calc(272px + env(safe-area-inset-right)); top: 30%; width: 220px; display: flex; flex-direction: column; gap: 4px; }
+#tloot button { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 10px; background: rgba(14, 17, 22, 0.86); color: var(--ink); border: 1px solid var(--line-2); border-radius: 10px; font: 600 14px/1.15 var(--font-text); text-align: left; }
+#tloot button i { flex: 0 0 10px; height: 10px; border-radius: 50%; }
+#tloot button b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tloot button span { flex: 0 0 auto; color: var(--accent); font-weight: 700; }
+
+/* Looking through a sight. Dots and holos float over the view; scopes black out all but the lens. */
+#scopeview { position: fixed; inset: 0; pointer-events: none; z-index: 2; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 120ms ease-out; }
+#scopeview[hidden] { display: none; }
+#scopeview.up { opacity: 1; }
+#scopeview .lens { position: relative; width: min(92vh, 92vw); height: min(92vh, 92vw); border-radius: 50%; transform: scale(1.06); transition: transform 140ms ease-out; }
+#scopeview.up .lens { transform: scale(1); }
+#scopeview .ret { position: absolute; inset: 0; width: 100%; height: 100%; }
+#scopeview[data-look="dot"] .lens, #scopeview[data-look="holo"] .lens { width: 240px; height: 240px; }
+#scopeview:not([data-look="dot"]):not([data-look="holo"]) .lens { box-shadow: 0 0 0 200vmax #050608, inset 0 0 0 3px #050608, inset 0 0 60px 18px rgba(0, 0, 0, 0.85); }
+#scopeview[data-look="thermal"] .lens { background: rgba(40, 255, 140, 0.08); }
+#scopeview .mag { position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%); padding: 4px 10px; border-radius: 8px; background: rgba(0, 0, 0, 0.6); color: #fff; font: 700 14px/1 var(--font-text); }
+#scopeview .mag:empty { display: none; }
+body.scoped #crosshair { display: none; }
+
+/* The bag: gear · backpack · here, side by side. */
+#inventory .invcols { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 700px) { #inventory .invcols { grid-template-columns: 1fr; } }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.chip { padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--ink-2); font: 600 12px/1.4 var(--font-text); }
+.chip.on { border-color: var(--part, #ffc53d); color: var(--part, #ffc53d); }
+.capbar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin: -2px 0 8px; }
+.capbar i { display: block; height: 100%; background: #7dff9a; }
+.capbar.near i { background: var(--gold, #ffc53d); }
+.capbar.full i { background: #ff6b6b; }
+body.touchui #inventory { width: 98vw; max-height: 96vh; }
+body.touchui .irow { min-height: 48px; padding: 6px 10px; gap: 8px; }
+body.touchui .imeta b { font-size: 15px; }
+body.touchui .imeta small { font-size: 13px; }
+body.touchui .iact { font-size: 13px; }
+.invcol > * { flex-shrink: 0; }
+body.touchui .iact { max-width: 36%; }
+/* Phones: the nearby-loot list sits under the minimap, clear of the view's centre and the buttons. */
+#tloot { right: calc(12px + env(safe-area-inset-right)); top: 128px; width: 210px; max-height: calc(100vh - 128px - 196px); overflow: hidden; }
+body.touchui #prompt { max-width: calc(100vw - 600px); min-width: 240px; white-space: normal; text-align: center; line-height: 1.3; }
+body.scoped #tloot, body.scoped #prompt { display: none; }
+#prompt kbd.tk { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; vertical-align: middle; font: 700 12px/1 var(--font-text); letter-spacing: 0.04em; }
+#prompt kbd.tk svg { width: 15px; height: 15px; }
+/* Phones: the prompt sits just above the weapon strip and grows upward, so it never runs behind it. */
+body.touchui #prompt { top: auto; bottom: calc(76px + env(safe-area-inset-bottom)); }

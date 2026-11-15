@@ -1019,6 +1019,48 @@ function setGlint(g, on) {
 }
 let tagAt = 0;
 /** Runs every frame with the stats of the sight you're aiming through (null when you aren't). */
+/** The sight on a gun, as the scope view draws it: none (iron sights), a dot, a holo ring, or a scope. */
+const SIGHT_LOOK = {
+  iron: 'iron', tritium: 'iron', reflex: 'dot', holo: 'holo', fieldOptic: 'dot', lpvo: 'dot',
+  prism: 'chevron', acog: 'chevron', thermal: 'thermal', spotter: 'mil', marksman: 'mil', sniper: 'mil', long12: 'mil',
+};
+const SIGHT_ALT = { lpvo: 'mil', fieldOptic: 'chevron' };   // flipped to their higher zoom
+/** A sight's magnification as people say it ("4x"), from its name, or worked out from its zoom. */
+function scopeMag(item, alt) {
+  const id = item?.parts?.optic || 'iron', name = PARTS[id]?.name || '';
+  const m = name.match(/(\d+)(?:-(\d+))?x/);
+  if (m && m[2]) return `${alt ? m[2] : m[1]}x`;
+  if (m) return `${m[1]}x`;
+  const ws = weaponStats(item);
+  return `${(ws.zoom + (alt ? ws.zoomAlt : 0)).toFixed(1)}x`;
+}
+function aimNow() { return state.aiming && state.me && !state.me.dead && !state.air ? state.me.inv[state.me.active] : null; }
+const scopeUi = { key: '' };
+function updateScopeView(item) {
+  const el = $('scopeview');
+  const id = item?.parts?.optic || 'iron';
+  let look = item ? (state.zoomAlt && SIGHT_ALT[id]) || SIGHT_LOOK[id] || 'iron' : 'none';
+  const key = `${look}|${state.zoomAlt ? 1 : 0}|${id}`;
+  const on = look !== 'none' && look !== 'iron';
+  el.classList.toggle('up', on && camera.fov < 62);
+  document.body.classList.toggle('scoped', on && camera.fov < 62);
+  if (scopeUi.key === key) { el.hidden = !on; return; }
+  scopeUi.key = key;
+  el.hidden = !on;
+  if (!on) return;
+  el.dataset.look = look;
+  const svg = el.querySelector('.ret');
+  const R = {
+    dot: '<circle r="3.2" fill="#ff3b30"/>',
+    holo: '<circle r="34" fill="none" stroke="#ff3b30" stroke-width="2.4"/><circle r="2.6" fill="#ff3b30"/><path d="M0 -34v-8M0 34v8M-34 0h-8M34 0h8" stroke="#ff3b30" stroke-width="2.4"/>',
+    chevron: '<path d="M-10 14L0 0L10 14" fill="none" stroke="#ff4433" stroke-width="2.6" stroke-linejoin="round"/><path d="M0 22v40M-3 34h6M-3 46h6" stroke="#111" stroke-width="1.6"/><path d="M-100 0h80M20 0h80" stroke="#111" stroke-width="1.4"/>',
+    thermal: '<path d="M-100 0h88M12 0h88M0 -100v88M0 12v88" stroke="#e8fff0" stroke-width="1.4"/><circle r="2" fill="#e8fff0"/>',
+    mil: '<path d="M-100 0h100M0 0h100M0 -100v100M0 0v100" stroke="#111" stroke-width="0.9"/><path d="M-100 0h-0M-100 0h70M30 0h70M0 30v70M0 -100v70" stroke="#111" stroke-width="3.4"/>' +
+      [-24, -16, -8, 8, 16, 24].map((v) => `<circle cx="${v}" cy="0" r="1.3" fill="#111"/><circle cx="0" cy="${v}" r="1.3" fill="#111"/>`).join('') + '<circle r="1.1" fill="#ff3b30"/>',
+  };
+  svg.innerHTML = R[look] || '';
+  el.querySelector('.mag').textContent = look === 'dot' || look === 'holo' ? '' : scopeMag(item, state.zoomAlt);
+}
 function updateSight(ws, now) {
   if (!ws) state.zoomAlt = false;
   // Thermal: living things within range glow, cloaked or not.
@@ -1461,6 +1503,21 @@ function attachmentLine(item) {
   const mods = SLOTS.map((sl) => item.parts?.[sl]).filter((id) => id && PARTS[id] && PARTS[id].level > 1).map((id) => PARTS[id].name);
   return mods.length ? mods.join(' · ') : 'Stock configuration';
 }
+/** A gun's main attachment slots as chips (fitted ones lit), for the gear column. */
+const CHIP_SLOTS = [['optic', 'Sight'], ['muzzle', 'Muzzle'], ['underbarrel', 'Grip'], ['magazine', 'Mag'], ['stock', 'Stock']];
+function attachmentChips(item) {
+  if (item.kind !== 'weapon') return '';
+  return `<span class="chips">${CHIP_SLOTS.map(([sl, label]) => {
+    const id = item.parts?.[sl], part = id && PARTS[id];
+    const fitted = part && part.level > 1;
+    return `<span class="chip${fitted ? ' on' : ''}">${fitted ? part.name.replace(/ (Sight|Scope|Sights)$/, '') : `${label}: —`}</span>`;
+  }).join('')}</span>`;
+}
+/** Change parts on a gun: at your stash house's gunsmith (or anywhere while testing). */
+function partsAction(it) {
+  const can = state.devKit || !!state.container?.gunsmith;
+  return ['Change parts', () => { if (!can) return toast('Change parts at the gunsmith in your stash house (or a hideout)'); gs.selectedId = it.id; openGunsmith(); }];
+}
 
 function itemCard(item, { slot, buttons = [] } = {}) {
   const el = document.createElement('div');
@@ -1548,17 +1605,25 @@ function renderInventory() {
   if ((c?.kind || null) !== invUi.kind) { invUi.kind = c?.kind || null; invUi.tab = 'contents'; invUi.menuFor = null; }
   const put = !!c?.canPut;
   // ---- you
+  // Three columns side by side: what you have on (guns with their parts), your backpack and supplies,
+  // and what's here (the ground around you, or the stash, bag or body you opened).
   const you = $('youCol'); you.innerHTML = '';
-  you.append(head('Equipped'));
+  you.append(head('Gear'));
   for (const slot of ['primary', 'primary2', 'secondary', 'armor']) {
     const it = inv[slot], label = SLOT_LABEL[slot];
     you.append(...invRow(`eq-${slot}`, it
-      ? { title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
+      ? { title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentChips(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: it.kind === 'weapon' ? [partsAction(it), ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
       : { title: `${label}: empty`, detail: 'Equip one from your backpack', why: 'Empty' }));
   }
   if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', actions: [['Open', openGunsmith]] }));
-  you.append(head(`Backpack · ${inv.pack.length} of ${state.packSize} slots`));
-  if (!inv.pack.length) you.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
+  const packEl = $('packCol'); packEl.innerHTML = '';
+  const full = inv.pack.length / (state.packSize || 1);
+  packEl.append(head(`Backpack · ${inv.pack.length} of ${state.packSize}`));
+  const bar = document.createElement('div');
+  bar.className = `capbar${full >= 1 ? ' full' : full > 0.8 ? ' near' : ''}`;
+  bar.innerHTML = `<i style="width:${Math.min(100, full * 100).toFixed(1)}%"></i>`;
+  packEl.append(bar);
+  if (!inv.pack.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
   inv.pack.forEach((it) => {
     const actions = [];
     if (it.kind === 'weapon' && it.archetype !== 'sidearm') {
@@ -1569,22 +1634,31 @@ function renderInventory() {
     if (it.kind === 'flare') actions.push(['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }]);
     if (put) actions.push(['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })]);
     if (it.kind !== 'package') actions.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })]);
-    you.append(...invRow(`pk-${it.id}`, { title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions }));
+    packEl.append(...invRow(`pk-${it.id}`, { title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions }));
   });
   const carried = RES_UI.filter((r) => me[r]);
-  you.append(head('Supplies'));
-  if (!carried.length) you.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No supplies.' }));
+  packEl.append(head('Supplies'));
+  if (!carried.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No supplies.' }));
   for (const r of carried) {
     const actions = [];
     if (GOODS[r]?.food) actions.push([`Eat (+${GOODS[r].food} food)`, () => send({ t: 'inv', action: 'eat', good: r })]);
     if (put && r !== 'intel') actions.push(['Put in stash', () => send({ t: 'container', action: 'put', res: r })]);
-    you.append(...invRow(`rs-${r}`, { title: resText(r, me[r]), detail: GOODS[r]?.food ? `Food: +${GOODS[r].food} each` : RES_USE[r] || (GOODS[r] ? 'Sell at a trading post' : ''), color: '#3f4650', actions, why: c ? '' : 'Carried' }));
+    packEl.append(...invRow(`rs-${r}`, { title: resText(r, me[r]), detail: GOODS[r]?.food ? `Food: +${GOODS[r].food} each` : RES_USE[r] || (GOODS[r] ? 'Sell at a trading post' : ''), color: '#3f4650', actions, why: c ? '' : 'Carried' }));
   }
   $('packcount').textContent = `Carrying ${inv.pack.length} of ${state.packSize} · ${me.ammo} rounds`;
-  // ---- the stash, bag or body beside you
+  // ---- the stash, bag or body beside you; or, with nothing open, what's on the ground nearby
   const col = $('containerCol');
-  col.hidden = !c;
-  if (!c) return;
+  if (!c) {
+    const ground = [...state.loot.values()].map((l) => [Math.hypot(l.data.x - state.x, l.data.z - state.z), l.data]).filter(([d]) => d < 5).sort((a, b) => a[0] - b[0]);
+    col.hidden = false;
+    col.innerHTML = '';
+    col.append(head('On the ground nearby'));
+    if (!ground.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing on the ground within reach. Loot glows with a beam of light: walk up to it.' }));
+    if (ground.length > 1) col.append(...invRow('g-all', { title: 'Take everything here', detail: `${ground.length} things`, color: '#7dff9a', actions: [['Take everything', () => { for (const [, l] of ground) send({ t: 'takeLoot', id: l.id }); }]] }));
+    for (const [, l] of ground) col.append(...invRow(`g-${l.id}`, { title: `${l.name}${l.amount ? ` ×${l.amount}` : ''}`, detail: lootCategory(l.kind) === 'gear' ? 'Goes in your backpack' : 'Goes in your supplies', color: `#${(LOOT_COLORS[l.kind] ?? 0x5a5f68).toString(16).padStart(6, '0')}`, actions: [['Take', () => send({ t: 'takeLoot', id: l.id })]] }));
+    return;
+  }
+  col.hidden = false;
   col.innerHTML = '';
   col.append(head(`${c.title}${c.cap ? ` · ${c.items.length} of ${c.cap}` : ''}`));
   const own = !!c.gunsmith;
@@ -2641,15 +2715,23 @@ function aimPoint() {
     if (!c || c.dead) return;
     const b = characterBounds(c.x, c.z, c.crouch, ground(c.x, c.z), c.prone);
     const t = rayBox(o.x, o.y, o.z, d.x, d.y, d.z, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
-    if (t > minT && t < best) { best = t; state.aimTargetId = c.sq ? null : c.id; }
+    if (t > minT && t < best) { best = t; state.aimTargetId = c.sq ? null : c.id; state.aimFoe = !c.sq && !c.animal && !c.npc; }
   };
+  state.aimFoe = false;
   for (const [, r] of state.players) test(r.data);
-  for (const [, r] of state.bots) test(r.data);
+  for (const [, r] of state.bots) test(r.animal ? { ...r.data, animal: 1 } : r.data);
   if (best >= 400 + minT) best = 400 + minT;
   state.aimDist = best - minT;   // from you, not from the camera behind you
   return o.clone().addScaledVector(d, best);
 }
 
+/** Phones with auto-fire on: the crosshair is on an enemy within the gun's reach. */
+function autoFireNow(me) {
+  if (!state.touchUI || !tset.autoFire || tset.autoFire === 'off' || touch.freeLook) return false;
+  if (tset.autoFire === 'aim' && !state.aiming) return false;
+  const ws = weaponStats(me.inv[me.active]);
+  return !!(ws && state.aimFoe && state.aimTargetId && state.aimDist <= ws.range);
+}
 function tryFire(now) {
   const me = state.me;
   if (!me || me.dead || state.invOpen) return;
@@ -2806,7 +2888,7 @@ function nearestInteractable() {
       const it = b.name ? `the ${b.name}` : `this ${what}`;
       if (held) best = held.data.mine ? null : `${held.data.owner}'s ${b.name || 'building'}`;
       else if (me.claim) best = `${b.name || `Unclaimed ${what}`} (${state.squad.id ? 'your crew has' : 'you have'} a stash house)`;
-      else if (me.inv.pack.some((i) => i.kind === 'marker')) best = `Claim ${it}: plant your marker (8s) — stash locker + lockable doors`;
+      else if (me.inv.pack.some((i) => i.kind === 'marker')) best = `Make ${it} your stash house (8 s): your own locker, and doors only your crew can open`;
       else best = `${b.name || `Unclaimed ${what}`} — a claim marker makes it your stash house`;
     }
   }
@@ -3118,7 +3200,20 @@ function renderPadSettings() {
     const t3 = document.createElement('div'); t3.className = 'item';
     t3.innerHTML = '<div class="meta"><div class="nm">Gyro aim</div><div class="st">Turn the phone to fine-tune your aim. While aiming only, or all the time.</div></div>';
     for (const [m, l] of [['off', 'Off'], ['aim', 'While aiming'], ['always', 'Always']]) t3.append(btn(l, async () => { await setGyro(m); renderPadSettings(); }, tset.gyro === m ? '' : 'ghost'));
-    box.append(t1, t2, t3);
+    const t4 = document.createElement('div'); t4.className = 'item';
+    t4.innerHTML = '<div class="meta"><div class="nm">AIM button</div><div class="st">Tap to aim and tap again to stop, hold to aim while held, or both: a quick tap toggles, a long press aims until you let go.</div></div>';
+    for (const [m, l] of [['mixed', 'Tap or hold'], ['tap', 'Tap'], ['hold', 'Hold']]) t4.append(btn(l, () => { tset.aimMode = m; saveTset(); renderPadSettings(); }, (tset.aimMode || 'mixed') === m ? '' : 'ghost'));
+    const t5 = document.createElement('div'); t5.className = 'item';
+    t5.innerHTML = '<div class="meta"><div class="nm">Auto-fire</div><div class="st">Your gun fires by itself when the crosshair is on an enemy in range. Off, only while aiming, or always.</div></div>';
+    for (const [m, l] of [['off', 'Off'], ['aim', 'While aiming'], ['always', 'Always']]) t5.append(btn(l, () => { tset.autoFire = m; saveTset(); renderPadSettings(); }, tset.autoFire === m ? '' : 'ghost'));
+    const t6 = document.createElement('div'); t6.className = 'item';
+    t6.innerHTML = `<div class="meta"><div class="nm">Look speed while aiming: ${Math.round((tset.adsSens || 1) * 100)}%</div><div class="st">How fast a drag turns the view through sights and scopes (scopes already slow it by their zoom).</div></div>`;
+    t6.append(btn('Slower', () => { tset.adsSens = Math.max(0.4, +((tset.adsSens || 1) - 0.1).toFixed(2)); saveTset(); renderPadSettings(); }),
+      btn('Faster', () => { tset.adsSens = Math.min(2, +((tset.adsSens || 1) + 0.1).toFixed(2)); saveTset(); renderPadSettings(); }));
+    const t7 = document.createElement('div'); t7.className = 'item';
+    t7.innerHTML = '<div class="meta"><div class="nm">Pick up by walking over</div><div class="st">What you take just by walking over it. Everything else is in the list by your right thumb: tap to take.</div></div>';
+    for (const [k, l] of [['ammo', 'Ammo'], ['heals', 'Medkits & food'], ['supplies', 'Supplies'], ['gear', 'Tools & gear']]) t7.append(btn(`${l}: ${tset.autoPick[k] ? 'on' : 'off'}`, () => { tset.autoPick[k] = !tset.autoPick[k]; saveTset(); renderPadSettings(); }, tset.autoPick[k] ? '' : 'ghost'));
+    box.append(t1, t2, t3, t4, t5, t6, t7);
   }
   if (keep) { const el = box.querySelector(`[data-pad="${keep}"]`); if (el && state.inputMode === 'pad') padFocus(el); }
 }
@@ -3789,8 +3884,9 @@ function frame(now) {
     if (me.downed || (me.food ?? 100) < HOMESTEAD.hunger.noSprintBelow) state.sprint = false;
     const stunnedNow = performance.now() < (state.stunnedUntil || 0);
     const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : state.prone ? PRONE_SPEED : (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
-    const fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
-    const rx = -Math.cos(state.yaw), rz = Math.sin(state.yaw);
+    const mYaw = touch.freeLook ? touch.freeLook.yaw : state.yaw;   // free look: you keep going the way you faced
+    const fx = Math.sin(mYaw), fz = Math.cos(mYaw);
+    const rx = -Math.cos(mYaw), rz = Math.sin(mYaw);
     let mx = fx * pf + rx * pr, mz = fz * pf + rz * pr;
     const len = Math.hypot(mx, mz);
     if (len > 0.05 && !stunnedNow && !state.prone && !me.downed) {
@@ -3816,11 +3912,11 @@ function frame(now) {
       state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
     } else { v[0] = 0; v[1] = 0; }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
-    else if (state.mouseDown && !me.downed && !stunnedNow) tryFire(now); else state.firedThisPress = false;
+    else if ((state.mouseDown || autoFireNow(me)) && !me.downed && !stunnedNow) tryFire(now); else state.firedThisPress = false;
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: state.yaw, pitch: state.pitch, crouch: state.crouch, prone: state.prone, aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
+    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch, prone: state.prone, aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
   }
 
   // Recoil recovers smoothly.
@@ -3837,7 +3933,7 @@ function frame(now) {
   }
 
   // Self mesh.
-  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch, prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
@@ -3929,9 +4025,13 @@ function frame(now) {
 
   const prompt = alive && !state.invOpen && !state.air ? nearestInteractable() : null;
   state.promptText = prompt;
-  $('prompt').innerHTML = state.air && alive ? airHud() : prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : boatHud();
+  // On a phone the prompt names the button to tap (the same word and hand as the USE button, lit up).
+  const pkey = state.touchUI && state.inputMode !== 'pad' ? `<kbd class="tk">${ticon('use')}${useVerb(prompt)}</kbd>` : `<kbd>${glyph('E')}</kbd>`;
+  $('prompt').innerHTML = state.air && alive ? airHud() : prompt ? `${pkey}${prompt}` : boatHud();
   drawMinimap();
   updateWhere(now);
+  if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }
+  updateScopeView(aimNow());
   renderWorld();
   drawGunsmith(dt);
   drawMarkers();
@@ -3948,10 +4048,27 @@ window.__dz = { state, send, boatVis, structVis };
 // on the right to look, and buttons for everything else. Hidden while a controller is in use.
 const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null, autoRun: false };
 // Phone settings (this device): button layout, size and see-through, the left fire button, gyro aim.
-const tset = { pos: {}, scale: 1, alpha: 1, leftFire: false, gyro: 'off' };
+const tset = { pos: {}, scale: 1, alpha: 1, leftFire: false, gyro: 'off', aimMode: 'mixed', autoFire: 'off', adsSens: 1, autoPick: { ammo: true, heals: true, supplies: true, gear: false } };
 try { Object.assign(tset, JSON.parse(localStorage.getItem('dz_touch') || '{}')); } catch { /* keep the defaults */ }
+tset.autoPick = { ammo: true, heals: true, supplies: true, gear: false, ...(tset.autoPick || {}) };
 if (!tset.lf2) { tset.leftFire = false; tset.lf2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }   // the left FIRE button starts off once (turn it on in Settings)
 const saveTset = () => { try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } };
+// Line icons for the phone buttons (24-unit grid, drawn in the button's text colour).
+const TICON = {
+  fire: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/>',
+  aim: '<circle cx="12" cy="12" r="6.5"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/>',
+  use: '<path d="M8 13V6a1.8 1.8 0 0 1 3.6 0v5M11.6 10V4.6a1.8 1.8 0 0 1 3.6 0V11M15.2 9.5a1.8 1.8 0 0 1 3.6 0v4.5a7 7 0 0 1-7 7h-1a6.5 6.5 0 0 1-5.4-2.9L4 15.4a1.7 1.7 0 0 1 2.7-2L8 15"/>',
+  reload: '<path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 3.5v5.1h5.1"/>',
+  crouch: '<path d="M6 7l6 6 6-6"/><path d="M5 19h14"/>',
+  prone: '<circle cx="6" cy="11" r="2.2"/><path d="M9.5 12.5H21M3 17h18"/>',
+  nade: '<circle cx="12" cy="14.5" r="6"/><path d="M10 8.5V5.5h4v3M14 5.5l3.5-2.5"/>',
+  jump: '<path d="M6 13l6-6 6 6"/><path d="M6 19l6-6 6 6"/>',
+  tag: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/>',
+  heal: '<path d="M12 5v14M5 12h14"/>',
+  look: '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  zoom: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5M10.5 8v5M8 10.5h5"/>',
+};
+const ticon = (k) => TICON[k] ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TICON[k]}</svg>` : '';
 const TOUCH_BTNS = [
   // [label, action, class, key]   Both FIRE buttons are held, and dragging on one aims while you shoot.
   // AIM toggles the sights; CROUCH and PRONE toggle. Push the stick to its edge to sprint, or on up
@@ -3959,14 +4076,20 @@ const TOUCH_BTNS = [
   ['FIRE', 'fire', 'big fire', 'fire'], ['FIRE', 'fire', 'mid fire lfire', 'lfire'], ['AIM', 'aim', 'mid aim', 'aim'], ['USE', 'interact', 'mid use', 'use'],
   ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'], ['PRONE', 'prone', 'sm r7', 'prone'], ['NADE', 'sensor', 'sm r4', 'nade'],
   ['JUMP', 'jump', 'mid jump', 'jump'], ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
+  // Hold the eye and drag to look around without turning (you keep running the way you were going).
+  ['LOOK', 'look', 'sm look', 'look'],
+  // Only while looking through a sight with two zoom levels: flip between them.
+  ['ZOOM', 'zoom', 'sm zoom', 'zoom'],
 ];
+const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom' };
 // Top left: the map and bag, and ⋯ for the rest.
 const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['⋯', 'touchMore']];
 const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +
-    TOUCH_BTNS.map(([l, a, c, k]) => `<button class="tbtn ${c}" data-act="${a}" data-key="${k}">${l}</button>`).join('') +
+    TOUCH_BTNS.map(([l, a, c, k]) => `<button class="tbtn ${c}" data-act="${a}" data-key="${k}" aria-label="${l}">${ticon(TICON_OF[k])}<span class="tl">${l}</span></button>`).join('') +
+    '<div id="tpick" hidden></div><div id="tloot" hidden></div>' +
     '<div id="tedit" hidden><b>Drag any button to move it</b><span><button class="tbtn tiny" data-ed="small">Smaller</button><button class="tbtn tiny" data-ed="big">Bigger</button><button class="tbtn tiny" data-ed="faint">More see-through</button><button class="tbtn tiny" data-ed="solid">Less</button><button class="tbtn tiny" data-ed="reset">Reset</button><button class="tbtn tiny" data-ed="done">Done</button></span></div>' +
     `<div class="ttop">${TOUCH_TOP.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>` +
     `<div class="tmore" hidden>${TOUCH_MORE.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>`;
@@ -3978,6 +4101,16 @@ function buildTouchUI() {
         const x = Math.max(0, Math.min(innerWidth, e.clientX - b.drag.dx)), y = Math.max(0, Math.min(innerHeight, e.clientY - b.drag.dy));
         tset.pos[b.dataset.key] = [+(x / innerWidth).toFixed(4), +(y / innerHeight).toFixed(4)];
         applyTouchLayout();
+      } else if (b.aimPress?.id === e.pointerId) {
+        // Slide up on AIM to zoom in, down to zoom out (sights with two zoom levels).
+        const dy = e.clientY - b.aimPress.y;
+        if (!b.aimPress.flipped && Math.abs(dy) > 34 && state.aiming && weaponStats(state.me?.inv[state.me.active])?.zoomAlt) {
+          state.zoomAlt = dy < 0; b.aimPress.flipped = true;
+        }
+        if (Math.abs(dy) > 34 || Math.abs(e.clientX - b.aimPress.x) > 34) b.aimPress.moved = true;
+      } else if (touch.freeLook?.id === e.pointerId) {
+        lookBy(e.clientX - touch.freeLook.x, e.clientY - touch.freeLook.y);
+        touch.freeLook.x = e.clientX; touch.freeLook.y = e.clientY;
       } else if (b.look?.id === e.pointerId) {
         // Thumb on FIRE: slide it to aim while you shoot.
         lookBy(e.clientX - b.look.x, e.clientY - b.look.y);
@@ -4002,7 +4135,27 @@ function buildTouchUI() {
         if (state.me && !state.me.dead && !state.me.downed && !build.on && !state.invOpen) tryFire(performance.now());
         return;
       }
-      if (a === 'aim') { state.aiming = !state.aiming; b.classList.toggle('on', state.aiming); return; }
+      if (a === 'aim') {
+        // Tap: toggle. Hold: aim while held. Tap or hold (the default): either, by how long you press.
+        const mode = tset.aimMode || 'mixed';
+        b.setPointerCapture(e.pointerId);
+        b.aimPress = { id: e.pointerId, t: performance.now(), was: state.aiming, y: e.clientY, x: e.clientX, flipped: false };
+        state.aiming = mode === 'tap' ? !state.aiming : true;
+        b.classList.toggle('on', state.aiming);
+        return;
+      }
+      if (a === 'look') {   // free look: the camera turns, you don't
+        b.setPointerCapture(e.pointerId);
+        touch.freeLook = { id: e.pointerId, x: e.clientX, y: e.clientY, yaw: state.yaw, pitch: state.pitch };
+        b.classList.add('on');
+        return;
+      }
+      if (a === 'zoom') { state.zoomAlt = !state.zoomAlt; return; }
+      if (a === 'heal' || a === 'sensor') {   // tap: use the best one; hold: choose which
+        b.setPointerCapture(e.pointerId);
+        b.holdTimer = setTimeout(() => { b.holdTimer = null; openTouchPicker(a, b); }, 380);
+        return;
+      }
       if (a === 'touchMore') { const m = ui.querySelector('.tmore'); m.hidden = !m.hidden; b.classList.toggle('on', !m.hidden); return; }
       if (b.closest('.tmore')) { ui.querySelector('.tmore').hidden = true; ui.querySelector('[data-act=touchMore]').classList.remove('on'); }
       if (a === 'crouch') {   // tap: crouch / stand; hold: prone
@@ -4013,12 +4166,30 @@ function buildTouchUI() {
       doAction(a);
     });
     if (b.dataset.act === 'crouch') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.holdTimer) { clearTimeout(b.holdTimer); b.holdTimer = null; doAction('crouch'); } });
+    if (b.dataset.act === 'heal' || b.dataset.act === 'sensor') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.holdTimer) { clearTimeout(b.holdTimer); b.holdTimer = null; doAction(b.dataset.act); } });
+    if (b.dataset.act === 'aim') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => {
+      const ap = b.aimPress;
+      if (!ap) return;
+      b.aimPress = null;
+      const mode = tset.aimMode || 'mixed', held = performance.now() - ap.t > 260 || ap.moved;
+      if (mode === 'hold' || (mode === 'mixed' && held)) state.aiming = false;      // let go: back to the hip
+      else if (mode === 'mixed') state.aiming = !ap.was;                            // a tap toggles
+      b.classList.toggle('on', state.aiming);
+    });
+    if (b.dataset.act === 'look') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => {
+      if (!touch.freeLook) return;
+      state.yaw = touch.freeLook.yaw; state.pitch = touch.freeLook.pitch;   // the view swings back
+      touch.freeLook = null; b.classList.remove('on');
+    });
     if (b.dataset.act === 'fire') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (touch.editing) return; b.look = null; if (![...ui.querySelectorAll('.tbtn.fire')].some((o) => o !== b && o.look)) state.mouseDown = false; b.classList.remove('on'); });
     for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.drag) { b.drag = null; saveTset(); } });
   }
   const knob = $('tknob'), base = $('tstick');
   const lock = $('tlock');
   ui.addEventListener('pointerdown', (e) => {
+    const pick = e.target.closest('#tpick button, #tloot button');
+    if (pick) { e.preventDefault(); e.stopPropagation(); pick.onpick?.(); return; }
+    if (!$('tpick').hidden) $('tpick').hidden = true;
     if (e.target.closest('.tbtn') || touch.editing) return;
     // A tap on a gun in the weapon strip (drawn under this layer) takes that gun in hand.
     for (const chip of $('wslots').children) {
@@ -4072,6 +4243,79 @@ function buildTouchUI() {
   applyTouchLayout();
   addEventListener('resize', applyTouchLayout);
 }
+/** The word on the USE button for what's in front of you ("TAKE", "OPEN", "CLAIM"). */
+function useVerb(text) {
+  const first = String(text || '').replace(/<[^>]+>/g, '').replace(/^[^A-Za-z]+/, '').trim().split(/\s+/)[0] || 'Use';
+  return ({ Pick: 'TAKE', Make: 'CLAIM', Talk: 'TALK', Plant: 'PLANT', Break: 'BREAK', Bypass: 'HACK' }[first] || first).toUpperCase().slice(0, 7);
+}
+/** Hold HEAL or NADE: a short list pops up over the button to choose from. */
+function openTouchPicker(kind, from) {
+  const me = state.me, box = $('tpick');
+  if (!me) return;
+  const opts = [];
+  if (kind === 'heal') {
+    const kits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
+    if (kits) opts.push([`Medkit ×${kits}`, `+${COMBAT_RULES.medkitHeal ?? 50} health`, () => send({ t: 'inv', action: 'use' })]);
+    for (const g of Object.keys(GOODS)) if (GOODS[g].food && me[g] > 0) opts.push([`${GOODS[g].name} ×${me[g]}`, `+${GOODS[g].food} food`, () => send({ t: 'inv', action: 'eat', good: g })]);
+    if (!opts.length) opts.push(['Nothing to heal with', 'Find medkits; cook or buy food', null]);
+  } else {
+    for (const [k, name, about] of [['sensor', 'Sensor grenade', 'Shows who is near where it lands'], ['stun', 'Stun grenade', 'Dazes anyone caught in it']]) {
+      opts.push([`${state.grenade === k || (!state.grenade && k === 'sensor') ? '● ' : ''}${name}`, about, () => { state.grenade = k; doAction('sensor'); }]);
+    }
+  }
+  box.innerHTML = '';
+  for (const [label, sub, fn] of opts) {
+    const b = document.createElement('button');
+    b.innerHTML = `<b>${label}</b><small>${sub}</small>`;
+    if (fn) b.onpick = () => { box.hidden = true; fn(); };
+    else { b.disabled = true; b.onpick = () => { box.hidden = true; }; }
+    box.append(b);
+  }
+  box.hidden = false;
+  const r = from.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight;
+  box.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+  box.style.top = `${Math.max(8, r.top - h - 8)}px`;
+}
+/** What a loot pickup is, for the auto-pickup settings. */
+const LOOT_PACK = new Set(['medkit', 'tool', 'marker', 'flare', 'weapon', 'armor', 'package']);
+function lootCategory(kind) {
+  if (kind === 'ammo') return 'ammo';
+  if (kind === 'medkit' || (GOODS[kind]?.food)) return 'heals';
+  if (LOOT_PACK.has(kind)) return 'gear';
+  return 'supplies';
+}
+const lootTried = new Map();
+/** Phones: things on the ground within reach, as a tap-to-take list; walking over the kinds you chose
+ *  in Settings picks them up for you. */
+function updateTouchLoot() {
+  const el = $('tloot');
+  if (!el) return;
+  const me = state.me;
+  if (!me || me.dead || me.downed || state.invOpen || state.air || $('touch').hidden) { el.hidden = true; return; }
+  const near = [];
+  for (const [, l] of state.loot) { const d = Math.hypot(l.data.x - state.x, l.data.z - state.z); if (d < 5) near.push([d, l.data]); }
+  near.sort((a, b) => a[0] - b[0]);
+  const now = performance.now(), packFull = me.inv.pack.length >= (state.packSize || 24);
+  for (const [d, l] of near) {
+    if (d > 2.2 || !tset.autoPick[lootCategory(l.kind)] || (packFull && LOOT_PACK.has(l.kind))) continue;
+    if (now - (lootTried.get(l.id) || 0) < 1500) continue;
+    lootTried.set(l.id, now);
+    send({ t: 'takeLoot', id: l.id, auto: 1 });
+  }
+  const show = near.slice(0, 4);
+  el.hidden = !show.length;
+  const sig = show.map(([, l]) => l.id).join(',');
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.innerHTML = '';
+  for (const [, l] of show) {
+    const b = document.createElement('button');
+    const col = LOOT_COLORS[l.kind] ?? 0xffffff;
+    b.innerHTML = `<i style="background:#${col.toString(16).padStart(6, '0')}"></i><b>${l.name}${l.amount ? ` ×${l.amount}` : ''}</b><span>Take</span>`;
+    b.onpick = () => send({ t: 'takeLoot', id: l.id });
+    el.append(b);
+  }
+}
 /** Where the move stick's centre may sit: under the top buttons (room for the RUN lock above it) and
  *  above your level and health bars, so it never covers either. */
 function stickZone() {
@@ -4083,7 +4327,7 @@ function stickZone() {
 }
 /** Turn the camera by a finger's drag, in pixels (look area, or a thumb sliding on FIRE). */
 function lookBy(dx, dy) {
-  const sens = (state.aiming ? 0.004 * camera.fov / 70 : 0.006) * pad.settings.lookSpeed / 2.6;
+  const sens = (state.aiming ? 0.004 * camera.fov / 70 * (tset.adsSens || 1) : 0.006) * pad.settings.lookSpeed / 2.6;
   state.yaw -= dx * sens;
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - dy * sens));
 }
@@ -4163,8 +4407,19 @@ setInterval(() => {
   if (me) {
     const w = me.inv?.[me.active], full = w ? me.mag >= weaponStats(w).mag : true;
     show('use', !!state.promptText);
+    $('touch').querySelector('[data-key=use]')?.classList.toggle('ready', !!state.promptText);
+    const useLabel = $('touch').querySelector('[data-key=use] .tl');
+    if (useLabel) {
+      const verb = useVerb(state.promptText);
+      if (useLabel.textContent !== verb) useLabel.textContent = verb;
+    }
+    const wsNow = w && weaponStats(w);
+    show('zoom', !!(state.aiming && wsNow?.zoomAlt));
+    const zl = $('touch').querySelector('[data-key=zoom] .tl');
+    if (zl && wsNow?.zoomAlt) { const t = `${scopeMag(w, !state.zoomAlt ? 1 : 0)}`; if (zl.textContent !== t) zl.textContent = t; }
+    state.touchUI = document.body.classList.contains('touchui');
     show('reload', !!w && !full && me.ammo > 0);
-    show('heal', me.hp < me.maxHp && me.inv?.pack?.some((i) => i.kind === 'medkit'));
+    show('heal', (me.hp < me.maxHp && me.inv?.pack?.some((i) => i.kind === 'medkit')) || ((me.food ?? 100) < 60 && Object.keys(GOODS).some((g) => GOODS[g].food && me[g] > 0)));
   }
   $('touch').querySelector('[data-key=crouch]')?.classList.toggle('on', !!state.crouch);
   $('touch').querySelector('[data-key=prone]')?.classList.toggle('on', !!state.prone);
