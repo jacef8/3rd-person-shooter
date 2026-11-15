@@ -432,6 +432,7 @@ function privateState(p) {
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
     xp: p.xp, level: level(p), ...Object.fromEntries(RESOURCES.map((r) => [r, p[r] || 0])), comms: p.comms,
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
+    hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })), hideoutsAllowed: hideoutAllowance(p).allowed, hideoutNext: hideoutAllowance(p).next,
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
@@ -2947,6 +2948,13 @@ function payCarried(p, cost) {
 }
 const costText = (c) => Object.entries(c).map(([k, v]) => `${v} ${k}`).join(', ');
 
+/** Your hideouts (a crewmate's count for the crew), oldest first. */
+const hideoutsOf = (p) => [...structs.values()].filter((st) => PIECES[st.type].hideout && canManage(p, st) && !st.ruined).sort((a, b) => (a.builtAt || 0) - (b.builtAt || 0));
+/** How many hideouts your level allows, and the level the next one unlocks at. */
+function hideoutAllowance(p) {
+  const lv = level(p), steps = BUILD.hideoutLevels;
+  return { allowed: steps.filter((l) => lv >= l).length, next: steps.find((l) => lv < l) || null };
+}
 function handleBuild(p, msg) {
   p.slow = null;
   const def = own(PIECES, msg.piece);
@@ -2973,6 +2981,12 @@ function handleBuild(p, msg) {
     if (myClaim) return toast(p, squadOf(p) ? 'Your crew already has a stash house' : 'You already have a stash house. Abandon it before planting a claim flag.');
     if (!hasMarker(p)) return toast(p, 'A claim flag needs a claim marker');
   }
+  if (def.hideout) {
+    if (!myClaim) return toast(p, 'Set up your stash house first; hideouts are extra stashes on top of it');
+    const mineHideouts = [...structs.values()].filter((o) => o.owner === p.token && PIECES[o.type].hideout).length;
+    const { allowed, next } = hideoutAllowance(p);
+    if (mineHideouts >= allowed) return toast(p, next ? `${allowed ? 'Your next hideout' : 'Hideouts'} unlock${allowed ? 's' : ''} at level ${next}` : `You have all ${allowed} hideouts`);
+  }
   const cap = homePerks(myClaim ? homeLevel(myClaim.store.hxp) : 1).buildCap;
   const mine = [...structs.values()].filter((o) => o.owner === p.token).length;
   if (mine >= cap) return toast(p, `Build limit reached (${cap}) — level up your home for more`);
@@ -2982,7 +2996,8 @@ function handleBuild(p, msg) {
   if (!payCarried(p, stage0.cost)) return toast(p, `Needs ${costText(stage0.cost)} (carried)`);
   const b = pieceBox(msg.piece, x, z, rot);
   const y0 = Math.min(...[[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].map(([a, c]) => terrain.height(a, c))) - 0.15;
-  const st = { id: 's' + crypto.randomBytes(5).toString('hex'), type: msg.piece, x, z, rot, y0, stage: 0, hp: stage0.hp, owner: p.token, ownerName: p.name, open: false };
+  const st = { id: 's' + crypto.randomBytes(5).toString('hex'), type: msg.piece, x, z, rot, y0, stage: 0, hp: stage0.hp, owner: p.token, ownerName: p.name, open: false, builtAt: Date.now() };
+  if (def.hideout) toast(p, 'Hideout built: stash goods here, come back here after a death, and fast travel here from home. It has no raid protection out here.');
   if (def.container) Object.assign(st, { items: [], ...Object.fromEntries(RESOURCES.map((r) => [r, 0])) });
   if (def.claim) {
     takeMarker(p);
@@ -3340,7 +3355,7 @@ function containerAction(p, msg) {
     if (kind === 'crate' && !canManage(p, store)) return;
     if (RESOURCES.includes(msg.res)) { store[msg.res] = (store[msg.res] || 0) + p[msg.res]; p[msg.res] = 0; dirty(p); return refreshContainerViewers(kind, id); }
     const cap = kind === 'stash' ? stashCap(id) : kind === 'boat' ? BOATS[store.type].hold : stageDef(store).slots;
-    if (store.items.length >= (kind === 'crate' && PIECES[store.type].claim ? claimCap({ kind: 'flag', store }) : cap)) return toast(p, kind === 'boat' ? 'The hold is full' : kind === 'stash' ? 'Stash full — upgrade storage or level up your home' : 'Crate full — reinforce it for more room');
+    if (store.items.length >= (kind === 'crate' && PIECES[store.type].claim ? claimCap({ kind: 'flag', store }) : cap)) return toast(p, kind === 'boat' ? 'The hold is full' : kind === 'stash' ? 'Stash full — upgrade storage or level up your home' : PIECES[store.type]?.hideout ? 'Hideout full — dig it in (E with a hammer) for more room' : 'Crate full — reinforce it for more room');
     const idx = p.inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0 || p.inv.pack[idx].kind === 'package') return;
     store.items.push(p.inv.pack.splice(idx, 1)[0]);
@@ -3570,6 +3585,7 @@ function deployOptions(p) {
     // town; landing zones and your crew are fast travel from home.
     towns: SPAWN_TOWNS.map((t, i) => ({ id: i, name: t.name, county: t.county, x: Math.round(t.x), z: Math.round(t.z) })),
     contacts: [],
+    hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })),
     lzs: p.deploying ? map.landingZones.map((l) => l.id) : [],
     crew: p.deploying ? squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.downed && !m.deploying).map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z) })) : [],
     crates: [],
@@ -3593,13 +3609,17 @@ function handleDeploy(p, msg) {
   const claim = claimOf(p);
   const now = Date.now(), rules = p.deploying ? null : respawnRules(p, now);
   if (rules && now < rules.readyAt) return toast(p, `You can redeploy in ${Math.ceil((rules.readyAt - now) / 1000)}s`);
-  if (rules && !['home', 'house', 'town', 'contact'].includes(msg.kind)) return toast(p, 'After a death you come back at your stash house or a town. From your stash house, fast travel takes you to landing zones and your crew.');
+  if (rules && !['home', 'house', 'town', 'contact', 'hideout'].includes(msg.kind)) return toast(p, 'After a death you come back at your stash house, a hideout or a town. From your stash house, fast travel takes you to landing zones and your crew.');
   let at = null;
   if (msg.kind === 'claim') {
     return toast(p, 'Deploy first, then plant your claim marker where you want your stash house');
   } else if (msg.kind === 'house' || msg.kind === 'home') {
     if (!claim) return;
     at = homeSpot(claim);
+  } else if (msg.kind === 'hideout') {
+    const st = structs.get(msg.id);
+    if (!st || !PIECES[st.type].hideout || !canManage(p, st) || st.ruined) return toast(p, 'That hideout is gone');
+    at = touchdownSpot(st.x, st.z + 2.2);
   } else if (msg.kind === 'town') {
     const tw = nth(SPAWN_TOWNS, msg.id);
     if (!tw) return;
@@ -3663,6 +3683,12 @@ function handleTravel(p, msg) {
     const l = nth(map.landingZones, msg.id);
     if (!l || closed(l.x, l.z)) return;
     placeAt(p, l.x + 2, l.z + 2);
+  } else if (msg.kind === 'hideout') {
+    const st = structs.get(msg.id);
+    if (!st || !PIECES[st.type].hideout || !canManage(p, st) || st.ruined) return toast(p, 'That hideout is gone');
+    if (closed(st.x, st.z)) return;
+    const at = touchdownSpot(st.x, st.z + 2.2);
+    placeAt(p, at.x, at.z);
   } else if (msg.kind === 'squad') {
     const m = players.get(msg.id);
     if (!m || !sameSquad(p, m) || m === p || m.dead) return;

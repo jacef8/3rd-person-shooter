@@ -430,6 +430,39 @@
           "material": "wood"
         }
       ]
+    },
+    "hideout": {
+      "name": "Hideout",
+      "size": [
+        2.4,
+        1.8,
+        2.0
+      ],
+      "container": true,
+      "hideout": true,
+      "_about": "A small stash out in the field: you come back here after a death (unless it is within a mile of where you died, for 5 minutes) and fast travel to it from home. You need a stash house first; the first hideout unlocks at level 8, the second at level 16 (build.hideoutLevels). Away from your stash house it has no raid protection.",
+      "stages": [
+        {
+          "name": "Tarp hideout",
+          "cost": {
+            "wood": 30,
+            "parts": 20
+          },
+          "hp": 1400,
+          "material": "wood",
+          "slots": 12
+        },
+        {
+          "name": "Dug-in hideout",
+          "cost": {
+            "stone": 25,
+            "salvage": 20
+          },
+          "hp": 3200,
+          "material": "stone",
+          "slots": 20
+        }
+      ]
     }
   },
   "build": {
@@ -470,6 +503,10 @@
       "radius": 4.5,
       "playerDamage": 140,
       "playerRadius": 6
-    }
+    },
+    "hideoutLevels": [
+      8,
+      16
+    ]
   }
 }

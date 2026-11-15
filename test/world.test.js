@@ -154,7 +154,7 @@ test('open world loop: deploy, contracts, supply drop, upgrades, fast travel, de
   assert.equal(q.you.comms, 2, 'commendations are kept on death');
   assert.ok(q.you.field.includes('intSup'), 'field unlocks are kept on death');
   q.send({ t: 'deploy', kind: 'lz', id: 2 });
-  await q.got((m) => m.t === 'toast' && /come back at your stash house or a town/.test(m.text));
+  await q.got((m) => m.t === 'toast' && /come back at your stash house, a hideout or a town/.test(m.text));
   q.send({ t: 'deploy', kind: 'home' });
   await until(() => !q.you.dead);
   void carried;

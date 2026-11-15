@@ -2014,6 +2014,7 @@ function mapOptions() {
     };
     const list = [];
     if (o.claim) list.push(shut({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' }, { home: true }));
+    for (const h of o.hideouts || []) list.push(shut({ label: `⛺ Hideout ${h.n}`, x: h.x, z: h.z, msg: { t: 'deploy', kind: 'hideout', id: h.id }, color: '#9fe39f' }));
     for (const r of townRows(o.towns)) list.push(shut(r));
     return list;
   }
@@ -2026,7 +2027,8 @@ function mapOptions() {
     return list;
   }
   if (state.mapMode === 'travel') {
-    const list = (state.me?.discovered || []).map((id) => ({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'travel', kind: 'contact', id }, color: '#7fd6ff' }));
+    const list = (state.me?.hideouts || []).map((h) => ({ label: `⛺ Hideout ${h.n}`, x: h.x, z: h.z, msg: { t: 'travel', kind: 'hideout', id: h.id }, color: '#9fe39f' }));
+    list.push(...(state.me?.discovered || []).map((id) => ({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'travel', kind: 'contact', id }, color: '#7fd6ff' })));
     for (const m of state.squad.members) if (m.online && m.id !== state.id) list.push({ label: `Join ${m.name}`, x: m.x, z: m.z, msg: { t: 'travel', kind: 'squad', id: m.id }, color: '#7dff9a' });
     list.push(...lzRows(map.landingZones.map((l) => l.id), 'travel'));
     return list;
@@ -2038,8 +2040,8 @@ function renderMapScreen() {
   const titles = { taxi: state.taxi ? `Helicopter from ${state.taxi.fromName}` : 'Helicopter', first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
     first: 'Pick a town, or a landing zone out in the woods. Then find somewhere to call home and plant your claim marker: a house, cave, fish camp, old RV or houseboat, or open ground.',
-    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. Come back at your stash house or any town, but no town inside the red circle round where you died for 5 minutes. From your stash house, fast travel takes you to landing zones and your crew.',
-    travel: 'Fast travel goes out from your stash house to Contacts you have found, landing zones (tap one on the map for an exact one) and your crew. Getting loot home is still on foot. Not within about a mile of where you last died for 5 minutes, and joining your crew works once every 5 minutes.',
+    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. Come back at your stash house, a hideout or any town, but nothing inside the red circle round where you died for 5 minutes. From your stash house, fast travel takes you to landing zones and your crew.',
+    travel: 'Fast travel goes out from your stash house to your hideouts, Contacts you have found, landing zones (tap one on the map for an exact one) and your crew. Getting loot home is still on foot. Not within about a mile of where you last died for 5 minutes, and joining your crew works once every 5 minutes.',
     taxi: `Pick where to fly. You jump from ${feet(HELI.airTaxi.jump.alt, 50)} over a random spot ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it and steer down by parachute or squirrel suit, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
     view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
@@ -2127,6 +2129,7 @@ function drawMapCanvas() {
   for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
   const hpos = homePos();
   if (hpos) markers.push({ x: hpos.x, z: hpos.z, color: '#4fbf6a', size: 7, label: `Home (Lv${state.me.claim.level})` });
+  for (const h of state.me?.hideouts || []) markers.push({ x: h.x, z: h.z, color: '#9fe39f', size: 6, label: `⛺ Hideout ${h.n}`, labelMin: 0 });
   for (const o of mapOptions()) { if (o.noMarker) continue; const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
   if (state.mapPick) markers.push({ x: state.mapPick.x, z: state.mapPick.z, kind: 'diamond', color: '#ff7a1a', size: 10, highlight: true, label: state.mapPick.label.replace(/^\S+ /, '') });
   if (state.waypoint) markers.push({ x: state.waypoint.x, z: state.waypoint.z, kind: 'diamond', color: '#ff7a1a', size: 8, label: `Waypoint · ${distText(Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z))}` });
@@ -3390,6 +3393,26 @@ function structMesh(st) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, h, 6), new THREE.MeshStandardMaterial({ color: 0x777b80 })); pole.position.y = h / 2;
     const light = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3a3a })); light.position.y = h + 0.05;
     g.add(pole, light);
+  } else if (def.hideout) {
+    const wood = new THREE.MeshStandardMaterial({ color: 0x6b4e33, roughness: 0.95 });
+    const tarp = new THREE.MeshStandardMaterial({ color: 0x4d5a36, roughness: 0.9, side: THREE.DoubleSide });
+    for (const f of [-0.5, 0.5]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, h, 0.1), wood); post.position.set(f * (w - 0.2), h / 2, -d / 2 + 0.1); g.add(post); }
+    const ridge = new THREE.Mesh(new THREE.BoxGeometry(w, 0.08, 0.08), wood); ridge.position.set(0, h, -d / 2 + 0.1); g.add(ridge);
+    const slope = Math.hypot(d - 0.1, h);
+    const sheet = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.2, slope), tarp);
+    sheet.rotation.x = -Math.atan2(d - 0.1, h);   // from the ridge at the back down to the ground at the front
+    sheet.position.set(0, h / 2, 0.05);
+    g.add(sheet);
+    const locker = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: 0x3e4a2e, roughness: 0.7 }));
+    locker.position.set(0, 0.25, -d / 2 + 0.45); g.add(locker);
+    const latch = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.02), new THREE.MeshStandardMaterial({ color: 0xb08d3c, metalness: 0.6 }));
+    latch.position.set(0, 0.42, -d / 2 + 0.71); g.add(latch);
+    if (st.stage > 0) {
+      const bag = new THREE.MeshStandardMaterial({ color: 0x9a8a62, roughness: 1 });
+      for (const [bx, bz, bw, bd] of [[0, d / 2 + 0.2, w + 0.6, 0.35], [-w / 2 - 0.2, 0, 0.35, d + 0.4], [w / 2 + 0.2, 0, 0.35, d + 0.4]]) {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.55, bd), bag); wall.position.set(bx, 0.27, bz); g.add(wall);
+      }
+    }
   } else if (def.stall) {
     const wood = new THREE.MeshStandardMaterial({ color: 0x8a6440, roughness: 0.9 });
     const counter = new THREE.Mesh(new THREE.BoxGeometry(w, 1.0, d), wood); counter.position.y = 0.5;
@@ -3524,7 +3547,8 @@ function renderBuildBar() {
   if (!me) return;
   const items = Object.entries(PIECES).filter(([, p]) => !p.auto).map(([k, p], idx) => {
     const st = p.stages[0];
-    const cost = p.explosive ? `${me.inv.pack.filter((i) => i.kind === 'charge').length} carried` : Object.entries(st.cost).map(([r, v]) => `${v} ${r}`).join(' ') + (p.claim ? ' + marker' : '');
+    let cost = p.explosive ? `${me.inv.pack.filter((i) => i.kind === 'charge').length} carried` : Object.entries(st.cost).map(([r, v]) => `${v} ${r}`).join(' ') + (p.claim ? ' + marker' : '');
+    if (p.hideout) cost = (me.hideouts || []).length < (me.hideoutsAllowed || 0) ? `${cost} · ${(me.hideoutsAllowed || 0) - (me.hideouts || []).length} left` : me.hideoutNext ? `unlocks at Lv ${me.hideoutNext}` : 'all built';
     return `<div class="bpiece ${k === build.piece ? 'sel' : ''}"><kbd>${idx < 9 ? idx + 1 : '·'}</kbd>${p.name}<small>${cost}</small></div>`;
   }).join('');
   const pad = state.inputMode === 'pad';

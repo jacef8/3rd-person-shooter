@@ -55,7 +55,7 @@ test('respawn: a growing wait; home or a town, but not near where you died; fast
   send({ t: 'deploy', kind: 'town', id: 0 });   // the town you died in
   await toast(/Too close to where you died/);
   send({ t: 'deploy', kind: 'lz', id: 0 });
-  await toast(/come back at your stash house or a town/);
+  await toast(/come back at your stash house, a hideout or a town/);
   assert.ok(you.dead, 'not back yet');
   send({ t: 'deploy', kind: 'home' });
   await until(() => !you.dead);
