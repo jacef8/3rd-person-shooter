@@ -3741,7 +3741,7 @@ function pollPad(dt, now) {
   if (just(BTN.VIEW)) { pad.viewAt = now; pad.viewAsk = asking; pad.viewHeld = false; }
   if (pad.viewAsk && b(BTN.VIEW) && !pad.viewHeld && now - pad.viewAt > 500) { pad.viewHeld = true; if (asking) $('invitebar').querySelector('button')?.click(); }
   // Let go after a long hold that no frame caught (a slow frame): still a yes, not a tap.
-  if (pad.viewAsk && !b(BTN.VIEW) && pad.prev[BTN.VIEW] && !pad.viewHeld && now - pad.viewAt > 500) { pad.viewHeld = true; if (asking) $('invitebar').querySelector('button')?.click(); }
+  // (A hold only counts while the button is still down at 0.5 s: a tap during a slow frame stays a tap.)
   const viewTap = pad.viewAsk ? !b(BTN.VIEW) && !!pad.prev[BTN.VIEW] && !pad.viewHeld : just(BTN.VIEW);
 
   const panel = topPanel();
