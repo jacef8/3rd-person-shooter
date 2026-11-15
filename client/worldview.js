@@ -234,10 +234,18 @@ vec2 dzWave(vec2 p, vec2 dir, float k, float sp, float a) { float ph = dot(p, di
   // The ground: smooth shading, and fine colour variation worked out per pixel from where it is (patches
   // of lighter and darker grass, soil showing through) so it reads as ground, not flat-coloured tiles.
   const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 });
+  // A real grass photo (seamless), laid over the ground in world space: full on grassy ground, a light
+  // touch of its texture everywhere else. Sampled at two sizes and angles so the repeat doesn't show.
+  const grassTex = new THREE.TextureLoader().load('/textures/grass.jpg');
+  grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping;
+  grassTex.colorSpace = THREE.SRGBColorSpace;
+  grassTex.anisotropy = 8;
   terrainMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uGrass = { value: grassTex };
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+uniform sampler2D uGrass;
 varying vec3 vWorldP;
 float dzHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -247,7 +255,15 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
   float big = dzNoise(q * 0.035) * 0.6 + dzNoise(q * 0.11) * 0.4;     // patches across a field
   float fine = dzNoise(q * 1.7) * 0.5 + dzNoise(q * 5.3) * 0.5;      // grass and grit underfoot
   diffuseColor.rgb *= 0.84 + big * 0.26 + (fine - 0.5) * 0.12;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 0.98, 0.86), smoothstep(0.62, 0.8, big) * 0.5); }`);
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 0.98, 0.86), smoothstep(0.62, 0.8, big) * 0.5);
+  vec3 tA = texture2D(uGrass, q / 3.2).rgb, tB = texture2D(uGrass, mat2(0.8, -0.6, 0.6, 0.8) * q / 10.5 + 0.37).rgb;
+  vec3 tc = tA * 0.62 + tB * 0.38;
+  float tl = dot(tc, vec3(0.3, 0.59, 0.11)) / 0.1361;                 // the photo's light and dark, around 1
+  float gl = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+  float grassy = smoothstep(0.03, 0.09, diffuseColor.g - max(diffuseColor.r, diffuseColor.b) * 0.9);
+  vec3 detail = mix(diffuseColor.rgb, diffuseColor.rgb * tl, 0.45);   // texture on any ground, keeping its colour
+  vec3 real = mix(tc * (gl / 0.1361), diffuseColor.rgb * tl, 0.35);     // the real grass, at this ground's brightness and a little of its tint
+  diffuseColor.rgb = mix(detail, real, grassy * 0.85); }`);
   };
   const canopyGeo = new THREE.IcosahedronGeometry(1, 1);
   const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2d4f25, roughness: 1, flatShading: true });
