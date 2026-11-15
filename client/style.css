@@ -750,3 +750,10 @@ body.touchui #feed { top: 86px; }
 
 /* A bigger FIRE button: it's also where your thumb aims while shooting (slide it). */
 body.touchui .tbtn.big.fire { width: 76px; height: 76px; }
+
+/* Looking through a scope: only what you need to shoot. The weapon strip, prompts, the tracker and the
+   buttons you don't use while scoped step away (fire, aim, zoom, reload and stances stay; ammo stays). */
+body.scoped #wslots, body.scoped #tracker, body.scoped #feed, body.scoped #prompt, body.scoped #where, body.scoped #gadgets { visibility: hidden; }
+body.scoped #touch .tbtn[data-key=look], body.scoped #touch .tbtn[data-key=tag], body.scoped #touch .tbtn[data-key=nade],
+body.scoped #touch .tbtn[data-key=heal], body.scoped #touch .tbtn[data-key=use], body.scoped #touch .ttop, body.scoped #tloot { visibility: hidden; }
+body.scoped #weapon { background: transparent; border-color: transparent; }

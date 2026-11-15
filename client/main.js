@@ -2506,6 +2506,7 @@ function ownedWeapons() {
 
 function openGunsmith() {
   state.gunsmithOpen = true;
+  state.invOpen = false;   // the bag is closed while the gunsmith is up (left open, it stopped your gun firing afterwards)
   $('inventory').hidden = true;
   $('gunsmith').hidden = false;
   const list = ownedWeapons();
@@ -2516,6 +2517,7 @@ function closeGunsmith() {
   state.gunsmithOpen = false;
   $('gunsmith').hidden = true;
   if (state.container) openInventory();
+  else { state.invOpen = false; lockPointer(); }
 }
 $('gsClose').onclick = closeGunsmith;
 $('gsExplode').onclick = () => { gs.explodeTarget = gs.explodeTarget ? 0 : 1; };
