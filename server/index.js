@@ -3347,7 +3347,6 @@ function scheduleDrop(now) {
   const sp = spots[Math.floor(Math.random() * spots.length)];
   const id = uid('d');
   drops.set(id, { id, x: sp.x + 1.5, z: sp.z + 1.5, landsAt: now + SUPPLY_FALL_MS, expires: now + SUPPLY_FALL_MS + 15 * 60_000 });
-  feed('📦 Supply drop inbound — marked on the map');
   sendEvents({ announce: true });
 }
 

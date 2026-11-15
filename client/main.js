@@ -938,14 +938,31 @@ function damageNumber(n, crit, pos) {
   damageNumber.t = setTimeout(() => $('crosshair').classList.remove('hit'), 120);
 }
 
+// Messages: one at a time on a phone (two on a big screen), the same message never twice in a row,
+// a few queued at most, each up long enough to read and no longer.
+const toastQ = { queue: [], shown: new Map() };
 function toast(text) {
-  const el = document.createElement('div');
-  el.textContent = text;
-  $('toasts').append(el);
-  setTimeout(() => el.remove(), 3500);
+  const now = performance.now();
+  if ((toastQ.shown.get(text) || 0) > now - 6000 || toastQ.queue.includes(text)) return;
+  toastQ.queue.push(text);
+  if (toastQ.queue.length > 3) toastQ.queue.shift();   // falling behind: the oldest goes
+  pumpToasts();
+}
+function pumpToasts() {
+  const box = $('toasts'), max = document.body.classList.contains('touchui') ? 1 : 2;
+  while (box.children.length < max && toastQ.queue.length) {
+    const text = toastQ.queue.shift();
+    toastQ.shown.set(text, performance.now());
+    const el = document.createElement('div');
+    el.textContent = text;
+    box.append(el);
+    setTimeout(() => { el.remove(); pumpToasts(); }, Math.min(4500, 2200 + text.length * 25));
+  }
 }
 
 function feedLine(text) {
+  // On a phone the corner feed is only for fights; everything else already comes as a message or on the map.
+  if (document.body.classList.contains('touchui') && !/➜|downed|revived|took down|data-hacked/.test(text)) return;
   const el = document.createElement('div');
   el.textContent = text;
   $('feed').prepend(el);
@@ -1269,7 +1286,7 @@ function handle(m) {
       selfMesh.position.set(m.x, ground(m.x, m.z), m.z);
       $('login').hidden = true; $('hud').hidden = false;
       if (m.deploy) openMapScreen(m.firstDeploy ? 'first' : 'redeploy', m.deploy);
-      else { toast('Back in the zone where you left off.'); lockPointer(); }
+      else lockPointer();
       break;
     case 'snap': {
       for (const p of m.players) {
@@ -1488,7 +1505,7 @@ function handle(m) {
       state.extracts = m.extracts || [];
       syncDrops();
       syncExtracts(m.pickup);
-      if (m.announce) toast(`📦 Supply drop inbound — salvage, parts, tech and a commendation. Check the map (${glyph('M')}).`);
+      if (m.announce) toast('📦 Supply drop inbound: it\'s on your map');
       break;
     case 'contracts':
       state.contracts = m.list;
@@ -2168,6 +2185,14 @@ function renderContact() {
 /** Active contracts shown under the kill feed. */
 function renderTracker() {
   const el = $('tracker');
+  if (document.body.classList.contains('touchui')) {
+    const z = state.hotZone, now = Date.now();
+    const c = state.contracts[0];
+    el.innerHTML = carryingHot() ? '<div class="hotc carry">🔥 Hot loot: get it home</div>'
+      : z ? `<div class="hotc">🔥 ${z.name.replace(/ \(.*\)$/, '')} · ${distText(Math.hypot(z.x - state.x, z.z - state.z))} · ${z.open ? 'closes' : 'opens'} ${mmss((z.open ? z.closesAt : z.opensAt) - now)}</div>`
+        : c ? `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>` : '';
+    return;
+  }
   el.innerHTML = (state.hotZone ? `<div class="hotc">${hotZoneLine()}</div>` : '') +
     (carryingHot() ? '<div class="hotc carry">🔥 You carry hot loot: everyone sees you every 30 s. Get it home or fly it out.</div>' : '') +
     state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('') +
@@ -4626,7 +4651,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground });   // debug/test hook
+Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground, toast });   // debug/test hook
 function closeTopPanel() {
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.gunsmithOpen) return closeGunsmith();
