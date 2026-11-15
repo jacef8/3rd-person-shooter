@@ -664,3 +664,5 @@ body.touchui .tbtn.use { right: calc(208px + env(safe-area-inset-right)); bottom
 body.touchui .tbtn.aim, body.touchui .tbtn.jump, body.touchui .tbtn.r4, body.touchui .tbtn.r5, body.touchui .tbtn.r2, body.touchui .tbtn.r7, body.touchui .tbtn.r6 { width: 52px; height: 52px; }
 .mapkey summary { cursor: pointer; font-weight: 700; color: var(--accent); min-height: 44px; display: flex; align-items: center; }
 .mapkey div { font-size: 14px; color: var(--ink-2, #c9ced6); }
+
+#xptext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

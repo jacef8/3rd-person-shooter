@@ -1411,7 +1411,7 @@ function updateHud() {
   const lo = xpForLevel(me.level), hi = xpForLevel(me.level + 1);
   $('level').textContent = `LEVEL ${me.level}`;
   $('xpbar').style.width = me.level >= MAX_LEVEL ? '100%' : `${((me.xp - lo) / (hi - lo)) * 100}%`;
-  $('xptext').textContent = me.level >= MAX_LEVEL ? `${me.xp} XP · max level` : `${me.xp - lo} / ${hi - lo} XP`;
+  $('xptext').textContent = me.level >= MAX_LEVEL ? 'MAX LEVEL' : `${me.xp - lo} / ${hi - lo} XP`;
 }
 
 function statLine(item) {
@@ -3989,11 +3989,15 @@ function buildTouchUI() {
     }
     e.preventDefault();
     ui.setPointerCapture(e.pointerId);
-    if (e.clientX < innerWidth * 0.45 && !touch.stick) {
-      touch.stick = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    const zone = stickZone();
+    if (e.clientX < innerWidth * 0.45 && !touch.stick && e.clientY > zone.top) {
+      // The stick comes up under your thumb, but kept between the top buttons and your health bars.
+      const cx = Math.max(zone.minX, Math.min(zone.maxX, e.clientX)), cy = Math.max(zone.minY, Math.min(zone.maxY, e.clientY));
+      touch.stick = { id: e.pointerId, x: e.clientX, y: e.clientY, bx: cx, by: cy };   // input from where your thumb landed; drawn at (bx, by)
       touch.autoRun = false; touch.sprintOn = false;
-      Object.assign(base.style, { left: `${e.clientX - 60}px`, top: `${e.clientY - 60}px`, display: 'block' });
-      Object.assign(lock.style, { left: `${e.clientX - 34}px`, top: `${e.clientY - 150}px`, display: 'block' });
+      Object.assign(base.style, { left: `${cx - 60}px`, top: `${cy - 60}px`, display: 'block' });
+      Object.assign(lock.style, { left: `${cx - 34}px`, top: `${cy - 104}px`, display: 'block' });
+      lock.textContent = '🔒 RUN';
       lock.classList.remove('on', 'held');
       knob.style.transform = 'translate(0px, 0px)';
     } else if (!touch.look) touch.look = { id: e.pointerId, x: e.clientX, y: e.clientY };
@@ -4017,7 +4021,7 @@ function buildTouchUI() {
   const end = (e) => {
     if (touch.stick?.id === e.pointerId) {
       touch.stick = null; base.style.display = 'none';
-      if (touch.lockZone) { touch.autoRun = true; touch.moveX = 0; touch.moveY = 1; touch.sprintOn = true; lock.classList.add('held'); lock.textContent = '🔒 RUNNING · touch the stick to stop'; }
+      if (touch.lockZone) { touch.autoRun = true; touch.moveX = 0; touch.moveY = 1; touch.sprintOn = true; lock.classList.add('held'); lock.textContent = '🔒 AUTO-RUN · tap stick to stop'; }
       else { touch.moveX = touch.moveY = 0; touch.sprint = false; touch.sprintOn = false; lock.style.display = 'none'; }
       touch.lockZone = false;
     }
@@ -4029,6 +4033,15 @@ function buildTouchUI() {
   $('tclose').addEventListener('click', closeTopPanel);
   applyTouchLayout();
   addEventListener('resize', applyTouchLayout);
+}
+/** Where the move stick's centre may sit: under the top buttons (room for the RUN lock above it) and
+ *  above your level and health bars, so it never covers either. */
+function stickZone() {
+  const R = 60, top = $('touch').querySelector('.ttop')?.getBoundingClientRect().bottom || 60;
+  const vit = $('levelrow')?.parentElement?.getBoundingClientRect(), bottom = vit && vit.height ? vit.top : innerHeight - 90;
+  let minY = top + R + 48, maxY = bottom - R - 6;
+  if (minY > maxY) minY = maxY = (minY + maxY) / 2;
+  return { top: top + 4, minX: R + 10, maxX: Math.max(R + 10, innerWidth * 0.3), minY, maxY };
 }
 /** Turn the camera by a finger's drag, in pixels (look area, or a thumb sliding on FIRE). */
 function lookBy(dx, dy) {
