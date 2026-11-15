@@ -39,5 +39,14 @@
       "lat": 30.4320301,
       "lon": -84.9852762
     }
+  ],
+  "communities": [
+    {
+      "_about": "Rock Bluff, Liberty County: GNIS populated place (FID 294908) via hometownlocator, 30.5435 N 84.9133 W.",
+      "name": "Rock Bluff",
+      "county": "Liberty",
+      "lat": 30.5435,
+      "lon": -84.9133
+    }
   ]
 }

@@ -1221,8 +1221,11 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     const p = inside[Math.floor(inside.length / 2)];
     return p ? { text: rv.name, x: p[0] + 400, z: p[1], kind: 'water' } : null;
   };
+  // Small named communities (real-extra.json): a name on the map and somewhere to come back to.
+  const communities = (EXTRA.communities || []).map((c) => ({ name: c.name, county: c.county, ...project(c.lat, c.lon, size) })).filter(onMap);
   const labels = [
     ...towns.map((t) => ({ text: t.name, x: t.x, z: t.rect.minZ - 6, kind: 'town' })),
+    ...communities.map((c) => ({ text: c.name, x: c.x, z: c.z - 30, kind: 'town' })),
     ...geo.rivers.map(riverLabel).filter(Boolean),
     ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })).filter(onMap),
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
@@ -1233,7 +1236,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   return {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: terrain.bridges, landmarks, labels, contacts, terminals,
     lootSpawns: spawns, landingZones, campSites, origin: geo.origin, centre: geo.centre,
-    docks, camps, river: river ? river.pts : null, powerLines, rails, airstrips, shops,
+    docks, camps, river: river ? river.pts : null, powerLines, rails, airstrips, shops, communities,
     /** The trees in one 128 m countryside tile, for drawing far-off woods without loading them into the world. */
     natureTile: (tx, tz) => natureTile(tx, tz, terrain.exact).filter((b) => b.type === 'tree' || b.type === 'pine'), natureTileSize: NATURE_TILE,
     real: { structures: realBuildings.length, roads: (real.roads || []).length },

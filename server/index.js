@@ -3555,17 +3555,22 @@ function homeLabel(id) {
   const near = map.towns.reduce((a, t) => (!a || Math.hypot(t.x - h.x, t.z - h.z) < Math.hypot(a.x - h.x, a.z - h.z) ? t : a), null);
   return `${kindName.toLowerCase()} near ${near.name}`;
 }
+/** Every town you can come back to: the towns with a Contact, then the small named communities. */
+const SPAWN_TOWNS = [
+  ...map.contacts.map((c) => ({ name: map.towns[c.townId].name, county: map.towns[c.townId].county || null, x: c.x + 3, z: c.z + 3, contact: c.id })),
+  ...map.communities.map((c) => ({ name: c.name, county: c.county || null, x: c.x, z: c.z, contact: null })),
+];
 function deployOptions(p) {
   const own = claimOf(p)?.kind === 'home' ? claimOf(p).id : null;
   const c = claimOf(p);
   return {
     houseId: own,
     claim: c ? { kind: c.kind, id: c.id, x: c.x, z: c.z, name: claimName(c) } : null,
-    // First time in: any town, landing zone or crewmate. After a death: your stash house only (or a
-    // random landing zone if you have none yet); the rest is fast travel from home.
-    towns: p.deploying ? map.contacts.map((ct) => ct.id) : [],
+    // First time in: any town, landing zone or crewmate. After a death: your stash house or any
+    // town; landing zones and your crew are fast travel from home.
+    towns: SPAWN_TOWNS.map((t, i) => ({ id: i, name: t.name, county: t.county, x: Math.round(t.x), z: Math.round(t.z) })),
     contacts: [],
-    lzs: p.deploying || !c ? map.landingZones.map((l) => l.id) : [],
+    lzs: p.deploying ? map.landingZones.map((l) => l.id) : [],
     crew: p.deploying ? squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.downed && !m.deploying).map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z) })) : [],
     crates: [],
     respawn: (() => {
@@ -3588,16 +3593,19 @@ function handleDeploy(p, msg) {
   const claim = claimOf(p);
   const now = Date.now(), rules = p.deploying ? null : respawnRules(p, now);
   if (rules && now < rules.readyAt) return toast(p, `You can redeploy in ${Math.ceil((rules.readyAt - now) / 1000)}s`);
-  if (rules && msg.kind !== 'home' && msg.kind !== 'house' && !(msg.kind === 'lz' && !claim)) return toast(p, claim ? 'After a death you come back at your stash house. From there, fast travel takes you to Contacts, landing zones and your crew.' : 'With no stash house yet you come back at a random landing zone');
+  if (rules && !['home', 'house', 'town', 'contact'].includes(msg.kind)) return toast(p, 'After a death you come back at your stash house or a town. From your stash house, fast travel takes you to landing zones and your crew.');
   let at = null;
   if (msg.kind === 'claim') {
     return toast(p, 'Deploy first, then plant your claim marker where you want your stash house');
   } else if (msg.kind === 'house' || msg.kind === 'home') {
     if (!claim) return;
     at = homeSpot(claim);
+  } else if (msg.kind === 'town') {
+    const tw = nth(SPAWN_TOWNS, msg.id);
+    if (!tw) return;
+    at = touchdownSpot(tw.x, tw.z);
   } else if (msg.kind === 'contact') {
-    // First deploy: any town. After that: Contacts you've discovered.
-    if (!p.discovered.includes(msg.id) && !p.deploying) return;
+    // A town by its Contact (any town: first time in, or after a death).
     const ct = nth(map.contacts, msg.id);
     if (!ct) return;
     at = { x: ct.x + 3, z: ct.z + 3 };

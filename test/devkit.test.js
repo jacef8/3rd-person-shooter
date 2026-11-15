@@ -61,7 +61,7 @@ test('testing kit: every gun, armor, flare, charge and tool, every unlock, gunsm
   // Die and come back: the kit is full again.
   send({ t: 'dev', kill: true });
   await until(() => you.dead);
-  send({ t: 'deploy', kind: 'lz', id: 0 });
+  send({ t: 'deploy', kind: 'town', id: 1 });
   await until(() => you && !you.dead);
   await sleep(200);
   check();

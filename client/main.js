@@ -1963,6 +1963,10 @@ function respawnLeft() {
   if (!r) return { wait: 0, crew: 0, away: 0 };
   return { wait: Math.max(0, r.waitMs - since), crew: Math.max(0, r.crewWaitMs - since), away: r.away ? Math.max(0, r.away.ms - since) : 0, spot: r.away, radius: r.keepAway, deaths: r.deaths };
 }
+/** One row per town you can start or come back in. */
+function townRows(towns) {
+  return (towns || []).map((t) => ({ label: `🏙 ${t.name}${t.county ? ` (${t.county} Co.)` : ''}`, x: t.x, z: t.z, msg: { t: 'deploy', kind: 'town', id: t.id }, color: '#ffd29a' }));
+}
 /** Landing zones by the area they're named for ("LZ H (Bristol)" → Bristol), in map order. */
 function lzGroups(ids) {
   const groups = new Map();
@@ -1995,7 +1999,7 @@ function mapOptions() {
     // afterwards by planting your claim marker.
     return [
       ...(o.crew || []).map((m) => ({ label: `👥 Deploy with ${m.name} (crew)`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' })),
-      ...(o.towns || []).map((id) => ({ label: `🏙 ${map.towns[map.contacts[id].townId].name}${map.towns[map.contacts[id].townId].county ? ` (${map.towns[map.contacts[id].townId].county} Co.)` : ''}`, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#ffd29a' })),
+      ...townRows(o.towns),
       ...lzRows(map.landingZones.map((lz) => lz.id)),
     ];
   }
@@ -2010,7 +2014,7 @@ function mapOptions() {
     };
     const list = [];
     if (o.claim) list.push(shut({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' }, { home: true }));
-    else list.push(shut({ label: '🪂 A random landing zone (you have no stash house yet)', x: 1e9, z: 1e9, noMarker: true, msg: { t: 'deploy', kind: 'lz', id: 0 }, color: '#e0e0e0' }));
+    for (const r of townRows(o.towns)) list.push(shut(r));
     return list;
   }
   if (state.mapMode === 'taxi' && state.taxi) {
@@ -2034,14 +2038,14 @@ function renderMapScreen() {
   const titles = { taxi: state.taxi ? `Helicopter from ${state.taxi.fromName}` : 'Helicopter', first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
     first: 'Pick a town, or a landing zone out in the woods. Then find somewhere to call home and plant your claim marker: a house, cave, fish camp, old RV or houseboat, or open ground.',
-    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. You come back at your stash house; from there, fast travel takes you to Contacts, landing zones and your crew, but not inside the red circle round where you died for 5 minutes. No stash house yet? A random landing zone.',
+    redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks and your stash are safe. Come back at your stash house or any town, but no town inside the red circle round where you died for 5 minutes. From your stash house, fast travel takes you to landing zones and your crew.',
     travel: 'Fast travel goes out from your stash house to Contacts you have found, landing zones (tap one on the map for an exact one) and your crew. Getting loot home is still on foot. Not within about a mile of where you last died for 5 minutes, and joining your crew works once every 5 minutes.',
     taxi: `Pick where to fly. You jump from ${feet(HELI.airTaxi.jump.alt, 50)} over a random spot ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it and steer down by parachute or squirrel suit, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
     view: 'Gold ◆ contracts · red ● supply drops · red ◆ extraction flares and lit-up enemies · orange ◆ enemy stash houses you hacked · blue ✦ Contacts (dim = undiscovered) · green = home & squad · purple ◆ world events · small blue ● ⚓ river landings · pale green ◆ 🏕 swamp camps (by boat). Call extraction at any Contact or landing zone.',
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
-  if (state.mapMode === 'first') $('mapNote').textContent += ' Tap a spot on the map to pick it exactly.';
+  if (state.mapMode === 'first' || state.mapMode === 'redeploy') $('mapNote').textContent += ' Tap a spot on the map to pick it.';
   if (state.mapMode === 'redeploy') {
     const rs = respawnLeft();
     if (rs.wait > 0) $('mapNote').textContent = `Back in ${Math.ceil(rs.wait / 1000)}s${rs.deaths > 1 ? ` — that's ${rs.deaths} deaths in 10 minutes, so the wait is longer` : ''}. ` + $('mapNote').textContent;

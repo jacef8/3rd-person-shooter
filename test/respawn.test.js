@@ -19,7 +19,7 @@ async function until(fn, ms = 15000) {
 }
 const map = generateMap(1337);
 
-test('respawn: a growing wait, no coming back near where you died (home excepted), random landing zones', async (t) => {
+test('respawn: a growing wait; home or a town, but not near where you died; fast travel from home', async (t) => {
   const A = 'a7'.repeat(16);
   const ct = map.contacts[0], home = map.houses.find((h) => h.kind === 'house' && Math.hypot(h.x - ct.x, h.z - ct.z) < 1200);
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzresp-')), 'w.json');
@@ -40,19 +40,22 @@ test('respawn: a growing wait, no coming back near where you died (home excepted
   send({ t: 'join', name: 'Again', token: A });
   await until(() => you && !you.dead);
 
-  // First death, by the Contact: a short wait, then home is the only way back.
+  // First death, by the Contact: a short wait, then home or a town (not the one where you died).
   send({ t: 'dev', kill: true });
   const died = await until(() => msgs.find((m) => m.t === 'died'));
   const r1 = died.deploy.respawn;
   assert.ok(r1.waitMs > 1000 && r1.waitMs <= 2000, `first wait ${r1.waitMs}`);
   assert.equal(r1.keepAway, ACT.respawn.keepAwayM);
   assert.ok(Math.hypot(r1.away.x - ct.x, r1.away.z - ct.z) < 10, 'the closed circle is where you died');
-  assert.ok(died.deploy.claim && !died.deploy.contacts.length && !died.deploy.lzs.length && !died.deploy.crew.length, 'home only');
+  assert.ok(died.deploy.claim && died.deploy.towns.length >= 7 && !died.deploy.lzs.length && !died.deploy.crew.length, 'home or a town');
+  assert.ok(died.deploy.towns.some((tw) => tw.name === 'Rock Bluff'), 'Rock Bluff is one of the towns');
   send({ t: 'deploy', kind: 'home' });
   await toast(/You can redeploy in \ds/);
   await sleep(2100);
-  for (const m of [{ kind: 'contact', id: ct.id }, { kind: 'lz', id: 0 }]) send({ t: 'deploy', ...m });
-  await toast(/come back at your stash house/);
+  send({ t: 'deploy', kind: 'town', id: 0 });   // the town you died in
+  await toast(/Too close to where you died/);
+  send({ t: 'deploy', kind: 'lz', id: 0 });
+  await toast(/come back at your stash house or a town/);
   assert.ok(you.dead, 'not back yet');
   send({ t: 'deploy', kind: 'home' });
   await until(() => !you.dead);
@@ -79,7 +82,7 @@ test('respawn: a growing wait, no coming back near where you died (home excepted
   await until(() => !you.dead);
 });
 
-test('respawn with no stash house yet: a random landing zone away from where you died', async (t) => {
+test('respawn with no stash house: any town outside the circle round where you died', async (t) => {
   const B = 'b8'.repeat(16), ct = map.contacts[0];
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzresp2-')), 'w.json');
   fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {},
@@ -98,10 +101,12 @@ test('respawn with no stash house yet: a random landing zone away from where you
   await until(() => you && !you.dead);
   send({ t: 'dev', kill: true });
   const died = await until(() => msgs.find((m) => m.t === 'died'));
-  assert.ok(!died.deploy.claim && died.deploy.lzs.length > 0);
-  const nearLz = map.landingZones.reduce((a, l) => (Math.hypot(l.x - ct.x, l.z - ct.z) < Math.hypot(a.x - ct.x, a.z - ct.z) ? l : a));
-  send({ t: 'deploy', kind: 'lz', id: nearLz.id });   // asks for the closest: gets a random one outside the circle
+  assert.ok(!died.deploy.claim && died.deploy.towns.length >= 7);
+  send({ t: 'deploy', kind: 'town', id: 0 });
+  await until(() => msgs.find((m) => m.t === 'toast' && /Too close to where you died/.test(m.text)));
+  const far = died.deploy.towns.find((tw) => Math.hypot(tw.x - ct.x, tw.z - ct.z) > ACT.respawn.keepAwayM + 200);
+  send({ t: 'deploy', kind: 'town', id: far.id });
   await until(() => !you.dead);
   await sleep(200);
-  assert.ok(Math.hypot(at.x - ct.x, at.z - ct.z) >= ACT.respawn.keepAwayM - 50, `landed ${Math.round(Math.hypot(at.x - ct.x, at.z - ct.z))} m from where you died`);
+  assert.ok(Math.hypot(at.x - far.x, at.z - far.z) < 70, `back in ${far.name}`);
 });
