@@ -94,6 +94,10 @@ marker** (a room, house, cave, vehicle or open ground) and **level up**, and the
 
 **https://deadzone-server-production-c9ff7400.up.railway.app** (hosted on Railway; redeploys on every push to this branch). Works on phones with a controller. See [docs/TESTING.md](docs/TESTING.md) for what to try.
 
+Railway's start command is set to `node server/hub.js`, not `npm start`: on every redeploy Railway
+stops the old server, and npm reports that stop as a failure ("npm error signal SIGTERM"), which
+Railway counts as a crash and emails about. Run directly, the hub saves every world and exits cleanly.
+
 ## Game rules are data
 
 Every number and table (weapons, gunsmith parts, levels, XP, gadgets, stash upgrades, home levels,
