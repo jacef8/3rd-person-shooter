@@ -1280,6 +1280,7 @@ function handle(m) {
       state.myName = lobby.account?.name || $('name').value.trim() || 'Agent';
       Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, devKit: !!m.devKit, doorBase: m.doorBase });
       state.pushKey = m.pushKey || null;
+      if (touchCapable && !localStorage.getItem('dz_tip_fire')) { localStorage.setItem('dz_tip_fire', '1'); setTimeout(() => toast('Tip: keep your thumb on FIRE and slide it to aim while you shoot'), 6000); }
       syncPush();
       if (!state.map) initWorld(m);
       selfMesh.visible = true;
@@ -3362,7 +3363,10 @@ function renderPadSettings() {
     b.dataset.pad = `gfx-${m}`;
     row5.append(b);
   }
-  box.append(row5, row, row2, row3, row4, pushRow());
+  const rowA = document.createElement('div'); rowA.className = 'item';
+  rowA.innerHTML = '<div class="meta"><div class="nm">Aim assist (phone and controller)</div><div class="st">Over an enemy your aim slows so you don\'t sweep past; while you move or fire it gently follows them; pressing AIM near one settles your sights on them. Never with a mouse.</div></div>';
+  for (const [m, l] of [['off', 'Off'], ['light', 'Light'], ['strong', 'Strong']]) { const b = btn(l, () => { tset.aimAssist = m; saveTset(); renderPadSettings(); }, (tset.aimAssist || 'strong') === m ? '' : 'ghost'); b.dataset.pad = `assist-${m}`; rowA.append(b); }
+  box.append(row5, row, row2, row3, row4, rowA, pushRow());
   if (touchCapable) {
     const t1 = document.createElement('div'); t1.className = 'item';
     t1.innerHTML = '<div class="meta"><div class="nm">Phone controls: layout</div><div class="st">Move any button where your thumbs want it, make them bigger or smaller, more or less see-through.</div></div>';
@@ -3655,7 +3659,7 @@ function pollPad(dt, now) {
     const curve = (v) => Math.sign(v) * Math.abs(v) ** 1.8;
     const lx = curve(deadzone(ax[2], 0.12)), ly = curve(deadzone(ax[3], 0.12));
     const zoomScale = state.aiming ? camera.fov / 70 : 1;
-    const slow = state.aimTargetId ? 0.5 : 1;
+    const slow = assistFriction();
     const speed = pad.settings.lookSpeed * zoomScale * slow;
     state.yaw -= lx * speed * dt;
     state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - ly * speed * 0.75 * dt * (pad.settings.invertY ? -1 : 1)));
@@ -4165,6 +4169,7 @@ function frame(now) {
   for (const [, l] of state.loot) l.mesh.rotation.y += dt;
   for (const [, b] of state.bags) b.mesh.rotation.y += dt * 0.5;
 
+  updateAimAssist(dt);
   // Over-the-shoulder camera with wall collision.
   const d = lookDir();
   const right = new THREE.Vector3(-Math.cos(state.yaw), 0, Math.sin(state.yaw));
@@ -4282,7 +4287,7 @@ window.__dz = { state, send, boatVis, structVis };
 // on the right to look, and buttons for everything else. Hidden while a controller is in use.
 const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null, autoRun: false };
 // Phone settings (this device): button layout, size and see-through, the left fire button, gyro aim.
-const tset = { pos: {}, scale: 1, alpha: 1, leftFire: false, gyro: 'off', aimMode: 'mixed', autoFire: 'off', adsSens: 1, autoPick: { ammo: true, heals: true, supplies: true, gear: false } };
+const tset = { pos: {}, scale: 1, alpha: 1, leftFire: false, gyro: 'off', aimMode: 'mixed', autoFire: 'off', adsSens: 1, aimAssist: 'strong', autoPick: { ammo: true, heals: true, supplies: true, gear: false } };
 try { Object.assign(tset, JSON.parse(localStorage.getItem('dz_touch') || '{}')); } catch { /* keep the defaults */ }
 tset.autoPick = { ammo: true, heals: true, supplies: true, gear: false, ...(tset.autoPick || {}) };
 if (!tset.lf2) { tset.leftFire = false; tset.lf2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }   // the left FIRE button starts off once (turn it on in Settings)
@@ -4611,9 +4616,61 @@ function stickZone() {
   if (minY > maxY) minY = maxY = (minY + maxY) / 2;
   return { top: top + 4, minX: R + 10, maxX: Math.max(R + 10, innerWidth * 0.3), minY, maxY };
 }
+// ---- aim assist (phones and controllers; never a mouse): like the big phone shooters. Over an enemy
+// your turning slows so you don't sweep past; while you move, look or fire, the view gently follows
+// the target you're on; pressing AIM near one settles your sights onto it. Off / Light / Strong.
+const ASSIST_LV = { off: 0, light: 0.55, strong: 1 };
+const assist = { target: null, ang: 0, prevAim: false, snap: 0 };
+const NOT_FOES = new Set(['merchant', 'settler', 'trader', 'pawn', 'convoy']);
+const assistLevel = () => ((state.touchUI && state.inputMode !== 'pad') || state.inputMode === 'pad' ? ASSIST_LV[tset.aimAssist || 'strong'] ?? 1 : 0);
+function assistFriction() { return assist.target ? 1 - 0.45 * assistLevel() : 1; }
+function updateAimAssist(dt) {
+  const lv = assistLevel();
+  const me = state.me, aimNowOn = state.aiming;
+  assist.target = null;
+  if (!lv || !me || me.dead || me.downed || state.air || build.on || state.invOpen) { assist.prevAim = aimNowOn; return; }
+  const ws = weaponStats(me.inv[me.active]);
+  if (!ws) { assist.prevAim = aimNowOn; return; }
+  const E = new THREE.Vector3(state.x, eyeHeight(), state.z), d = lookDir();
+  const maxAng = (aimNowOn ? 0.06 : 0.09) * (camera.fov / 70) + 0.015;
+  let best = null, bestA = maxAng;
+  const consider = (c, mesh) => {
+    if (!c || c.dead || c.sq || !mesh) return;
+    const p = mesh.position, h = c.prone ? 0.35 : c.crouch ? 0.9 : 1.25;
+    const tx = p.x - E.x, ty = p.y + h - E.y, tz = p.z - E.z, L = Math.hypot(tx, ty, tz);
+    if (L < 1.5 || L > ws.range * 1.6) return;
+    const a = Math.acos(Math.min(1, (tx * d.x + ty * d.y + tz * d.z) / L));
+    if (a < bestA) { bestA = a; best = { x: p.x, y: p.y + h, z: p.z, L }; }
+  };
+  for (const [, r] of state.players) consider(r.data, r.mesh);
+  for (const [, r] of state.bots) if (!r.animal && !NOT_FOES.has(r.data?.kind)) consider(r.data, r.mesh);
+  if (best) {   // only someone you could actually hit: nothing solid in between
+    const dir = new THREE.Vector3(best.x - E.x, best.y - E.y, best.z - E.z).normalize();
+    const wall = Math.min(rayAgainstBoxes(E.x, E.y, E.z, dir.x, dir.y, dir.z, solidsAlongRay(E.x, E.z, dir.x, dir.z, best.L), best.L).t, state.map.terrain.ray(E.x, E.y, E.z, dir.x, dir.y, dir.z, best.L));
+    if (wall < best.L - 0.6) best = null;
+  }
+  if (best) {
+    assist.target = best; assist.ang = bestA;
+    const wantYaw = Math.atan2(best.x - E.x, best.z - E.z), wantPitch = Math.atan2(best.y - E.y, Math.hypot(best.x - E.x, best.z - E.z));
+    const dyaw = Math.atan2(Math.sin(wantYaw - state.yaw), Math.cos(wantYaw - state.yaw)), dp = wantPitch - state.pitch;
+    if (aimNowOn && !assist.prevAim) assist.snap = 0.16;   // just pressed AIM near a target
+    if (assist.snap > 0) {
+      const k = Math.min(1, dt / assist.snap) * 0.75 * lv;
+      state.yaw += dyaw * k; state.pitch += dp * k; assist.snap -= dt;
+    } else {
+      const moving = Math.hypot(state.vel?.[0] || 0, state.vel?.[1] || 0) > 0.5;
+      const active = moving || !!touch.look || state.mouseDown || [...document.querySelectorAll('#touch .tbtn.fire')].some((b) => b.look);
+      if (active) {
+        const k = Math.min(1, dt * 3.2 * lv) * (1 - 0.5 * bestA / maxAng);
+        state.yaw += dyaw * k * 0.6; state.pitch += dp * k * 0.35;
+      }
+    }
+  } else assist.snap = 0;
+  assist.prevAim = aimNowOn;
+}
 /** Turn the camera by a finger's drag, in pixels (look area, or a thumb sliding on FIRE). */
 function lookBy(dx, dy) {
-  const sens = (state.aiming ? 0.004 * camera.fov / 70 * (tset.adsSens || 1) : 0.006) * pad.settings.lookSpeed / 2.6;
+  const sens = (state.aiming ? 0.004 * camera.fov / 70 * (tset.adsSens || 1) : 0.006) * pad.settings.lookSpeed / 2.6 * assistFriction();
   state.yaw -= dx * sens;
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - dy * sens));
 }

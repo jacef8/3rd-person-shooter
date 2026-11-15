@@ -747,3 +747,6 @@ body.touchui #feed { top: 86px; }
 /* Steady (single-shot gun, aimed, still, rested): the crosshair closes up and turns green. */
 #crosshair i { transition: transform 120ms ease-out, background-color 120ms; }
 #crosshair.steady i { background: #7dff9a; }
+
+/* A bigger FIRE button: it's also where your thumb aims while shooting (slide it). */
+body.touchui .tbtn.big.fire { width: 76px; height: 76px; }
