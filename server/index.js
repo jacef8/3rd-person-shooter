@@ -2979,13 +2979,26 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1, opts = {}) {
   const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
   const base = [dir[0] / len, dir[1] / len, dir[2] / len];
   const moving = !isBot && shooter.speed > 0.5;
-  const baseSpread = isBot ? s.hipSpread * 0.6 : shooter.aiming ? s.adsSpread : s.hipSpread;
-  const spreadMul = (moving ? 1.6 : 1) * (shooter.prone ? 0.6 : shooter.crouch ? 0.8 * s.crouchSpread : 1) / botAccuracy;
+  // Single-shot guns (pistols, marksman rifles, launchers) reward a careful shot: aimed, standing
+  // still, with a breath since the last one, the round goes exactly where the crosshair is. Rushed
+  // or on the move they still group far tighter than an automatic. Shotgun pellets always spread.
+  const careful = !isBot && s.semi && s.pellets === 1 && shooter.aiming && !moving && (opts.since ?? Infinity) >= Math.max(350, 60_000 / s.rpm * 1.4);
+  const semiMul = !isBot && s.semi && s.pellets === 1 ? (shooter.aiming ? 0.35 : 0.6) : 1;
+  const baseSpread = isBot ? s.hipSpread * 0.6 : careful ? 0 : (shooter.aiming ? s.adsSpread : s.hipSpread) * semiMul;
+  const spreadMul = (moving ? (s.semi ? 1.3 : 1.6) : 1) * (shooter.prone ? 0.6 : shooter.crouch ? 0.8 * s.crouchSpread : 1) / botAccuracy;
+  // Two directions square to the shot, for scattering it in a cone.
+  const ux = Math.abs(base[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  const u = [base[1] * ux[2] - base[2] * ux[1], base[2] * ux[0] - base[0] * ux[2], base[0] * ux[1] - base[1] * ux[0]];
+  const ul = Math.hypot(u[0], u[1], u[2]) || 1; u[0] /= ul; u[1] /= ul; u[2] /= ul;
+  const v = [base[1] * u[2] - base[2] * u[1], base[2] * u[0] - base[0] * u[2], base[0] * u[1] - base[1] * u[0]];
   const seen = !isBot && opts.tid ? (players.get(opts.tid) || bots.get(opts.tid)) : null;   // who was under their crosshair
   const tracers = [];
   for (let i = 0; i < s.pellets; i++) {
     const sp = baseSpread * spreadMul;
-    let dx = base[0] + (Math.random() - 0.5) * 2 * sp, dy = base[1] + (Math.random() - 0.5) * 2 * sp, dz = base[2] + (Math.random() - 0.5) * 2 * sp;
+    // Scatter inside a cone of that size, bunched toward the middle (most shots near the crosshair,
+    // a few out at the edge), instead of evenly over a square.
+    const ang = Math.random() * Math.PI * 2, rad = sp * Math.min(1, Math.abs((Math.random() + Math.random() + Math.random()) / 1.5 - 1) * 1.6);
+    let dx = base[0] + (u[0] * Math.cos(ang) + v[0] * Math.sin(ang)) * rad, dy = base[1] + (u[1] * Math.cos(ang) + v[1] * Math.sin(ang)) * rad, dz = base[2] + (u[2] * Math.cos(ang) + v[2] * Math.sin(ang)) * rad;
     const l = Math.hypot(dx, dy, dz); dx /= l; dy /= l; dz /= l;
     const maxRange = s.range * 2.2;
     let hit = traceShot(ox, oy, oz, dx, dy, dz, maxRange, shooter.id);
@@ -4463,10 +4476,11 @@ function handleShoot(p, msg) {
   const mag = p.mags[w.id] ?? 0;
   if (mag <= 0) return;
   if (!Array.isArray(msg.dir) || msg.dir.length !== 3 || !msg.dir.every(Number.isFinite)) return;
+  const since = now - (p.lastShot || 0);
   p.lastShot = now;
   p.mags[w.id] = mag - 1;
   const at = Array.isArray(msg.at) && msg.at.length === 3 && msg.at.every(Number.isFinite) ? msg.at : null;
-  fire(p, msg.dir, false, 1, { at, tid: typeof msg.tid === 'string' ? msg.tid : null });
+  fire(p, msg.dir, false, 1, { at, since, tid: typeof msg.tid === 'string' ? msg.tid : null });
   dirty(p);
 }
 function handleReload(p) {

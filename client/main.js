@@ -4202,6 +4202,10 @@ function frame(now) {
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
   $('crosshair').classList.toggle('aim', aim);
+  // Steady: a single-shot gun, aimed, standing still, a breath since the last shot: the next round goes
+  // exactly where the crosshair is, and the crosshair closes up to say so.
+  const moved = Math.hypot(state.vel?.[0] || 0, state.vel?.[1] || 0) > 0.5;
+  $('crosshair').classList.toggle('steady', !!(aim && ws?.semi && (ws.pellets || 1) === 1 && !moved && now - (state.lastShot || 0) >= Math.max(350, 60000 / ws.rpm * 1.4)));
   // Obstructed: something close between your gun and what the crosshair is on (a corner, a door frame,
   // a low wall: the over-the-shoulder camera sees past it, the gun doesn't). Those shots hit it.
   if (alive && ws && !state.air) {
@@ -4219,8 +4223,10 @@ function frame(now) {
   // The crosshair opens up to show how far shots can stray (hip fire, moving, crouched, prone).
   if (ws) {
     const moving = Math.hypot(pad.moveX, pad.moveY) > 0.2 || Math.hypot(touch.moveX, touch.moveY) > 0.2 || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => state.keys.has(k));
-    const spread = (aim ? ws.adsSpread : ws.hipSpread) * (moving ? 1.6 : 1) * (state.prone ? 0.6 : state.crouch ? 0.8 * ws.crouchSpread : 1);
-    const gap = Math.max(2, Math.min(80, Math.tan(spread) / Math.tan(camera.fov * Math.PI / 360) * innerHeight / 2));
+    // Same rules as the server: single-shot guns group tighter, and a steady aimed shot is dead-on.
+    const single = ws.semi && (ws.pellets || 1) === 1, steady = $('crosshair').classList.contains('steady');
+    const spread = steady ? 0 : (aim ? ws.adsSpread : ws.hipSpread) * (single ? (aim ? 0.35 : 0.6) : 1) * (moving ? (ws.semi ? 1.3 : 1.6) : 1) * (state.prone ? 0.6 : state.crouch ? 0.8 * ws.crouchSpread : 1);
+    const gap = Math.max(steady ? 1 : 2, Math.min(80, Math.tan(spread) / Math.tan(camera.fov * Math.PI / 360) * innerHeight / 2));
     $('crosshair').style.setProperty('--gap', `${gap.toFixed(1)}px`);
   }
 

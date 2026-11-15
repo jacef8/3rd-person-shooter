@@ -743,3 +743,7 @@ body.touchui #tracker { max-width: 28vw; }
 body.touchui #tracker div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 28vw; }
 body.touchui #tracker { top: 58px; }
 body.touchui #feed { top: 86px; }
+
+/* Steady (single-shot gun, aimed, still, rested): the crosshair closes up and turns green. */
+#crosshair i { transition: transform 120ms ease-out, background-color 120ms; }
+#crosshair.steady i { background: #7dff9a; }
