@@ -454,13 +454,18 @@
     "crewEveryMin": 5
   },
   "hotZone": {
-    "_about": "One hot zone at a time: announced warnMs before it opens, open for openMs, a new one every everyMs (announce to announce). Elite guards and a few crates of top gear. Everything from a crate is hot: you show on everyone's map every pingMs until you extract it (fly it out, or carry it into your stash house or a hideout); die first and it drops. The taxi won't come within keepOutM, fast travel and respawns can't put you there; a hot-drop flare parachutes you in at the edge.",
-    "everyMs": 2400000,
-    "warnMs": 240000,
-    "openMs": 1200000,
+    "_about": "One hot zone at a time, somewhere random (a named place or open country), at random times: a random gap after the last one closes, a random warning, a random length. Elite guards patrol it; a few big crates and caches scattered through its buildings, ditches and woods. Everything taken is hot: you show on everyone's map (every pingMs carrying crate loot, every cachePingMs carrying only cache loot) until you extract it; die first and it drops. The taxi drops no closer than keepOutM; fast travel and respawns can't land you that close; a hot-drop flare parachutes you to the edge.",
+    "warnMs": [
+      180000,
+      300000
+    ],
+    "openMs": [
+      900000,
+      1500000
+    ],
     "firstAfterMs": 600000,
     "radius": 150,
-    "keepOutM": 1609,
+    "keepOutM": 805,
     "crates": 4,
     "cratesPerPlayer": 2,
     "crateMs": 10000,
@@ -493,6 +498,76 @@
       "waitMs": 20000,
       "dropChance": 0.08,
       "edge": 30
+    },
+    "gapMs": [
+      1200000,
+      3600000
+    ],
+    "namedChance": 0.5,
+    "caches": 14,
+    "cachePingMs": 60000,
+    "guardLeash": 60,
+    "cache": {
+      "_about": "What a scattered cache can be: weight, name, and contents (a hot lockbox) or a hot rare gun.",
+      "kinds": [
+        {
+          "w": 3,
+          "name": "Ammo can",
+          "contents": {
+            "ammo": [
+              60,
+              120
+            ],
+            "parts": [
+              10,
+              20
+            ]
+          }
+        },
+        {
+          "w": 3,
+          "name": "Cash bag",
+          "contents": {
+            "cash": [
+              150,
+              300
+            ]
+          }
+        },
+        {
+          "w": 3,
+          "name": "Tech case",
+          "contents": {
+            "tech": [
+              15,
+              25
+            ],
+            "intel": [
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "w": 2,
+          "name": "Parts bin",
+          "contents": {
+            "parts": [
+              30,
+              50
+            ],
+            "salvage": [
+              20,
+              30
+            ]
+          }
+        },
+        {
+          "w": 1,
+          "name": "Rifle (hot-zone build)",
+          "gun": true
+        }
+      ]
     }
   }
 }

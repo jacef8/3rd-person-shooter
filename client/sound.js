@@ -89,6 +89,7 @@ const GUNS = {
   dmr: { crack: 2000, thump: 95, tail: 0.38, gain: 1.1 },
   shotgun: { crack: 1500, thump: 80, tail: 0.32, gain: 1.15 },
   lmg: { crack: 2300, thump: 105, tail: 0.28, gain: 1.0 },
+  launcher: { crack: 700, thump: 55, tail: 0.6, gain: 1.2 },
 };
 /** A gunshot at a point. `sup` 1 = suppressed, 2 = suppressed with subsonic rounds. */
 export function shot(x, y, z, kind = 'carbine', sup = 0, own = false) {
@@ -169,4 +170,16 @@ export function levelUp() {
   if (!audio()) return;
   const d = out(0.3);
   [523, 659, 784, 1047].forEach((f, i) => tone(d, { t: i * 0.09, dur: 0.22, from: f, type: 'triangle', gain: 0.5 }));
+}
+
+/** A base alarm's siren: a rising and falling wail for a few seconds, from where the alarm is. */
+export function siren(x, y, z) {
+  if (!audio()) return;
+  const where = place(x, y, z, 260);
+  if (!where) return;
+  const d = out(Math.min(0.9, where.gain * 2.2), where.pan);
+  for (let i = 0; i < 6; i++) {
+    tone(d, { t: i * 0.7, dur: 0.35, from: 620, to: 1150, type: 'sawtooth', gain: 0.22 });
+    tone(d, { t: i * 0.7 + 0.35, dur: 0.35, from: 1150, to: 620, type: 'sawtooth', gain: 0.22 });
+  }
 }

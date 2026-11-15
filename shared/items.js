@@ -123,6 +123,7 @@ export function weaponStats(item) {
     mobility: a.mobility, pellets: a.pellets, zoom: a.zoom, semi: a.semi,
     suppressed: false, crouchSpread: 1, crouchRecoil: 1,
     zoomAlt: 0,            // extra magnification you can flip to while aiming (hybrid and variable sights)
+    explosive: !!a.explosive,   // rockets: burst where they land instead of hitting one thing
     armor: 1, flesh: 1,    // ammunition: damage multiplier against armor, and against health
     thermal: false, autoTag: false, rangefinder: false, glint: false, subsonic: false,   // what a sight or a load can do
   };

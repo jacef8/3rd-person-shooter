@@ -11,6 +11,7 @@ const SIZE = {
   shotgun: [0.42, 0.36, 0.12],
   dmr:     [0.46, 0.42, 0.11],
   lmg:     [0.52, 0.38, 0.14],
+  launcher: [0.9, 0.1, 0.16],
 };
 
 const metal = (color = 0x1e1f21) => new THREE.MeshStandardMaterial({ color, metalness: 0.6, roughness: 0.45 });
@@ -76,6 +77,20 @@ export function buildGunModel(gun) {
   if (!gun) return g;
   const parts = { ...DEFAULT_PARTS, ...(gun.parts || {}) };
   const a = gun.a || gun.archetype;
+  if (a === 'launcher') {
+    // A shoulder-fired tube: flared at the back, a grip and a fold-up sight, a rocket nose showing.
+    const olive = new THREE.MeshStandardMaterial({ color: 0x4a5236, roughness: 0.7 });
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.0, 14), olive);
+    tube.rotation.x = Math.PI / 2; tube.position.z = 0.25; g.add(tube);
+    const flare = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.085, 0.14, 14, 1, true), olive);
+    flare.rotation.x = -Math.PI / 2; flare.position.z = -0.3; g.add(flare);
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.16, 12), new THREE.MeshStandardMaterial({ color: 0x7a7d6a, metalness: 0.4 }));
+    nose.rotation.x = Math.PI / 2; nose.position.z = 0.82; g.add(nose);
+    const gripL = box(0.04, 0.13, 0.05, metal(0x1e1f21)); gripL.position.set(0, -0.11, 0.05); g.add(gripL);
+    const sight = box(0.03, 0.08, 0.04, metal(0x1e1f21)); sight.position.set(0.05, 0.08, 0.35); g.add(sight);
+    g.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.userData.explode = new THREE.Vector3(); c.userData.home = c.position.clone(); } });
+    return g;
+  }
   const [L, B, H] = SIZE[a] || SIZE.carbine;
   const paint = skinMaterial(gun.paint);
   const add = (mesh, explode = [0, 0, 0], slot = 'body') => {

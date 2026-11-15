@@ -62,5 +62,17 @@
   "newPlayerShield": {
     "_about": "Below untilLevel, other players can't hurt, stun, take down or hack you, until you attack a player or someone's base (that ends it for good). Your claim marker and tools never drop when you die, at any level.",
     "untilLevel": 5
+  },
+  "rocket": {
+    "_about": "A rocket bursts where it hits (or at the end of its range). Big damage to walls, gates, doors and defenses (raid rules still apply); hurts anyone close, you included. Rockets are their own ammo.",
+    "radius": 4.0,
+    "damage": 1500,
+    "playerRadius": 5.5,
+    "playerDamage": 125,
+    "price": 150,
+    "launcherPrice": 2500,
+    "crateChance": 0.25,
+    "dropChance": 0.3,
+    "devKit": 6
   }
 }

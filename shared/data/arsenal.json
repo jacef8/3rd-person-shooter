@@ -125,6 +125,25 @@
       "mobility": 0.9,
       "pellets": 1,
       "zoom": 1.4
+    },
+    "launcher": {
+      "label": "Rocket Launcher",
+      "level": 14,
+      "cost": 400,
+      "semi": true,
+      "explosive": true,
+      "damage": 125,
+      "range": 160,
+      "rpm": 30,
+      "mag": 1,
+      "reloadMs": 3400,
+      "hipSpread": 0.03,
+      "adsSpread": 0.004,
+      "recoil": 0.12,
+      "handling": 22,
+      "mobility": 0.85,
+      "pellets": 1,
+      "zoom": 1.5
     }
   },
   "slots": [

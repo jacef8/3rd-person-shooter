@@ -333,7 +333,7 @@
         0.3
       ],
       "defense": "tripwire",
-      "_about": "Invisible-ish wire: an intruder who crosses it is stunned, revealed to your crew and logged. Re-arms itself.",
+      "_about": "A thin wire between two stakes, shin-high: an intruder who walks into it is stunned, revealed to your crew and logged. Re-arms itself. Beaten by spotting it and jumping over it, cutting it (crouch, E) or shooting it.",
       "stages": [
         {
           "name": "Tripwire",
@@ -346,6 +346,28 @@
         }
       ]
     },
+    "mine": {
+      "name": "Land mine",
+      "size": [
+        0.5,
+        0.12,
+        0.5
+      ],
+      "defense": "mine",
+      "_about": "Buried just under the dirt, three prongs showing: whoever steps on it gets blown off their feet. You only spot it up close (a patch of turned dirt). Beaten by spotting it and shooting it from a distance, or crouching beside it and disarming it (E, 4 s). A sensor grenade shows it from afar.",
+      "stages": [
+        {
+          "name": "Land mine",
+          "cost": {
+            "salvage": 6,
+            "parts": 6,
+            "tech": 2
+          },
+          "hp": 1,
+          "material": "frame"
+        }
+      ]
+    },
     "alarm": {
       "name": "Motion alarm",
       "size": [
@@ -354,7 +376,7 @@
         1.2
       ],
       "defense": "alarm",
-      "_about": "Warns your crew (and logs it for when you're back) when an intruder comes within 65 ft. Camo beats it.",
+      "_about": "A post with a red light. When an intruder comes within 65 ft it sounds a siren everyone nearby hears, and warns your crew (logged for when you're back). Beaten by camo, a stun grenade (jams it), or shooting it from outside its range.",
       "stages": [
         {
           "name": "Motion alarm",
@@ -375,7 +397,7 @@
         1.4
       ],
       "defense": "sentry",
-      "_about": "Shoots intruders and Rogues within 80 ft. Needs ammo: load it with E.",
+      "_about": "Shoots intruders and Rogues within 80 ft (a red eye shows where it's looking). Needs ammo: load it with E. Beaten by a stun grenade (jams it for a while), rockets or a lot of bullets, or waiting it out of ammo.",
       "stages": [
         {
           "name": "Sentry gun",

@@ -75,6 +75,13 @@ test('a hot zone: crate loot is hot, pinged, refused by the taxi, and secured at
   assert.ok(a.you.inv.pack.some((i) => i.kind === 'weapon' && i.hot), 'a hot gun');
   await until(() => b.msgs.some((m) => m.t === 'alert' && m.hot));
   await until(() => a.hz.crates.find((c) => c.id === c0.id).opened);
+  // Caches are hidden all through the zone too (no beam: they're flagged hot in the snapshot).
+  const snapOf = () => a.msgs.findLast((m) => m.t === 'snap');
+  const cache = await until(() => snapOf()?.loot?.find((l) => l.hot));
+  a.send({ t: 'dev', x: cache.x + 1, z: cache.z });
+  await sleep(500);
+  a.send({ t: 'takeLoot', id: cache.id });
+  await until(() => a.you.inv.pack.some((i) => i.hot && i.hotTier === 'cache'));
   // The taxi won't carry it.
   const lz = map.landingZones[0];
   a.send({ t: 'dev', x: lz.x, z: lz.z });

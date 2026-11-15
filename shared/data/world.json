@@ -65,7 +65,7 @@
         "ammo": 200,
         "comms": 2
       },
-      "desc": "An armed convoy is crossing on SR 20. Stop the truck and take its cargo — or let it pass."
+      "desc": "An armed convoy is crossing on SR 20. Stop the truck and take its cargo \u2014 or let it pass."
     },
     "swing": {
       "name": "Market swing",
@@ -132,12 +132,14 @@
     "tripwire": {
       "stunMs": 2500,
       "exposeMs": 12000,
-      "rearmMs": 30000
+      "rearmMs": 30000,
+      "cutMs": 2500
     },
     "alarm": {
       "radius": 20,
       "exposeMs": 10000,
-      "cooldownMs": 30000
+      "cooldownMs": 30000,
+      "sirenRange": 150
     },
     "sentry": {
       "range": 25,
@@ -158,6 +160,16 @@
       "respawnMs": 300000,
       "activeWithin": 250
     },
-    "logMax": 30
+    "logMax": 30,
+    "mine": {
+      "trigger": 0.9,
+      "playerRadius": 4.5,
+      "playerDamage": 130,
+      "disarmMs": 4000,
+      "salvageBack": 3,
+      "seeWithin": 14
+    },
+    "jamMs": 12000,
+    "revealMs": 60000
   }
 }

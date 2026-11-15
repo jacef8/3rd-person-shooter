@@ -23,9 +23,10 @@ import { BOATS, BOAT_RULES, stepBoat, seatPos } from '/shared/boats.js';
 import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
 import HOMESTEAD from '/shared/data/homestead.json' with { type: 'json' };
+import WORLD_LIVING from '/shared/data/world.json' with { type: 'json' };
 const GOODS = HOMESTEAD.goods;
 // Everything you can carry, stash and trade, in display order.
-const RES_UI = ['cash', 'parts', 'tech', 'salvage', 'ammo', 'wood', 'stone', 'intel', 'seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals', 'honey', 'shine', 'hide'];
+const RES_UI = ['cash', 'parts', 'tech', 'salvage', 'ammo', 'rockets', 'wood', 'stone', 'intel', 'seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals', 'honey', 'shine', 'hide'];
 const RES_LABEL = { parts: 'parts', tech: 'tech', intel: 'intel drives', ammo: 'rounds', salvage: 'salvage', wood: 'wood', stone: 'stone', ...Object.fromEntries(Object.entries(GOODS).map(([k, g]) => [k, g.name])) };
 const resText = (r, n) => (r === 'cash' ? `$${n}` : `${n} ${RES_LABEL[r] || r}`);
 
@@ -112,7 +113,7 @@ resize();
 const state = {
   exposed: new Map(), sensors: [], pings: [], alerts: [], squad: { id: null, members: [], leaderId: null }, invite: null,
   hack: null, aimTargetId: null, houseState: new Map(), termState: new Map(),
-  contracts: [], drops: [], extracts: [], objectives: [], contactMeshes: [], hotZone: null,
+  contracts: [], drops: [], extracts: [], objectives: [], contactMeshes: [], hotZone: null, sirens: new Map(), defMarks: [],
   ws: null, id: null, map: null, houseId: null, me: null,
   x: 0, z: 0, yaw: 0, pitch: 0, crouch: false, aiming: false, sprint: false,
   keys: new Set(), mouseDown: false, firedThisPress: false, lastShot: 0,
@@ -822,7 +823,16 @@ selfMesh.visible = false;
 
 // ------------------------------------------------------------------ loot visuals
 const LOOT_COLORS = { parts: 0xffc53d, ammo: 0x7bd88f, medkit: 0xff5a5a, bag: 0xffffff };
-function lootMesh(kind) {
+function lootMesh(kind, hot = false) {
+  if (hot) {
+    // Hot-zone caches are tucked away: a small dark case with a faint orange glint, no beam of light.
+    const g = new THREE.Group();
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.38), new THREE.MeshStandardMaterial({ color: 0x2b2a24, emissive: 0xff5a1f, emissiveIntensity: 0.18, roughness: 0.8 }));
+    box.position.y = 0.15;
+    g.add(box);
+    scene.add(g);
+    return g;
+  }
   const color = LOOT_COLORS[kind] ?? 0xffffff;
   const isBag = kind === 'bag';
   const g = new THREE.Group();
@@ -860,7 +870,29 @@ const PUFF_MAT = new THREE.MeshBasicMaterial({ color: 0xd9cfbf, transparent: tru
 const MARK_MAT = new THREE.MeshBasicMaterial({ color: 0x1a1612, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 const HIT_MAT = new THREE.MeshBasicMaterial({ color: 0xff5040 });
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1), PUFF_GEO = new THREE.SphereGeometry(1, 8, 6), MARK_GEO = new THREE.CircleGeometry(0.09, 10);
+/** Rounds you carry for the gun in your hands: rockets for a launcher, ammo for the rest. */
+function reserveFor(me) { const w = me?.inv?.[me.active]; return w && weaponStats(w)?.explosive ? (me.rockets || 0) : (me?.ammo || 0); }
+const ROCKET_MAT = new THREE.MeshBasicMaterial({ color: 0xffb060 });
+const SMOKE_MAT = new THREE.MeshBasicMaterial({ color: 0xb8b8b0, transparent: true, opacity: 0.45, depthWrite: false });
 function addTracer(o, p, hit) {
+  if (hit === 3) {
+    // A rocket: a hot streak and a trail of smoke puffs that hang and spread.
+    const a = new THREE.Vector3(...o), b = new THREE.Vector3(p[0], p[1], p[2]), len = a.distanceTo(b);
+    const streak = new THREE.Mesh(UNIT_BOX, ROCKET_MAT);
+    streak.scale.set(0.12, 0.12, len);
+    streak.position.copy(a).add(b).multiplyScalar(0.5);
+    streak.lookAt(b);
+    scene.add(streak);
+    tracers.push({ obj: streak, life: 0.18, shared: true });
+    for (let d = 4; d < len; d += Math.max(1.5, len / 40)) {   // starts a few metres out, so it doesn't fog your own view
+      const puff = new THREE.Mesh(PUFF_GEO, SMOKE_MAT);
+      puff.scale.setScalar(0.18);
+      puff.position.copy(a).addScaledVector(b.clone().sub(a).normalize(), d);
+      scene.add(puff);
+      tracers.push({ obj: puff, life: 1.0 + Math.random() * 0.5, shared: true, grow: 0.45 });
+    }
+    return;
+  }
   // A bright streak you can see, from the gun to where the bullet stopped.
   const a = new THREE.Vector3(...o), b = new THREE.Vector3(p[0], p[1], p[2]), len = a.distanceTo(b);
   if (len > 0.5) {
@@ -1285,7 +1317,7 @@ function handle(m) {
         rec.data = { ...b, armor: 0, maxArmor: 0 };
       }
       for (const [id, rec] of state.bots) if (!m.bots.some((b) => b.id === id)) { scene.remove(rec.mesh); state.bots.delete(id); }
-      syncEntities(m.loot, state.loot, (e) => lootMesh(e.kind));
+      syncEntities(m.loot, state.loot, (e) => lootMesh(e.kind, e.hot));
       syncEntities(m.bags, state.bags, () => lootMesh('bag'));
       // The crew panel refreshes itself once a second, but never under someone's typing.
       if (state.panelOpen && !typingIn($('squadpanel')) && performance.now() - (state.panelDrawn || 0) > 1000) { state.panelDrawn = performance.now(); renderSquadPanel(); }
@@ -1477,6 +1509,13 @@ function handle(m) {
     }
     case 'ptrade': handlePlayerTrade(m); break;
     case 'boom': boomFx(m.x, m.y, m.z); sfx.boom(m.x, m.y, m.z); break;
+    case 'siren': {
+      sfx.siren(m.x, m.y, m.z);
+      state.sirens.set(m.id, { x: m.x, y: m.y, z: m.z, until: performance.now() + 4500 });
+      if (Math.hypot(m.x - state.x, m.z - state.z) < 40) toast('🚨 You set off an alarm!');
+      break;
+    }
+    case 'defmarks': for (const d of m.list) state.defMarks.push({ ...d, until: performance.now() + (m.until - Date.now()) }); break;
     case 'homexp': if (m.amount >= 5) xpPopup(m.amount, `Home: ${m.reason}`); break;
     case 'homeLevel': levelBanner(m.level, [{ name: HOME_LEVEL_TEXT[m.level - 1] }], 'STASH HOUSE LEVEL'); break;
     case 'claimed': toast('This is now your stash house. Open its stash for the gunsmith, upgrades and home level.'); break;
@@ -1528,7 +1567,7 @@ function updateHud() {
   const slotsHtml = ['primary', 'primary2', 'secondary'].map((sl, i) => { const it = me.inv[sl]; return `<span data-slot="${sl}" class="${sl === me.active ? 'on' : it ? '' : 'none'}">${i + 1} ${it ? esc(shortGun(it)) : '—'}</span>`; }).join('');
   if ($('wslots').innerHTML !== slotsHtml) $('wslots').innerHTML = slotsHtml;
   $('mag').textContent = me.mag;
-  $('reserve').textContent = me.ammo;
+  $('reserve').textContent = reserveFor(me);
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
   $('housestatus').textContent = (me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}${me.claim.ruined ? ' · RUIN: rebuild it at the stash' : ''}` : 'No stash house — plant a claim marker')
@@ -2667,7 +2706,7 @@ function doAction(a) {
       break;
     case 'rally': send({ t: 'rally' }); break;
     case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
-    case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && state.me.ammo > 0) sfx.reload(); send({ t: 'reload' }); break;
+    case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && reserveFor(state.me) > 0) sfx.reload(); send({ t: 'reload' }); break;
     case 'swap': send({ t: 'swap' }); break;
     case 'slot1': send({ t: 'weapon', slot: 'primary' }); break;
     case 'slot2': send({ t: 'weapon', slot: 'primary2' }); break;
@@ -2819,7 +2858,7 @@ function tryFire(now) {
   if (me.reloading) return;
   if (me.mag <= 0) {
     if (!state.firedThisPress) { sfx.empty(); state.firedThisPress = true; }
-    if (me.ammo > 0 && !state.autoReloadSent) { send({ t: 'reload' }); sfx.reload(); state.autoReloadSent = now; }
+    if (reserveFor(me) > 0 && !state.autoReloadSent) { send({ t: 'reload' }); sfx.reload(); state.autoReloadSent = now; }
     return;
   }
   state.autoReloadSent = 0;
@@ -3002,10 +3041,15 @@ function marker(key, cls, text, pos) {
   el.dataset.seen = '1';
 }
 
+const MINE_SEE = WORLD_LIVING.defenses.mine.seeWithin;
+const DEF_LABEL = { mine: '💥 Mine', tripwire: '〰 Tripwire', alarm: '🚨 Alarm', sentry: '🔫 Sentry', kennel: '🐕 Dog' };
 /** Through-wall HUD markers: tagged/sensed enemies, squadmates, pings, plus hack progress. */
 function drawMarkers() {
   for (const el of markerEls.values()) el.dataset.seen = '';
   const now = performance.now();
+  state.defMarks = state.defMarks.filter((d) => d.until > now);
+  state.defMarks.forEach((d, i) => marker(`def${i}`, 'alert', DEF_LABEL[d.kind] || d.kind, new THREE.Vector3(d.x, d.y + 0.8, d.z)));
+  for (const [id, s2] of state.sirens) { if (s2.until < now) { state.sirens.delete(id); continue; } if (Math.floor(now / 250) % 2) marker(`siren${id}`, 'alert', '🚨', new THREE.Vector3(s2.x, s2.y + 1.2, s2.z)); }
   if (state.map && state.me) {
     for (const [id, e] of state.exposed) {
       if (e.until < now) { state.exposed.delete(id); continue; }
@@ -3651,6 +3695,12 @@ function structMesh(st) {
         g.add(plant);
       }
     }
+  } else if (def.defense === 'mine') {
+    const dirt = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.48, 0.05, 12), new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 1 }));
+    dirt.position.y = 0.025; g.add(dirt);
+    const prong = new THREE.MeshStandardMaterial({ color: 0x3d4a2e, roughness: 0.6, metalness: 0.3 });
+    for (let i = 0; i < 3; i++) { const pr = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.08, 4), prong); pr.position.set(Math.cos(i * 2.1) * 0.06, 0.08, Math.sin(i * 2.1) * 0.06); g.add(pr); }
+    g.userData.mine = true;
   } else if (def.defense === 'tripwire') {
     // Two stakes and a thin wire between them, low to the ground.
     const long = Math.max(w, d), alongX = w >= d;
@@ -4117,6 +4167,7 @@ function frame(now) {
   drawMarkers();
   updateBuildGhost();
   for (const v of chargeVis.values()) v.visible = Math.floor(now / 300) % 2 === 0;
+  for (const [, v] of structVis) if (v.mesh?.userData?.mine && !v.data?.mine) v.mesh.visible = Math.hypot(v.mesh.position.x - state.x, v.mesh.position.z - state.z) < MINE_SEE || state.defMarks.some((d) => d.until > now && Math.abs(d.x - v.mesh.position.x) < 0.5 && Math.abs(d.z - v.mesh.position.z) < 0.5);
 }
 requestAnimationFrame(frame);
 
@@ -4377,7 +4428,7 @@ function updateTouchLoot() {
   near.sort((a, b) => a[0] - b[0]);
   const now = performance.now(), packFull = me.inv.pack.length >= (state.packSize || 24);
   for (const [d, l] of near) {
-    if (d > 2.2 || !tset.autoPick[lootCategory(l.kind)] || (packFull && LOOT_PACK.has(l.kind))) continue;
+    if (d > 2.2 || l.hot || !tset.autoPick[lootCategory(l.kind)] || (packFull && LOOT_PACK.has(l.kind))) continue;   // hot loot is always a choice
     if (now - (lootTried.get(l.id) || 0) < 1500) continue;
     lootTried.set(l.id, now);
     send({ t: 'takeLoot', id: l.id, auto: 1 });
@@ -4498,7 +4549,7 @@ setInterval(() => {
     const zl = $('touch').querySelector('[data-key=zoom] .tl');
     if (zl && wsNow?.zoomAlt) { const t = `${scopeMag(w, !state.zoomAlt ? 1 : 0)}`; if (zl.textContent !== t) zl.textContent = t; }
     state.touchUI = document.body.classList.contains('touchui');
-    show('reload', !!w && !full && me.ammo > 0);
+    show('reload', !!w && !full && reserveFor(me) > 0);
     show('heal', (me.hp < me.maxHp && me.inv?.pack?.some((i) => i.kind === 'medkit')) || ((me.food ?? 100) < 60 && Object.keys(GOODS).some((g) => GOODS[g].food && me[g] > 0)));
   }
   $('touch').querySelector('[data-key=crouch]')?.classList.toggle('on', !!state.crouch);
