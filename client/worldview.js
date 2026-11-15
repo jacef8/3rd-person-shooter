@@ -6,6 +6,7 @@
 //        it (the depth buffer is cleared in between), so the two can never fight over depth.
 import * as THREE from 'three';
 import { mergeGeometries } from '/addons/utils/BufferGeometryUtils.js';
+import { Sky } from '/addons/objects/Sky.js';
 import { coverColor } from './mapview.js';
 
 const CHUNK = 160;
@@ -206,7 +207,28 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   const crownMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });   // colour per tree (instance colours)
   const pineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
   const LEAF = [0x3b6532, 0x467236, 0x3f6a33, 0x4f7a38, 0x37602f], NEEDLE = [0x27482c, 0x2d5132, 0x24432a, 0x325836];
-  const waterMat = new THREE.MeshStandardMaterial({ color: 0x2f6b8a, transparent: true, opacity: 0.82, roughness: 0.15, metalness: 0.1 });
+  // Water: small waves rolling across it (worked out per pixel from where it is and the time), and the
+  // sky showing in it more the flatter you look across it, like the real thing.
+  const waterTime = { value: 0 };
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x22566e, transparent: true, opacity: 0.86, roughness: 0.08, metalness: 0.05 });
+  waterMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = waterTime;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWaterP;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWaterP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+uniform float uTime;
+varying vec3 vWaterP;
+vec2 dzWave(vec2 p, vec2 dir, float k, float sp, float a) { float ph = dot(p, dir) * k + uTime * sp; return dir * cos(ph) * a * k; }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+{ vec2 q = vWaterP.xz;
+  vec2 g = dzWave(q, normalize(vec2(1.0, 0.35)), 0.55, 1.6, 0.05) + dzWave(q, normalize(vec2(-0.4, 1.0)), 0.9, 2.1, 0.03)
+         + dzWave(q, normalize(vec2(0.7, -0.7)), 1.7, 2.9, 0.015) + dzWave(q, normalize(vec2(-1.0, -0.2)), 3.1, 3.7, 0.008);
+  vec3 nW = normalize(vec3(-g.x, 1.0, -g.y));
+  normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz); }`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+{ float fres = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 4.0);
+  totalEmissiveRadiance += vec3(0.55, 0.68, 0.8) * fres * 0.75; }`);
+  };
   const waterGeo = new THREE.PlaneGeometry(CHUNK, CHUNK);
   waterGeo.rotateX(-Math.PI / 2);
   // The ground: smooth shading, and fine colour variation worked out per pixel from where it is (patches
@@ -276,15 +298,19 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
   const farRoofMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
   const farCrownMat = new THREE.MeshLambertMaterial({ color: 0x2f5129 });
   const farPineMat = new THREE.MeshLambertMaterial({ color: 0x1f3a24 });
-  // Sky: a dome that follows you, pale at the horizon and blue overhead.
-  const skyGeo = new THREE.SphereGeometry(50000, 24, 12);
-  {
-    const top = new THREE.Color(SKY_TOP), hor = new THREE.Color(SKY_HORIZON), c = new THREE.Color(), p = skyGeo.attributes.position, col = [];
-    for (let i = 0; i < p.count; i++) { c.copy(hor).lerp(top, Math.pow(Math.max(0, p.getY(i) / 50000), 0.55)); col.push(c.r, c.g, c.b); }
-    skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  }
-  const sky = new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, depthWrite: false, fog: false }));
+  // Sky: a real atmosphere (light scattered blue overhead, paler and warmer toward the horizon and
+  // around the sun), the sun placed where the game's sunlight comes from. Follows you.
+  const sky = new Sky();
+  sky.scale.setScalar(60000);
   sky.renderOrder = -10;
+  sky.material.fog = false;
+  // The scattering model is tuned for a darker exposure than the game's: scale it to sit with the land.
+  sky.material.fragmentShader = sky.material.fragmentShader.replace('gl_FragColor = vec4( texColor, 1.0 );', 'gl_FragColor = vec4( texColor * 0.55, 1.0 );');
+  Object.assign(sky.material.uniforms.turbidity, { value: 3.2 });
+  Object.assign(sky.material.uniforms.rayleigh, { value: 1.35 });
+  Object.assign(sky.material.uniforms.mieCoefficient, { value: 0.004 });
+  Object.assign(sky.material.uniforms.mieDirectionalG, { value: 0.82 });
+  sky.material.uniforms.sunPosition.value.set(62, 46, 38).normalize();
   far.add(sky);
   // Water for the whole map (the near chunks carry their own).
   const farWater = new THREE.Mesh(new THREE.PlaneGeometry(map.size + 2000, map.size + 2000), new THREE.MeshLambertMaterial({ color: 0x2f6b8a, transparent: true, opacity: 0.9 }));
@@ -574,6 +600,93 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
     }
     trunks.instanceMatrix.needsUpdate = true; crowns.instanceMatrix.needsUpdate = true;
   }
+  // ---------------------------------------------------------------- grass around you
+  // Blades fixed in the world (each 1 m square of grassy ground gets its own few, always the same), laid
+  // out again as you move. Only on grass: not roads, towns, sand, water or inside anything. They sway in
+  // a breeze. How many depends on the graphics setting (none on Low).
+  const GRASS_R = 30;
+  const bladeGeo = (() => {
+    const pos = [], nor = [], idx = [], W = 0.06, segs = 3;
+    for (let i = 0; i <= segs; i++) { const t = i / segs, w = W * (1 - t * 0.9) / 2; pos.push(-w, t, 0, w, t, 0); nor.push(0, 1, 0.25, 0, 1, 0.25); }
+    for (let i = 0; i < segs; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setIndex(idx);
+    return g;
+  })();
+  const grassMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, side: THREE.DoubleSide });
+  grassMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = waterTime;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\nvarying float vBlade;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+vBlade = position.y;
+{ vec4 wp = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+  float sway = sin(uTime * 1.6 + wp.x * 0.31 + wp.z * 0.23) * 0.6 + sin(uTime * 2.7 + wp.x * 0.9 - wp.z * 0.5) * 0.25;
+  float bend = position.y * position.y;
+  transformed.x += sway * bend * 0.22; transformed.z += sway * bend * 0.12; }`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vBlade;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix(0.6, 1.15, vBlade);')
+      // Lit as the ground is (from above), whichever side of the blade you see: no black backs.
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);');
+  };
+  let grassMesh = null, grassDensity = 0, grassAt = null;
+  const tint = new THREE.Color(), tm2 = new THREE.Matrix4(), q2 = new THREE.Quaternion(), e2 = new THREE.Euler(), s2 = new THREE.Vector3(), p2 = new THREE.Vector3();
+  const ghash = (i, j, k) => { let h = Math.imul(i, 73856093) ^ Math.imul(j, 19349663) ^ Math.imul(k, 83492791); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  function setGrass(density) {
+    grassDensity = density;
+    if (grassMesh) { scene.remove(grassMesh); grassMesh.dispose(); grassMesh = null; }
+    grassAt = null;
+    if (!density) return;
+    grassMesh = new THREE.InstancedMesh(bladeGeo, grassMat, Math.ceil(Math.PI * GRASS_R * GRASS_R * density * 1.05));
+    grassMesh.count = 0;
+    grassMesh.frustumCulled = false;
+    grassMesh.receiveShadow = !mobile;
+    scene.add(grassMesh);
+  }
+  function layGrass(px, pz) {
+    const cx = Math.round(px), cz = Math.round(pz), N = GRASS_R * 2 + 1;
+    // What blades can't grow in: buildings and solid things (trees are fine), roads.
+    const blocked = new Uint8Array(N * N);
+    for (const b of map.grid.near(cx, cz, GRASS_R + 4)) {
+      if (b.type === 'tree' || b.type === 'pine' || b.gone) continue;
+      for (let x = Math.floor(b.minX) - cx + GRASS_R; x <= Math.ceil(b.maxX) - cx + GRASS_R; x++) for (let z = Math.floor(b.minZ) - cz + GRASS_R; z <= Math.ceil(b.maxZ) - cz + GRASS_R; z++) if (x >= 0 && z >= 0 && x < N && z < N) blocked[z * N + x] = 1;
+    }
+    const roads = map.roadsNear(cx, cz, GRASS_R + 12);
+    const onRoad = (x, z) => roads.some((r) => { const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2)); return Math.hypot(r.x1 + dx * t - x, r.z1 + dz * t - z) < (r.width || 8) / 2 + 0.4; });
+    const colorAt = new Map();
+    let n = 0;
+    const cap = grassMesh.instanceMatrix.count;
+    for (let j = -GRASS_R; j <= GRASS_R && n < cap; j++) for (let i = -GRASS_R; i <= GRASS_R && n < cap; i++) {
+      if (i * i + j * j > GRASS_R * GRASS_R || blocked[(j + GRASS_R) * N + (i + GRASS_R)]) continue;
+      const gx = cx + i, gz = cz + j;
+      const kmax = Math.floor(grassDensity) + (ghash(gx, gz, 99) < grassDensity % 1 ? 1 : 0);
+      if (!kmax) continue;
+      const ck = `${gx >> 2},${gz >> 2}`;   // ground colour, sampled every 4 m
+      let c = colorAt.get(ck);
+      if (c === undefined) {
+        const h0 = terrain.drawn(gx, gz);
+        const gc = h0 < 0.8 ? null : groundColor(gx, gz, h0);
+        c = gc && gc[1] > gc[0] * 1.08 && gc[1] > gc[2] * 1.25 ? gc : null;   // green ground only
+        colorAt.set(ck, c);
+      }
+      if (!c || onRoad(gx + 0.5, gz + 0.5)) continue;
+      for (let k = 0; k < kmax && n < cap; k++) {
+        const x = gx + ghash(gx, gz, k * 3 + 1), z = gz + ghash(gx, gz, k * 3 + 2), r = ghash(gx, gz, k * 3 + 3);
+        const hgt = 0.18 + r * 0.38;
+        e2.set((r - 0.5) * 0.35, r * 6.283, (ghash(gz, gx, k) - 0.5) * 0.35);
+        tm2.compose(p2.set(x, meshHeight(x, z) - 0.02, z), q2.setFromEuler(e2), s2.set(1, hgt, 1));
+        grassMesh.setMatrixAt(n, tm2);
+        const v = 0.95 + r * 0.4;
+        grassMesh.setColorAt(n, tint.setRGB(Math.min(1, c[0] * v * 0.95), Math.min(1, c[1] * v * 1.12), Math.min(1, c[2] * v * 0.85)));
+        n++;
+      }
+    }
+    grassMesh.count = n;
+    grassMesh.instanceMatrix.needsUpdate = true;
+    if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true;
+    grassAt = { x: px, z: pz };
+  }
   function buildChunk(cx, cz) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
@@ -735,6 +848,8 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
     },
     update(px, pz) {
       sky.position.set(px, 0, pz);
+      waterTime.value = performance.now() / 1000;
+      if (grassMesh && (!grassAt || Math.hypot(px - grassAt.x, pz - grassAt.z) > 6)) layGrass(px, pz);
       const want = new Set();
       let built = 0;
       for (const [, cx, cz] of chunksWithin(px, pz, viewRange)) {
@@ -759,6 +874,8 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
     },
     /** Graphics setting: how far full detail and the far stand-ins reach. Chunks outside go next frame. */
     setRanges(view, farR) { viewRange = view; farRange = farR; },
+    /** Graphics setting: grass blades per square metre around you (0 = none). */
+    setGrass(d) { if (d !== grassDensity) setGrass(d); },
     get chunkCount() { return chunks.size; },
     get farChunkCount() { return farChunks.size; },
   };

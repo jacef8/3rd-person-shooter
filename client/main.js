@@ -51,10 +51,10 @@ renderer.autoClear = false;
 renderer.setClearColor(SKY_HORIZON);
 // Graphics: Fast for phones (and older computers), Full for desktops; changed in the crew panel.
 const GFX = {
-  fast: { label: 'Low', pixel: 1, view: 200, far: 600, shadows: false, shadowMap: 1024, about: 'For older phones: shorter view, no shadows.' },
-  balanced: { label: 'Medium', pixel: 1.5, view: 260, far: 1000, shadows: true, shadowMap: 1024, about: 'Middle ground.' },
-  full: { label: 'High', pixel: 2, view: 320, far: 1500, shadows: true, shadowMap: 2048, about: 'Long views and shadows, sharp on any screen.' },
-  ultra: { label: 'Ultra', pixel: 3, view: 420, far: 2600, shadows: true, shadowMap: 4096, about: 'Full screen sharpness, the longest views and the finest shadows: for flagship phones and gaming PCs.' },
+  fast: { label: 'Low', pixel: 1, view: 200, far: 600, shadows: false, shadowMap: 1024, grass: 0, about: 'For older phones: shorter view, no shadows, no grass.' },
+  balanced: { label: 'Medium', pixel: 1.5, view: 260, far: 1000, shadows: true, shadowMap: 1024, grass: 1.2, about: 'Middle ground: some grass.' },
+  full: { label: 'High', pixel: 2, view: 320, far: 1500, shadows: true, shadowMap: 2048, grass: 3, about: 'Long views, shadows and grass, sharp on any screen.' },
+  ultra: { label: 'Ultra', pixel: 3, view: 420, far: 2600, shadows: true, shadowMap: 4096, grass: 5.5, about: 'Full screen sharpness, the longest views, the finest shadows and the thickest grass: for flagship phones and gaming PCs.' },
 };
 // Everyone starts on High (today's phones run it); Low stays in Settings for older ones. A saved
 // 'fast' from before High was the phone default is moved up once.
@@ -78,6 +78,7 @@ function applyGfx(mode = gfxMode) {
   sun.shadow.camera.updateProjectionMatrix();
   try { localStorage.setItem('dz_gfx_v2', '1'); } catch { /* private mode */ }
   state.view?.setRanges(g.view, g.far);
+  state.view?.setGrass(g.grass || 0);
   dispatchEvent(new Event('resize'));
 }
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 800);
@@ -615,6 +616,29 @@ const HATS = ['cap', 'helmet', 'boonie', 'beanie', 'none'];
 const VEST = { self: 0x2f5d8c, player: 0x9a4f22, bot: 0x25202b, contact: 0x2a6f7a };
 function nameHash(s) { let h = 2166136261; for (const ch of String(s || '')) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return h >>> 0; }
 
+// Organic parts for people: capsules for limbs (thicker at the top), a shaped torso, rounded hands.
+const ccap = (r, len, r2 = r) => {
+  const k = `cap${r},${len},${r2}`;
+  if (!CHAR_GEO.has(k)) {
+    const geo = new THREE.CapsuleGeometry(r, len, 4, 12);
+    if (r2 !== r) {   // taper: shrink the lower end toward r2
+      const p = geo.attributes.position;
+      for (let i = 0; i < p.count; i++) { const y = p.getY(i), f = 1 + (r2 / r - 1) * Math.max(0, Math.min(1, (len / 2 - y) / len)); p.setX(i, p.getX(i) * f); p.setZ(i, p.getZ(i) * f); }
+      geo.computeVertexNormals();
+    }
+    CHAR_GEO.set(k, geo);
+  }
+  return CHAR_GEO.get(k);
+};
+/** A torso turned on a lathe from a profile (radius by height), squashed front to back. */
+const clathe = (key, prof, depth) => {
+  const k = `lathe${key}`;
+  if (!CHAR_GEO.has(k)) { const geo = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 18); geo.scale(1, 1, depth); geo.computeVertexNormals(); CHAR_GEO.set(k, geo); }
+  return CHAR_GEO.get(k);
+};
+const csph = (r) => { const k = `sph${r}`; if (!CHAR_GEO.has(k)) CHAR_GEO.set(k, new THREE.SphereGeometry(r, 14, 10)); return CHAR_GEO.get(k); };
+const TORSO = [[0.0, 0.0], [0.15, 0.0], [0.16, 0.08], [0.15, 0.2], [0.18, 0.36], [0.205, 0.5], [0.19, 0.57], [0.11, 0.62], [0.0, 0.63]];
+const VEST_SHAPE = [[0.0, 0.18], [0.19, 0.18], [0.215, 0.32], [0.225, 0.5], [0.2, 0.56], [0.0, 0.57]];
 function makeCharacter(kind, name) {
   const g = new THREE.Group();
   const h = nameHash(kind === 'self' ? (localStorage.getItem('dz_name') || 'you') : name), pick = (list, n) => list[(h >>> n) % list.length];
@@ -624,27 +648,33 @@ function makeCharacter(kind, name) {
   const joint = (x, y, z, parent) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
   // Hips and legs (y = 0 is the soles of the boots).
   const hips = joint(0, 0.95, 0, g);
-  part(cbox(0.34, 0.2, 0.21), pants, 0, -0.02, 0, hips);
+  { const pelvis = part(csph(0.17), pants, 0, -0.03, 0, hips); pelvis.scale.set(1.15, 0.8, 0.85); }
   const legs = [1, -1].map((s) => {
     const thigh = joint(s * 0.1, -0.05, 0, hips);
-    part(cbox(0.15, 0.46, 0.17), pants, 0, -0.23, 0, thigh);
+    part(ccap(0.1, 0.28, 0.078), pants, 0, -0.22, 0, thigh);           // thigh, thicker at the hip
     const knee = joint(0, -0.46, 0, thigh);
-    part(cbox(0.13, 0.42, 0.15), pants, 0, -0.2, 0, knee);
-    part(cbox(0.15, 0.11, 0.27), boots, 0, -0.43, 0.04, knee);
+    part(ccap(0.078, 0.27, 0.06), pants, 0, -0.2, 0, knee);            // shin
+    const boot = part(cbox(0.13, 0.1, 0.26), boots, 0, -0.43, 0.04, knee);
+    boot.scale.set(1, 1, 1);
     return { thigh, knee };
   });
   // Upper body: everything above the belt leans and turns together.
   const upper = joint(0, 0, 0, hips);
-  part(cbox(0.38, 0.06, 0.22), dark, 0, 0.07, 0, upper);                 // belt
-  part(cbox(0.4, 0.52, 0.23), jacket, 0, 0.36, 0, upper);                // jacket
-  part(cbox(0.43, 0.34, 0.27), vest, 0, 0.39, 0, upper);                 // vest
-  part(cbox(0.1, 0.12, 0.05), gear, -0.11, 0.36, 0.15, upper);           // vest pouches
-  part(cbox(0.1, 0.12, 0.05), gear, 0.11, 0.36, 0.15, upper);
-  part(cbox(0.36, 0.42, 0.18), gear, 0, 0.4, -0.21, upper);              // backpack
-  part(cbox(0.12, 0.08, 0.12), skin, 0, 0.66, 0, upper);                 // neck
+  { const belt = part(clathe('belt', [[0, 0], [0.165, 0], [0.17, 0.06], [0, 0.06]], 0.62), dark, 0, 0.04, 0, upper); belt.castShadow = false; }
+  part(clathe('torso', TORSO, 0.62), jacket, 0, 0.06, 0, upper);                       // jacket: waist, chest, shoulders
+  part(clathe('vest', VEST_SHAPE, 0.74), vest, 0, 0.06, 0, upper);                     // plate carrier
+  for (const x of [-0.11, 0, 0.11]) part(cbox(0.085, 0.11, 0.05), gear, x, 0.33, 0.155, upper);   // mag pouches
+  part(cbox(0.06, 0.08, 0.04), gear, 0.15, 0.5, 0.15, upper);                          // radio
+  const pack = part(cbox(0.34, 0.42, 0.17), gear, 0, 0.4, -0.2, upper);                // backpack
+  pack.scale.set(1, 1, 1);
+  { const roll = part(ccap(0.06, 0.28), cmat(0x5a5040), 0, 0.64, -0.2, upper); roll.rotation.z = Math.PI / 2; }   // bedroll on top
+  part(ccap(0.055, 0.05), skin, 0, 0.7, 0, upper);                                     // neck
   const head = joint(0, 0.8, 0, upper);
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.135, 12, 10), skin);
-  skull.scale.set(1, 1.12, 1.02); skull.castShadow = true; head.add(skull);
+  const skull = new THREE.Mesh(csph(0.125), skin);
+  skull.scale.set(1, 1.16, 1.06); skull.castShadow = true; head.add(skull);
+  { const jaw = part(csph(0.1), skin, 0, -0.06, 0.025, head); jaw.scale.set(0.95, 0.72, 0.95); }
+  part(csph(0.026), skin, 0, -0.005, 0.125, head);                                     // nose
+  for (const sx of [-1, 1]) { const ear = part(csph(0.03), skin, sx * 0.125, 0, 0, head); ear.scale.set(0.5, 1, 0.8); }
   part(cbox(0.2, 0.05, 0.04), kind === 'bot' ? cmat(0xff2a2a, true) : dark, 0, 0.02, 0.12, head);   // shades (a red visor on rogues)
   const hat = kind === 'bot' ? 'beanie' : kind === 'contact' ? 'boonie' : pick(HATS, 17), hatMat = kind === 'self' ? vest : pick([jacket, dark, gear, pants], 19);
   if (hat === 'cap') { part(cbox(0.27, 0.1, 0.28), hatMat, 0, 0.11, 0, head); part(cbox(0.22, 0.025, 0.12), hatMat, 0, 0.07, 0.18, head); }
@@ -655,11 +685,12 @@ function makeCharacter(kind, name) {
   const arm = (s, sx, sz, ex) => {
     const shoulder = joint(s * 0.25, 0.56, 0, upper);
     shoulder.rotation.set(sx, 0, sz);
-    part(cbox(0.12, 0.3, 0.13), jacket, 0, -0.14, 0, shoulder);
+    part(csph(0.075), jacket, 0, 0.0, 0, shoulder);                                    // shoulder
+    part(ccap(0.07, 0.19, 0.058), jacket, 0, -0.14, 0, shoulder);                        // upper arm
     const elbow = joint(0, -0.29, 0, shoulder);
     elbow.rotation.x = ex;
-    part(cbox(0.1, 0.27, 0.11), jacket, 0, -0.13, 0, elbow);
-    part(cbox(0.09, 0.09, 0.1), skin, 0, -0.3, 0, elbow);
+    part(ccap(0.058, 0.17, 0.048), jacket, 0, -0.13, 0, elbow);                         // forearm
+    { const hand = part(csph(0.045), skin, 0, -0.3, 0.005, elbow); hand.scale.set(0.9, 1.15, 0.7); }
     return shoulder;
   };
   const arms = [arm(-1, -0.45, -0.05, -1.1), arm(1, -1.2, -0.75, -0.35)];
