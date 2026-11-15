@@ -621,3 +621,18 @@ body.touchui #wslots span { padding: 0 9px; }
 #inventory:has(#containerCol[hidden]) { width: min(640px, 96vw); }
 #inventory:has(#containerCol[hidden]) .invcols { grid-template-columns: 1fr; }
 #squadpanel h3, #contactpanel h3:not(#ctTrade h3) { font: 700 13px/1.2 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin: 14px 0 8px; }
+
+/* ---------------------------------------------------------------- phone controls: the mobile-shooter set */
+#touch .tbtn[data-key] { opacity: var(--talpha, 1); transform-origin: center; }
+body.touchui .tbtn.lfire { left: calc(28px + env(safe-area-inset-left)); bottom: 46%; right: auto; width: 58px; height: 58px; }
+/* Stance column left of AIM (crouch over prone), heal beside it: all clear of the weapon strip. */
+body.touchui .tbtn.r7 { right: calc(152px + env(safe-area-inset-right)); bottom: 12px; }   /* prone */
+body.touchui .tbtn.r2 { right: calc(152px + env(safe-area-inset-right)); bottom: 70px; }   /* crouch */
+body.touchui .tbtn.r6 { right: calc(208px + env(safe-area-inset-right)); bottom: 12px; }   /* heal */
+body.touchui .tbtn.use.ready { background: var(--accent); border-color: #fff; color: #111; }
+#tlock { position: absolute; display: none; min-width: 68px; padding: 6px 10px; border-radius: 999px; background: rgba(15,18,24,0.7); border: 1.5px solid rgba(255,255,255,0.35); color: #fff; font: 700 12px/1 var(--font-text); text-align: center; pointer-events: none; white-space: nowrap; }
+#tlock.on, #tlock.held { background: var(--accent); border-color: #fff; color: #111; }
+#tedit { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 14px; color: var(--ink); z-index: 3; font: 600 14px/1.2 var(--font-text); }
+#tedit[hidden] { display: none; }
+#tedit span { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+#touch.editing .tbtn[data-key] { outline: 2px dashed var(--accent); outline-offset: 2px; }

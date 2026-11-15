@@ -3012,6 +3012,18 @@ function renderPadSettings() {
     row5.append(b);
   }
   box.append(row5, row, row2, row3, row4);
+  if (touchCapable) {
+    const t1 = document.createElement('div'); t1.className = 'item';
+    t1.innerHTML = '<div class="meta"><div class="nm">Phone controls: layout</div><div class="st">Move any button where your thumbs want it, make them bigger or smaller, more or less see-through.</div></div>';
+    t1.append(btn('Edit layout', () => editTouch('start')));
+    const t2 = document.createElement('div'); t2.className = 'item';
+    t2.innerHTML = '<div class="meta"><div class="nm">Second FIRE button (left side)</div><div class="st">Shoot with your left thumb while your right thumb aims.</div></div>';
+    t2.append(btn(tset.leftFire ? 'On' : 'Off', () => { tset.leftFire = !tset.leftFire; saveTset(); applyTouchLayout(); renderPadSettings(); }, tset.leftFire ? '' : 'ghost'));
+    const t3 = document.createElement('div'); t3.className = 'item';
+    t3.innerHTML = '<div class="meta"><div class="nm">Gyro aim</div><div class="st">Turn the phone to fine-tune your aim. While aiming only, or all the time.</div></div>';
+    for (const [m, l] of [['off', 'Off'], ['aim', 'While aiming'], ['always', 'Always']]) t3.append(btn(l, async () => { await setGyro(m); renderPadSettings(); }, tset.gyro === m ? '' : 'ghost'));
+    box.append(t1, t2, t3);
+  }
   if (keep) { const el = box.querySelector(`[data-pad="${keep}"]`); if (el && state.inputMode === 'pad') padFocus(el); }
 }
 
@@ -3788,6 +3800,7 @@ function frame(now) {
   }
 
   const prompt = alive && !state.invOpen && !state.air ? nearestInteractable() : null;
+  state.promptText = prompt;
   $('prompt').innerHTML = state.air && alive ? airHud() : prompt ? `<kbd>${glyph('E')}</kbd>${prompt}` : boatHud();
   drawMinimap();
   updateWhere(now);
@@ -3805,28 +3818,57 @@ window.__dz = { state, send, boatVis, structVis };
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
 // on the right to look, and buttons for everything else. Hidden while a controller is in use.
-const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null };
+const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null, autoRun: false };
+// Phone settings (this device): button layout, size and see-through, the left fire button, gyro aim.
+const tset = { pos: {}, scale: 1, alpha: 1, leftFire: true, gyro: 'off' };
+try { Object.assign(tset, JSON.parse(localStorage.getItem('dz_touch') || '{}')); } catch { /* keep the defaults */ }
+const saveTset = () => { try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } };
 const TOUCH_BTNS = [
-  // [label, action, class]   'fire' is held; 'aim' toggles; CROUCH held is prone. Sprint is the
-  // stick pushed to its edge; guns switch by tapping them at the bottom.
-  ['FIRE', 'fire', 'big fire'], ['AIM', 'aim', 'mid aim'], ['USE', 'interact', 'mid use'], ['RELOAD', 'reload', 'sm r1'],
-  ['CROUCH', 'crouch', 'sm r2'], ['NADE', 'sensor', 'sm r4'], ['TAG', 'tag', 'sm r5'], ['HEAL', 'heal', 'sm r6'],
+  // [label, action, class, key]   Both FIRE buttons are held, and dragging on one aims while you shoot.
+  // AIM toggles the sights; CROUCH and PRONE toggle. Push the stick to its edge to sprint, or on up
+  // into the lock to keep running. Guns switch by tapping them at the bottom.
+  ['FIRE', 'fire', 'big fire', 'fire'], ['FIRE', 'fire', 'mid fire lfire', 'lfire'], ['AIM', 'aim', 'mid aim', 'aim'], ['USE', 'interact', 'mid use', 'use'],
+  ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'], ['PRONE', 'prone', 'sm r7', 'prone'], ['NADE', 'sensor', 'sm r4', 'nade'],
+  ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
 ];
 // Top left: the map and bag, and ⋯ for the rest.
 const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['⋯', 'touchMore']];
 const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build']];
 function buildTouchUI() {
   const ui = $('touch');
-  ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div>' +
-    TOUCH_BTNS.map(([l, a, c]) => `<button class="tbtn ${c}" data-act="${a}">${l}</button>`).join('') +
+  ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +
+    TOUCH_BTNS.map(([l, a, c, k]) => `<button class="tbtn ${c}" data-act="${a}" data-key="${k}">${l}</button>`).join('') +
+    '<div id="tedit" hidden><b>Drag any button to move it</b><span><button class="tbtn tiny" data-ed="small">Smaller</button><button class="tbtn tiny" data-ed="big">Bigger</button><button class="tbtn tiny" data-ed="faint">More see-through</button><button class="tbtn tiny" data-ed="solid">Less</button><button class="tbtn tiny" data-ed="reset">Reset</button><button class="tbtn tiny" data-ed="done">Done</button></span></div>' +
     `<div class="ttop">${TOUCH_TOP.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>` +
     `<div class="tmore" hidden>${TOUCH_MORE.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>`;
-  for (const b of ui.querySelectorAll('.tbtn')) {
+  for (const b of ui.querySelectorAll('#tedit [data-ed]')) b.addEventListener('click', (e) => { e.stopPropagation(); editTouch(b.dataset.ed); });
+  for (const b of ui.querySelectorAll('.tbtn[data-act]')) {
+    // Layout editor: drag the button to where you want it.
+    b.addEventListener('pointermove', (e) => {
+      if (b.drag?.id === e.pointerId) {
+        const x = Math.max(0, Math.min(innerWidth, e.clientX - b.drag.dx)), y = Math.max(0, Math.min(innerHeight, e.clientY - b.drag.dy));
+        tset.pos[b.dataset.key] = [+(x / innerWidth).toFixed(4), +(y / innerHeight).toFixed(4)];
+        applyTouchLayout();
+      } else if (b.look?.id === e.pointerId) {
+        // Thumb on FIRE: slide it to aim while you shoot.
+        lookBy(e.clientX - b.look.x, e.clientY - b.look.y);
+        b.look.x = e.clientX; b.look.y = e.clientY;
+      }
+    });
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault(); e.stopPropagation();
+      if (touch.editing) {
+        if (!b.closest('.ttop') && !b.closest('.tmore')) {
+          const r = b.getBoundingClientRect();
+          b.drag = { id: e.pointerId, dx: e.clientX - (r.left + r.width / 2), dy: e.clientY - (r.top + r.height / 2) };
+          b.setPointerCapture(e.pointerId);
+        }
+        return;
+      }
       const a = b.dataset.act;
       if (a === 'fire') {
         state.mouseDown = true; state.firedThisPress = false; b.classList.add('on'); b.setPointerCapture(e.pointerId);
+        b.look = { id: e.pointerId, x: e.clientX, y: e.clientY };
         // A quick tap can end before the next frame looks at the trigger, so fire right away.
         if (state.me && !state.me.dead && !state.me.downed && !build.on && !state.invOpen) tryFire(performance.now());
         return;
@@ -3842,11 +3884,13 @@ function buildTouchUI() {
       doAction(a);
     });
     if (b.dataset.act === 'crouch') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.holdTimer) { clearTimeout(b.holdTimer); b.holdTimer = null; doAction('crouch'); } });
-    if (b.dataset.act === 'fire') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { state.mouseDown = false; b.classList.remove('on'); });
+    if (b.dataset.act === 'fire') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (touch.editing) return; b.look = null; if (![...ui.querySelectorAll('.tbtn.fire')].some((o) => o !== b && o.look)) state.mouseDown = false; b.classList.remove('on'); });
+    for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.drag) { b.drag = null; saveTset(); } });
   }
   const knob = $('tknob'), base = $('tstick');
+  const lock = $('tlock');
   ui.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.tbtn')) return;
+    if (e.target.closest('.tbtn') || touch.editing) return;
     // A tap on a gun in the weapon strip (drawn under this layer) takes that gun in hand.
     for (const chip of $('wslots').children) {
       const r = chip.getBoundingClientRect();
@@ -3856,7 +3900,10 @@ function buildTouchUI() {
     ui.setPointerCapture(e.pointerId);
     if (e.clientX < innerWidth * 0.45 && !touch.stick) {
       touch.stick = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      touch.autoRun = false; touch.sprintOn = false;
       Object.assign(base.style, { left: `${e.clientX - 60}px`, top: `${e.clientY - 60}px`, display: 'block' });
+      Object.assign(lock.style, { left: `${e.clientX - 34}px`, top: `${e.clientY - 150}px`, display: 'block' });
+      lock.classList.remove('on', 'held');
       knob.style.transform = 'translate(0px, 0px)';
     } else if (!touch.look) touch.look = { id: e.pointerId, x: e.clientX, y: e.clientY };
   });
@@ -3868,22 +3915,86 @@ function buildTouchUI() {
       knob.style.transform = `translate(${dx}px, ${dy}px)`;
       touch.moveX = dx / R; touch.moveY = -dy / R;
       touch.sprint = d > R * 1.15;   // push past the ring to sprint
+      // On up into the lock and let go: keep running until you touch the stick again.
+      touch.lockZone = e.clientY - touch.stick.y < -R * 1.7 && Math.abs(e.clientX - touch.stick.x) < R;
+      lock.classList.toggle('on', touch.lockZone);
     } else if (touch.look?.id === e.pointerId) {
-      const sens = (state.aiming ? 0.004 * camera.fov / 70 : 0.006) * pad.settings.lookSpeed / 2.6;
-      state.yaw -= (e.clientX - touch.look.x) * sens;
-      state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - (e.clientY - touch.look.y) * sens));
+      lookBy(e.clientX - touch.look.x, e.clientY - touch.look.y);
       touch.look.x = e.clientX; touch.look.y = e.clientY;
     }
   });
   const end = (e) => {
-    if (touch.stick?.id === e.pointerId) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; touch.sprintOn = false; base.style.display = 'none'; }
+    if (touch.stick?.id === e.pointerId) {
+      touch.stick = null; base.style.display = 'none';
+      if (touch.lockZone) { touch.autoRun = true; touch.moveX = 0; touch.moveY = 1; touch.sprintOn = true; lock.classList.add('held'); lock.textContent = '🔒 RUNNING · touch the stick to stop'; }
+      else { touch.moveX = touch.moveY = 0; touch.sprint = false; touch.sprintOn = false; lock.style.display = 'none'; }
+      touch.lockZone = false;
+    }
     if (touch.look?.id === e.pointerId) touch.look = null;
   };
   ui.addEventListener('pointerup', end);
   ui.addEventListener('pointercancel', end);
   // A close button for any open screen (phones have no Esc / Tab / P keys).
   $('tclose').addEventListener('click', closeTopPanel);
+  applyTouchLayout();
+  addEventListener('resize', applyTouchLayout);
 }
+/** Turn the camera by a finger's drag, in pixels (look area, or a thumb sliding on FIRE). */
+function lookBy(dx, dy) {
+  const sens = (state.aiming ? 0.004 * camera.fov / 70 : 0.006) * pad.settings.lookSpeed / 2.6;
+  state.yaw -= dx * sens;
+  state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - dy * sens));
+}
+/** Where each button sits (moved ones by the layout editor), how big, how see-through. */
+function applyTouchLayout() {
+  const ui = $('touch');
+  if (!ui) return;
+  ui.style.setProperty('--talpha', String(tset.alpha));
+  for (const b of ui.querySelectorAll('.tbtn[data-key]')) {
+    const at = tset.pos[b.dataset.key];
+    // A moved button is centred on its saved spot (share of the screen, so it survives turning the phone).
+    if (at) Object.assign(b.style, { left: `${(at[0] * 100).toFixed(2)}%`, top: `${(at[1] * 100).toFixed(2)}%`, right: 'auto', bottom: 'auto', transform: `translate(-50%, -50%) scale(${tset.scale})` });
+    else Object.assign(b.style, { left: '', top: '', right: '', bottom: '', transform: `scale(${tset.scale})` });
+    if (b.dataset.key === 'lfire') b.hidden = !tset.leftFire && !touch.editing;
+  }
+}
+/** The layout editor (from Settings in the crew panel). */
+function editTouch(what) {
+  if (what === 'start') { touch.editing = true; closeTopPanel(); $('tedit').hidden = false; $('touch').classList.add('editing'); applyTouchLayout(); return; }
+  if (what === 'small') tset.scale = Math.max(0.7, +(tset.scale - 0.1).toFixed(2));
+  if (what === 'big') tset.scale = Math.min(1.5, +(tset.scale + 0.1).toFixed(2));
+  if (what === 'faint') tset.alpha = Math.max(0.3, +(tset.alpha - 0.15).toFixed(2));
+  if (what === 'solid') tset.alpha = Math.min(1, +(tset.alpha + 0.15).toFixed(2));
+  if (what === 'reset') { tset.pos = {}; tset.scale = 1; tset.alpha = 1; }
+  if (what === 'done') { touch.editing = false; $('tedit').hidden = true; $('touch').classList.remove('editing'); }
+  saveTset();
+  applyTouchLayout();
+}
+// Gyro aim: turn the phone to fine-aim (Off, while aiming, or always). Rates are mapped to the screen
+// the way the phone is held, so it works upright or either way sideways.
+let gyroAt = 0;
+function onGyro(e) {
+  const rr = e.rotationRate;
+  if (!rr || tset.gyro === 'off' || $('touch').hidden || touch.editing || (tset.gyro === 'aim' && !state.aiming)) { gyroAt = 0; return; }
+  const now = performance.now(), dt = gyroAt ? Math.min(0.1, (now - gyroAt) / 1000) : 0;
+  gyroAt = now;
+  if (!dt) return;
+  const ang = (screen.orientation?.angle ?? window.orientation ?? 0) % 360, rad = Math.PI / 180 * dt * 1.1;
+  const a = rr.beta || 0, g = rr.gamma || 0;
+  const [yaw, pitch] = ang === 90 ? [a, -g] : ang === 270 || ang === -90 ? [-a, g] : [g, a];
+  state.yaw += yaw * rad;
+  state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch + pitch * rad));
+}
+async function setGyro(mode) {
+  if (mode !== 'off' && typeof DeviceMotionEvent?.requestPermission === 'function') {
+    try { if (await DeviceMotionEvent.requestPermission() !== 'granted') { toast('Motion access was turned down, so gyro aim stays off'); mode = 'off'; } } catch { mode = 'off'; }
+  }
+  tset.gyro = mode; saveTset();
+  removeEventListener('devicemotion', onGyro);
+  if (mode !== 'off') addEventListener('devicemotion', onGyro);
+}
+if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
+Object.assign(window.__dz, { touch, tset, editTouch });   // debug/test hook
 function closeTopPanel() {
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.gunsmithOpen) return closeGunsmith();
@@ -3898,12 +4009,16 @@ setInterval(() => {
   if (!touchCapable) return;
   const panel = topPanel();
   const playing = !!state.me && state.inputMode !== 'pad' && !state.me.dead;
-  $('touch').hidden = !playing || !!panel;
+  $('touch').hidden = (!playing || !!panel) && !touch.editing;
   document.body.classList.toggle('touchui', !$('touch').hidden || (touchCapable && !!state.me && state.inputMode !== 'pad'));
   // Close button for screens that otherwise need a keyboard to leave.
   $('tclose').hidden = !(state.inputMode !== 'pad' && panel && panel.id !== 'login' && !(panel.id === 'mapscreen' && state.mapMode !== 'view' && state.mapMode !== 'travel'));
   if ($('touch').hidden && touch.stick) { touch.stick = null; touch.moveX = touch.moveY = 0; touch.sprint = false; }
   $('touch').querySelector('.aim')?.classList.toggle('on', state.aiming);
+  $('touch').querySelector('.use')?.classList.toggle('ready', !!state.promptText);
+  $('touch').querySelector('[data-key=crouch]')?.classList.toggle('on', !!state.crouch);
+  $('touch').querySelector('[data-key=prone]')?.classList.toggle('on', !!state.prone);
+  if (touch.autoRun && (state.me?.dead || state.me?.downed)) { touch.autoRun = false; touch.moveY = 0; touch.sprintOn = false; $('tlock').style.display = 'none'; }
 }, 200);
 
 // ------------------------------------------------------------------ lobby: worlds, friends, invites
