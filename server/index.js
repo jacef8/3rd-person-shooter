@@ -3496,7 +3496,7 @@ function dismantle(p, msg) {
 function explode(c, now, k = BUILD.charge) {
   charges.delete(c.id);
   const by = onlineByToken(c.owner);
-  const msg = JSON.stringify({ t: 'boom', x: c.x, y: c.y + 0.5, z: c.z });
+  const msg = JSON.stringify({ t: 'boom', x: c.x, y: c.y + 0.5, z: c.z, r: k.playerRadius || 6 });
   for (const p of players.values()) if (p.ws.readyState === 1 && Math.abs(p.x - c.x) < INTEREST && Math.abs(p.z - c.z) < INTEREST) p.ws.send(msg);
   if (k.radius) for (const st of structsNear(c.x, c.z, k.radius + 3)) {
     if (st.id === c.id) continue;

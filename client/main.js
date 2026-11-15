@@ -1515,7 +1515,7 @@ function handle(m) {
       break;
     }
     case 'ptrade': handlePlayerTrade(m); break;
-    case 'boom': boomFx(m.x, m.y, m.z); sfx.boom(m.x, m.y, m.z); break;
+    case 'boom': boomFx(m.x, m.y, m.z, m.r); sfx.boom(m.x, m.y, m.z); break;
     case 'siren': {
       sfx.siren(m.x, m.y, m.z);
       state.sirens.set(m.id, { x: m.x, y: m.y, z: m.z, until: performance.now() + 4500 });
@@ -3882,21 +3882,47 @@ function stunBlastFx(x, y, z) {
   };
   step();
 }
-function boomFx(x, y, z) {
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.9 }));
-  ball.position.set(x, y, z);
-  scene.add(ball);
-  const t0 = performance.now();
+// One light kept in the scene for explosions (adding and removing lights would make every material
+// recompile, a stutter right when it matters).
+const boomLight = new THREE.PointLight(0xffb060, 0, 60, 1.6);
+scene.add(boomLight);
+const BOOM_SPHERE = new THREE.SphereGeometry(1, 16, 12), BOOM_RING = new THREE.RingGeometry(0.8, 1, 48), BOOM_BIT = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+const BIT_MAT = new THREE.MeshStandardMaterial({ color: 0x2a2620, roughness: 1 });
+/** An explosion big enough to read from across a field: a white flash, a rolling fireball, a dust
+ *  ring racing out along the ground, debris thrown up, and smoke that climbs and hangs a while.
+ *  r is the blast's danger radius (metres): grenades ~7, rockets ~5.5, mines ~4.5. */
+function boomFx(x, y, z, r = 6) {
+  const g0 = ground(x, z), t0 = performance.now(), parts = [];
+  const add = (mesh) => { scene.add(mesh); parts.push(mesh); return mesh; };
+  const fade = (color, op) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, depthWrite: false });
+  const flash = add(new THREE.Mesh(BOOM_SPHERE, fade(0xfff6d8, 1)));
+  flash.position.set(x, y, z);
+  const fire = [0, 1, 2, 3, 4].map((i) => { const m = add(new THREE.Mesh(BOOM_SPHERE, fade([0xff6a10, 0xffa020, 0xff3d0a, 0xffc040, 0xff8a1a][i], 0.95))); m.position.set(x + (Math.random() - 0.5) * r * 0.3, y + Math.random() * r * 0.2, z + (Math.random() - 0.5) * r * 0.3); return m; });
+  const ring = add(new THREE.Mesh(BOOM_RING, fade(0xd8c8a8, 0.7)));
+  ring.rotation.x = -Math.PI / 2; ring.position.set(x, g0 + 0.15, z);
+  const smoke = Array.from({ length: 9 }, (_, i) => { const m = add(new THREE.Mesh(BOOM_SPHERE, fade(i % 3 ? 0x5a5650 : 0x3a3834, 0))); m.userData = { dx: (Math.random() - 0.5) * r * 0.5, dz: (Math.random() - 0.5) * r * 0.5, rise: 2 + Math.random() * 3, s: r * (0.35 + Math.random() * 0.3), delay: 0.08 + i * 0.03 }; return m; });
+  const bits = Array.from({ length: 16 }, () => { const m = add(new THREE.Mesh(BOOM_BIT, BIT_MAT)); const a = Math.random() * Math.PI * 2, sp = 5 + Math.random() * 9; m.userData = { vx: Math.cos(a) * sp, vy: 5 + Math.random() * 9, vz: Math.sin(a) * sp }; m.position.set(x, y, z); return m; });
+  boomLight.position.set(x, y + 1.5, z);
   const step = () => {
-    const f = (performance.now() - t0) / 600;
-    if (f >= 1) { scene.remove(ball); ball.geometry.dispose(); return; }
-    ball.scale.setScalar(1 + f * 6);
-    ball.material.opacity = 0.9 * (1 - f);
-    requestAnimationFrame(step);
+    const t = (performance.now() - t0) / 1000;
+    // flash: a blink
+    flash.scale.setScalar(r * (0.3 + Math.min(1, t / 0.12) * 0.6)); flash.material.opacity = Math.max(0, 1 - t / 0.25);
+    // fireball: swells fast, then cools and fades
+    fire.forEach((m, i) => { const f = Math.min(1, t / (0.35 + i * 0.05)); m.scale.setScalar(r * (0.25 + 0.6 * Math.sqrt(f))); m.position.y += 0.02; m.material.opacity = Math.max(0, 0.95 * (1 - Math.max(0, t - 0.35) / 0.7)); });
+    // dust ring along the ground
+    ring.scale.setScalar(r * (0.3 + 2.2 * Math.min(1, t / 0.5))); ring.material.opacity = Math.max(0, 0.7 * (1 - t / 0.6));
+    // smoke: climbs, spreads, hangs, thins
+    smoke.forEach((m) => { const u = m.userData, f = Math.max(0, t - u.delay); m.position.set(x + u.dx * (1 + f * 0.4), y + 0.5 + u.rise * Math.min(1, f / 2.2) + f * 0.6, z + u.dz * (1 + f * 0.4)); m.scale.setScalar(u.s * (0.6 + Math.min(1.6, f * 0.7))); m.material.opacity = f <= 0 ? 0 : Math.min(0.8, f * 3) * Math.max(0, 1 - f / 6); });
+    // debris thrown up and falling back
+    bits.forEach((m) => { const u = m.userData; u.vy -= 22 * 0.016; m.position.x += u.vx * 0.016; m.position.y = Math.max(g0 + 0.06, m.position.y + u.vy * 0.016); m.position.z += u.vz * 0.016; m.rotation.x += 0.3; m.rotation.z += 0.2; m.visible = t < 1.6; });
+    boomLight.intensity = Math.max(0, 1 - t / 0.5) * 300;
+    if (t < 6.2) requestAnimationFrame(step);
+    else { boomLight.intensity = 0; for (const m of parts) { scene.remove(m); if (m.material !== BIT_MAT) m.material.dispose(); } }
   };
   step();
+  // A jolt you feel up close.
   const d = Math.hypot(x - state.x, z - state.z);
-  if (d < 40) state.recoil += 0.05 * (1 - d / 40);
+  if (d < 50) { state.recoil += 0.09 * (1 - d / 50); state.shake = Math.max(state.shake || 0, 0.6 * (1 - d / 50)); }
 }
 
 function toggleBuild() {
@@ -4137,6 +4163,12 @@ function frame(now) {
   const camGround = Math.max(ground(camera.position.x, camera.position.z), 0);
   if (camera.position.y < camGround + 0.4) camera.position.y = camGround + 0.4;
   camera.lookAt(camera.position.clone().add(d));
+  if (state.shake > 0.002) {   // a blast nearby rattles the view, settling over half a second
+    const k2 = state.shake;
+    camera.rotation.x += (Math.random() - 0.5) * 0.05 * k2; camera.rotation.y += (Math.random() - 0.5) * 0.05 * k2;
+    camera.position.y += (Math.random() - 0.5) * 0.25 * k2;
+    state.shake *= Math.max(0, 1 - dt * 5);
+  }
   sfx.setListener(camera.position.x, camera.position.y, camera.position.z, state.yaw);
   // Optic zoom sets ADS field of view; handling sets how fast you get there.
   const ws = me && weaponStats(me.inv[me.active]);
@@ -4594,7 +4626,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers });   // debug/test hook
+Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground });   // debug/test hook
 function closeTopPanel() {
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.gunsmithOpen) return closeGunsmith();
