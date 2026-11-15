@@ -1934,6 +1934,7 @@ function openMapScreen(mode, opts = null) {
   state.mapOpen = true;
   state.mapMode = mode;
   state.deployOpts = opts || state.deployOpts;
+  state.mapPick = null; state.mapHover = null;
   $('mapscreen').hidden = false;
   document.exitPointerLock?.();
   if (mode === 'view' || mode === 'travel') { mapView.cx = state.x; mapView.cz = state.z; mapView.zoom = 14; }
@@ -1955,6 +1956,30 @@ function homeLabel(id, icon = false) {
   return `${icon ? HOME_ICONS[h.kind] + ' ' : ''}${HOME_NAMES[h.kind]} near ${near.name}`;
 }
 /** The options the side list shows for the current mode. */
+/** Landing zones by the area they're named for ("LZ H (Bristol)" → Bristol), in map order. */
+function lzGroups(ids) {
+  const groups = new Map();
+  for (const id of ids) {
+    const lz = state.map.landingZones[id], area = /\(([^)]+)\)/.exec(lz.name)?.[1] || 'the wilds';
+    if (!groups.has(area)) groups.set(area, []);
+    groups.get(area).push(lz);
+  }
+  return groups;
+}
+/** One row per area: drop at a random landing zone there (pick a particular one on the map). */
+function lzRows(ids) {
+  return [...lzGroups(ids)].map(([area, lzs]) => ({
+    label: `🪂 Landing zone near ${area} (${lzs.length})`, group: lzs.map((l) => l.id), noMarker: true, color: '#e0e0e0',
+    x: lzs.reduce((a, l) => a + l.x, 0) / lzs.length, z: lzs.reduce((a, l) => a + l.z, 0) / lzs.length,
+    get msg() { return { t: 'deploy', kind: 'lz', id: lzs[Math.floor(Math.random() * lzs.length)].id }; },
+  }));
+}
+/** Every single place on the map you can tap to pick (the list's area rows split into their zones). */
+function mapTargets() {
+  const out = mapOptions().filter((o) => !o.noMarker);
+  for (const o of mapOptions()) if (o.group) for (const id of o.group) { const lz = state.map.landingZones[id]; out.push({ label: `🪂 ${lz.name}`, x: lz.x, z: lz.z, msg: { t: 'deploy', kind: 'lz', id }, color: '#e0e0e0' }); }
+  return out;
+}
 function mapOptions() {
   const map = state.map, o = state.deployOpts || {};
   const town = (h) => homeLabel(h);
@@ -1964,7 +1989,7 @@ function mapOptions() {
     return [
       ...(o.crew || []).map((m) => ({ label: `👥 Deploy with ${m.name} (crew)`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' })),
       ...(o.towns || []).map((id) => ({ label: `🏙 ${map.towns[map.contacts[id].townId].name}${map.towns[map.contacts[id].townId].county ? ` (${map.towns[map.contacts[id].townId].county} Co.)` : ''}`, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#ffd29a' })),
-      ...map.landingZones.map((lz) => ({ label: `🪂 ${lz.name}`, x: lz.x, z: lz.z, msg: { t: 'deploy', kind: 'lz', id: lz.id }, color: '#e0e0e0' })),
+      ...lzRows(map.landingZones.map((lz) => lz.id)),
     ];
   }
   if (state.mapMode === 'redeploy') {
@@ -1972,7 +1997,7 @@ function mapOptions() {
     if (o.claim) list.push({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' });
     for (const id of o.contacts || []) list.push({ label: map.contacts[id].name, x: map.contacts[id].x, z: map.contacts[id].z, msg: { t: 'deploy', kind: 'contact', id }, color: '#7fd6ff' });
     for (const c of o.crates || []) list.push({ label: 'Your stash crate', x: c.x, z: c.z, msg: { t: 'deploy', kind: 'crate', id: c.id }, color: '#c9a36b' });
-    for (const id of o.lzs || []) list.push({ label: map.landingZones[id].name, x: map.landingZones[id].x, z: map.landingZones[id].z, msg: { t: 'deploy', kind: 'lz', id }, color: '#e0e0e0' });
+    list.push(...lzRows(o.lzs || []));
     return list;
   }
   if (state.mapMode === 'taxi' && state.taxi) {
@@ -1994,7 +2019,7 @@ function renderMapScreen() {
   if (!state.mapOpen || !state.map) return;
   const titles = { taxi: state.taxi ? `Helicopter from ${state.taxi.fromName}` : 'Helicopter', first: 'Where do you want to start?', redeploy: state.killedBy ? `Killed by ${state.killedBy} — redeploy` : 'Deploy', travel: 'Fast travel (from your stash house)', view: 'Map' };
   const notes = {
-    first: 'Pick where to start. Then find a place to call home and plant your claim marker in it: a town house or apartment room, a limestone cave, rock outcrop, hollow cypress, river fish camp, an abandoned RV, bus, box truck or houseboat — or plant it as a claim flag on open ground.',
+    first: 'Pick a town, or a landing zone out in the woods. Then find somewhere to call home and plant your claim marker: a house, cave, fish camp, old RV or houseboat, or open ground.',
     redeploy: 'You dropped everything you carried in a bag where you fell. Level, unlocks, commendations and your stash are safe. Deploy at your house, any Contact you\'ve discovered, or a landing zone.',
     travel: 'Fast travel only goes out from your stash house — getting loot home is still on foot.',
     taxi: `Pick where to fly. You jump from ${feet(HELI.airTaxi.jump.alt, 50)} over a random spot ${distText(HELI.airTaxi.dropMin)}–${distText(HELI.airTaxi.dropMax)} out from it and steer down by parachute or squirrel suit, so nobody can camp it. It lands here in 20 seconds: stay on the pad (leave, go down or get shot at and it turns back, no charge). You pay when you board; crewmates on the pad ride free. No freight. You have $${state.taxi?.cash ?? 0}.${state.taxi?.readyIn ? ` The pilot can fly again in ${Math.ceil(state.taxi.readyIn / 1000)}s.` : ''}`,
@@ -2002,10 +2027,21 @@ function renderMapScreen() {
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
+  if (state.mapMode === 'first' || state.mapMode === 'redeploy') $('mapNote').textContent += ' Tap a spot on the map to pick it exactly.';
   const list = $('mapList'); list.innerHTML = '';
+  const pick = state.mapPick;
+  if (pick) {
+    // Tapped on the map: say which, and confirm (so a stray tap never sends you somewhere).
+    const box = document.createElement('div');
+    box.className = 'mappick';
+    box.append(Object.assign(document.createElement('div'), { className: 'nm', textContent: pick.label }));
+    const go = btn(state.mapMode === 'taxi' ? 'Fly here' : 'Start here', () => { state.mapPick = null; send(pick.msg); if (pick.close) closeMapScreen(); }, '');
+    box.append(go, btn('Cancel', () => { state.mapPick = null; renderMapScreen(); }, 'ghost'));
+    list.append(box);
+  }
   const opts = mapOptions();
   for (const o of opts) {
-    const b = btn(o.label, () => { send(o.msg); if (o.close) closeMapScreen(); });
+    const b = btn(o.label, () => { state.mapPick = null; send(o.msg); if (o.close) closeMapScreen(); });
     b.className = 'gsweapon';
     b.onmouseenter = () => { state.mapHover = o; drawMapCanvas(); };
     list.append(b);
@@ -2028,7 +2064,9 @@ function drawMapCanvas() {
   const map = state.map, markers = [];
   const dim = new Set(state.me?.discovered || []);
   for (const c of map.contacts) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: dim.has(c.id) ? '#7fd6ff' : '#3a5560', size: 5 });
-  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: '#cfcfcf', size: 4, label: state.mapMode === 'redeploy' ? lz.name : '' });
+  const deploying = state.mapMode === 'first' || state.mapMode === 'redeploy';
+  const lit = new Set(state.mapHover?.group || []);
+  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: deploying ? 6 : 4, highlight: lit.has(lz.id), label: deploying ? lz.name.split(' (')[0] : '', labelMin: 0 });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
   for (const d of map.docks) markers.push({ x: d.x, z: d.z, color: '#7fd6ff', size: 4, label: d.campId != null ? '' : `⚓ ${d.name}` });
@@ -2051,7 +2089,8 @@ function drawMapCanvas() {
   for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
   const hpos = homePos();
   if (hpos) markers.push({ x: hpos.x, z: hpos.z, color: '#4fbf6a', size: 7, label: `Home (Lv${state.me.claim.level})` });
-  for (const o of mapOptions()) { const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
+  for (const o of mapOptions()) { if (o.noMarker) continue; const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
+  if (state.mapPick) markers.push({ x: state.mapPick.x, z: state.mapPick.z, kind: 'diamond', color: '#ff7a1a', size: 10, highlight: true, label: state.mapPick.label.replace(/^\S+ /, '') });
   if (state.waypoint) markers.push({ x: state.waypoint.x, z: state.waypoint.z, kind: 'diamond', color: '#ff7a1a', size: 8, label: `Waypoint · ${distText(Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z))}` });
   if (state.me && !state.me.dead) markers.push({ x: state.x, z: state.z, kind: 'player', yaw: state.yaw, color: '#5aa8ff', size: 7 });
   // The road you're on is always named on the map, whatever the zoom.
@@ -2070,9 +2109,10 @@ $('mapcanvas').addEventListener('click', (e) => {
   const w = state.mapProj.toWorld(e.clientX - r.left, e.clientY - r.top);
   // Pick the nearest option within ~20 px.
   let best = null, bd = 20 / state.mapProj.k;
-  for (const o of mapOptions()) { const d = Math.hypot(o.x - w.x, o.z - w.z); if (d < bd) { bd = d; best = o; } }
+  for (const o of mapTargets()) { const d = Math.hypot(o.x - w.x, o.z - w.z); if (d < bd) { bd = d; best = o; } }
   if (state.mapMode === 'view') { if (!mapDragMoved) setWaypoint(w.x, w.z); return; }
-  if (best) send(best.msg);
+  if (mapDragMoved) return;
+  if (best) { state.mapPick = best; renderMapScreen(); $('mapList').scrollTop = 0; }
   else if (state.mapMode === 'first') {
     // Clicking a specific free house on the map claims that one.
     let bh = null, bhd = 30 / state.mapProj.k;
