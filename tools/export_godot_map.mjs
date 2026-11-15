@@ -2,7 +2,7 @@
 // every hill, road and wall:
 //   godot/map/heights.d16.gz ground height in 10 cm steps above -40 m, 16-bit LE, each row as
 //                            differences from the point before (the first as value - 32768), gzipped
-//   godot/map/colors.png    ground colour (real land cover), one pixel per sample
+//   godot/map/colors.rgb.gz ground colour (real land cover), 8-bit RGB per sample, gzipped
 //   godot/map/meta.json     sizes, plus every building, road, tree and rock as compact arrays
 // Usage: node tools/export_godot_map.mjs [step metres, default 10]
 import fs from 'node:fs';
@@ -39,9 +39,9 @@ for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
 // Each row stored as the difference from the point before it (small numbers that compress well).
 for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; hbuf.writeInt16LE(i ? hq[k] - hq[k - 1] : hq[k] - 32768, k * 2); }
 fs.writeFileSync(path.join(OUT, 'heights.d16.gz'), zlib.gzipSync(hbuf, { level: 9 }));
-fs.writeFileSync(path.join(OUT, 'colors.png'), png(n, n, rgb));
+fs.writeFileSync(path.join(OUT, 'colors.rgb.gz'), zlib.gzipSync(rgb, { level: 9 }));   // raw RGB, gzipped (a PNG would be imported as a texture)
 
-// Solid things, compact: [minX, minZ, maxX, maxZ, y0, h, type, angle?, cx, cz, hw, hd]
+// Solid things, compact: [minX, minZ, maxX, maxZ, y0, h, type] (+ [angle, cx, cz, hw, hd] when turned)
 const r2 = (v) => Math.round(v * 100) / 100;
 const TYPES = [];
 const typeId = (t) => { let i = TYPES.indexOf(t); if (i < 0) { i = TYPES.length; TYPES.push(t); } return i; };
@@ -50,7 +50,9 @@ const boxes = [];
 // Trees and rocks are made on demand per tile (millions across the county): left out here.
 for (const b of map.boxes) {
   if (b.nature || b.type === 'border' || b.type === 'tree' || b.type === 'pine') continue;
-  boxes.push([r2(b.minX), r2(b.minZ), r2(b.maxX), r2(b.maxZ), r2(b.y0 || 0), r2(b.h || 1), typeId(b.type || 'wall'), b.ang !== undefined ? r2(b.ang) : null]);
+  const e = [r2(b.minX), r2(b.minZ), r2(b.maxX), r2(b.maxZ), r2(b.y0 || 0), r2(b.h || 1), typeId(b.type || 'wall')];
+  if (b.ang !== undefined) e.push(Math.round(b.ang * 1000) / 1000, r2(b.cx), r2(b.cz), r2(b.hw), r2(b.hd));   // turned: centre and half sizes
+  boxes.push(e);
 }
 const roadSegs = map.roads.map((r) => [r2(r.x1), r2(r.z1), r2(r.x2), r2(r.z2), r2(r.width || 8), r.dirt ? 1 : r.hw ? 2 : 0]);
 const meta = {
@@ -59,6 +61,7 @@ const meta = {
   towns: map.towns.map((t) => ({ name: t.name, x: r2((t.rect.minX + t.rect.maxX) / 2), z: r2((t.rect.minZ + t.rect.maxZ) / 2) })),
 };
 fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(meta));
+fs.copyFileSync(path.join(ROOT, 'shared', 'data', 'arsenal.json'), path.join(OUT, 'arsenal.json'));   // weapon rates for the client
 console.log(`grid ${n}x${n} @${STEP} m, ${boxes.length} boxes (${map.buildings.length} buildings), ${roadSegs.length} road segments`);
 
 /** A minimal 8-bit RGB PNG encoder. */

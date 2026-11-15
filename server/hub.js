@@ -296,6 +296,7 @@ hubWss.on('connection', (ws) => {
 const STATIC = [
   ['/vendor/', path.join(ROOT, 'node_modules', 'three', 'build')],
   ['/addons/', path.join(ROOT, 'node_modules', 'three', 'examples', 'jsm')],
+  ['/g/', path.join(ROOT, 'godot', 'web')],   // the Godot client's web build (tools: see godot/README.md)
   ['/fonts/', path.join(ROOT, 'node_modules', '@fontsource', 'archivo', 'files')],
   ['/fonts/', path.join(ROOT, 'node_modules', '@fontsource', 'atkinson-hyperlegible', 'files')],
   ['/shared/', path.join(ROOT, 'shared')],
