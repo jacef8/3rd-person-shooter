@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from '/addons/utils/BufferGeometryUtils.js';
 import { Sky } from '/addons/objects/Sky.js';
 import { coverColor } from './mapview.js';
+import TREE_ATLAS from '/textures/trees.json' with { type: 'json' };
 
 const CHUNK = 160;
 export const SKY_TOP = 0x5b8fc7, SKY_HORIZON = 0xc6d9e6;
@@ -207,6 +208,58 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   const crownMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });   // colour per tree (instance colours)
   const pineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
   const LEAF = [0x3b6532, 0x467236, 0x3f6a33, 0x4f7a38, 0x37602f], NEEDLE = [0x27482c, 0x2d5132, 0x24432a, 0x325836];
+  // Photo trees: the pines, live oak and oak cut from real pictures (tools/build_tree_atlas.py), each
+  // drawn as two crossed picture cards. One sheet holds all six; each tree says which part it uses.
+  const treeTex = new THREE.TextureLoader().load('/textures/trees.webp');
+  treeTex.colorSpace = THREE.SRGBColorSpace; treeTex.anisotropy = 4;
+  const PHOTO = { pine: TREE_ATLAS.trees.filter((t) => t.kind === 'pine'), tree: TREE_ATLAS.trees.filter((t) => t.kind === 'tree') };
+  const cardGeo = (() => {
+    // Two upright planes crossed at right angles, each with a face both ways (so neither side goes
+    // dark), every normal pointing up: the leaves are lit like the canopy from above.
+    const P = [], N = [], U = [], I = [];
+    const quad = (ax, az, bx, bz, flip) => {
+      const o = P.length / 3;
+      P.push(ax, 0, az, bx, 0, bz, bx, 1, bz, ax, 1, az);
+      for (let k = 0; k < 4; k++) N.push(0, 1, 0);
+      U.push(0, 0, 1, 0, 1, 1, 0, 1);
+      if (flip) I.push(o, o + 2, o + 1, o, o + 3, o + 2); else I.push(o, o + 1, o + 2, o, o + 2, o + 3);
+    };
+    for (const f of [false, true]) { quad(-0.5, 0, 0.5, 0, f); quad(0, 0.5, 0, -0.5, f); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+    g.setIndex(I);
+    return g;
+  })();
+  /** Each tree's own part of the sheet, as an attribute per instance. */
+  const atlasUv = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aTreeUv;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_MAP\n  vMapUv = vMapUv * aTreeUv.zw + aTreeUv.xy;\n#endif');
+  };
+  const photoMat = new THREE.MeshStandardMaterial({ map: treeTex, alphaTest: 0.42, roughness: 1, metalness: 0, alphaToCoverage: true });
+  photoMat.onBeforeCompile = atlasUv;
+  const photoFarMat = new THREE.MeshLambertMaterial({ map: treeTex, alphaTest: 0.42 });
+  photoFarMat.onBeforeCompile = atlasUv;
+  const photoDepth = new THREE.MeshDepthMaterial({ map: treeTex, alphaTest: 0.42, depthPacking: THREE.RGBADepthPacking });
+  photoDepth.onBeforeCompile = atlasUv;
+  /** An instanced batch of photo trees: [{ x, y, z, h, kind, id }] -> mesh (and each tree's card size). */
+  function photoTrees(list, mat) {
+    const geo = cardGeo.clone(), uvs = new Float32Array(list.length * 4);
+    const im = new THREE.InstancedMesh(geo, mat, list.length);
+    const tint = new THREE.Color();
+    list.forEach((t, i) => {
+      const v = PHOTO[t.kind][(t.id * 7 + 3) % PHOTO[t.kind].length];
+      uvs.set([v.u, v.v, v.w, v.h], i * 4);
+      t.cardH = t.h * (t.kind === 'pine' ? 1.18 : 1.05); t.cardW = t.cardH * v.aspect; t.cardYaw = ((t.id * 2.399) % Math.PI);
+      const k = 0.84 + ((t.id * 13) % 9) * 0.03;
+      im.setColorAt(i, tint.setRGB(k, k, k * 0.97));
+    });
+    geo.setAttribute('aTreeUv', new THREE.InstancedBufferAttribute(uvs, 4));
+    return im;
+  }
+  const cardQ = new THREE.Quaternion(), cardS = new THREE.Vector3(), cardP = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
+  const cardMatrix = (m, x, y, z, w, h, yaw) => m.compose(cardP.set(x, y, z), cardQ.setFromAxisAngle(UP, yaw), cardS.set(w, h, w));
   // Water: small waves rolling across it (worked out per pixel from where it is and the time), and the
   // sky showing in it more the flatter you look across it, like the real thing.
   const waterTime = { value: 0 };
@@ -624,13 +677,13 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
       rock.setMatrixAt(i, tm); rock.instanceMatrix.needsUpdate = true;
       return;
     }
-    const { trunks, crowns, i, x, y, z, h, w } = sl;
-    if (t.gone) {   // a stump knee-high, and no crown
+    const { trunks, crowns, i, x, y, z, cw, ch, yaw } = sl;
+    if (t.gone) {   // a stump knee-high, and no tree
       tm.makeScale(1.15, 0.55, 1.15).setPosition(x, y + 0.3, z); trunks.setMatrixAt(i, tm);
       tm.makeScale(0, 0, 0).setPosition(x, y, z); crowns.setMatrixAt(i, tm);
     } else {
-      tm.makeScale(1, h * 0.45, 1).setPosition(x, y, z); trunks.setMatrixAt(i, tm);
-      tm.makeScale(w, h * 0.75, w).setPosition(x, y + h * 0.28, z); crowns.setMatrixAt(i, tm);
+      tm.makeScale(0, 0, 0).setPosition(x, y, z); trunks.setMatrixAt(i, tm);
+      cardMatrix(tm, x, y - 0.15, z, cw, ch, yaw); crowns.setMatrixAt(i, tm);
     }
     trunks.instanceMatrix.needsUpdate = true; crowns.instanceMatrix.needsUpdate = true;
   }
@@ -760,21 +813,21 @@ vBlade = position.y;
       m.receiveShadow = mat !== roofMat;
       group.add(m);
     }
-    const forest = (list, crownMaterial, wide) => {
+    const forest = (list, crownMaterial) => {
       if (!list.length) return;
+      // The photo tree stands there; the trunk mesh is only the stump once it's been cut down.
       const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, list.length);
-      const crowns = new THREE.InstancedMesh(crownMaterial === pineMat ? pineGeo : crownGeo, crownMaterial, list.length);
-      const tint = new THREE.Color(), palette = crownMaterial === pineMat ? NEEDLE : LEAF;
-      list.forEach((t, i) => crowns.setColorAt(i, tint.setHex(palette[t.id % palette.length])));
-      const m = new THREE.Matrix4();
+      const cards = photoTrees(list.map((t) => ({ kind: crownMaterial === pineMat ? 'pine' : 'tree', id: t.id, h: t.h })), photoMat);
       list.forEach((t, i) => {
         const x = (t.minX + t.maxX) / 2, z = (t.minZ + t.maxZ) / 2, y = t.y0 || 0, h = t.h;
-        const w = wide + (t.id % 5) * 0.25;
-        treeSlots.set(t, { trunks, crowns, i, x, y, z, h, w });
+        const kind = crownMaterial === pineMat ? 'pine' : 'tree', hh = h * (kind === 'pine' ? 1.18 : 1.05);
+        const v = PHOTO[kind][(t.id * 7 + 3) % PHOTO[kind].length];
+        treeSlots.set(t, { trunks, crowns: cards, i, x, y, z, h, cw: hh * v.aspect, ch: hh, yaw: (t.id * 2.399) % Math.PI });
         setTreeMatrix(t);
       });
-      trunks.castShadow = crowns.castShadow = !mobile;
-      group.add(trunks, crowns);
+      cards.castShadow = !mobile; cards.customDepthMaterial = photoDepth;
+      trunks.castShadow = !mobile;
+      group.add(trunks, cards);
     };
     // Rocks you can mine: chunky stones, one batch per chunk, so a mined-out one can crumble in place.
     if (rocks.length) {
@@ -783,8 +836,8 @@ vBlade = position.y;
       im.castShadow = true; im.receiveShadow = true;
       group.add(im);
     }
-    forest(trees, crownMat, 2.2);
-    forest(pines, pineMat, 1.4);
+    forest(trees, crownMat);
+    forest(pines, pineMat);
     for (const t of tanks) {   // water tower tanks and storage tanks are round
       const m = new THREE.Mesh(tankGeo, tankMat);
       m.position.set((t.minX + t.maxX) / 2, t.y0, (t.minZ + t.maxZ) / 2);
@@ -838,15 +891,12 @@ vBlade = position.y;
     if (boxes.idx.length) group.add(new THREE.Mesh(toGeometry(boxes), farMat));
     if (roof.idx.length) group.add(new THREE.Mesh(toGeometry(roof), farRoofMat));
     const m = new THREE.Matrix4();
-    for (const [list, mat, wide] of [[trees, farCrownMat, 2.2], [pines, farPineMat, 1.4]]) {
+    for (const [list, kind] of [[trees, 'tree'], [pines, 'pine']]) {
       if (!list.length) continue;
-      const crowns = new THREE.InstancedMesh(farCrownGeo, mat, list.length);
-      list.forEach((t, i) => {
-        const w = wide + (t.id % 5) * 0.25;
-        m.makeScale(w, t.h * 0.75, w).setPosition((t.minX + t.maxX) / 2, t.y0 + t.h * 0.28, (t.minZ + t.maxZ) / 2);
-        crowns.setMatrixAt(i, m);
-      });
-      group.add(crowns);
+      const far0 = list.map((t) => ({ kind, id: t.id, h: t.h }));
+      const cards = photoTrees(far0, photoFarMat);
+      list.forEach((t, i) => { const f = far0[i]; cardMatrix(m, (t.minX + t.maxX) / 2, t.y0 - 0.15, (t.minZ + t.maxZ) / 2, f.cardW, f.cardH, f.cardYaw); cards.setMatrixAt(i, m); });
+      group.add(cards);
     }
     far.add(group);
     return group;
