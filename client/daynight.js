@@ -1,33 +1,45 @@
 // Day and night, and the weather. Everyone sees the same: both come from the clock, not from the
-// server. A day lasts 48 minutes (about 34 of daylight, dusk and dawn included, and 14 of night); the
-// weather changes every 15 minutes, fading from one to the next over a minute and a half.
+// server. A day lasts two hours: an hour and a half of daylight (sunrise to sunset, dusk and dawn
+// included) and half an hour of night. The weather is mostly clear and sunny; now and then (about one
+// stretch in nine) a short spell of cloud, rain or a thunderstorm blows through for four minutes and
+// clears again, fading in and out over a minute.
 //
-//   clear · cloudy · rain · thunderstorm (rain, lightning, thunder)
+//   clear (most of the time) · cloudy · rain · thunderstorm (rain, lightning, thunder)
 import * as THREE from 'three';
 
-export const DAY_MS = 48 * 60 * 1000;
-const WEATHER_MS = 15 * 60 * 1000, BLEND_MS = 90 * 1000;
+export const DAY_MS = 120 * 60 * 1000;
+const DAYLIGHT = 0.75;   // share of the real-time cycle the sun is up
+const WEATHER_MS = 4 * 60 * 1000, BLEND_MS = 60 * 1000, SPELL_CHANCE = 0.12;
 const WEATHERS = {
-  //        share  clouds dens  sun   sky   rain fog     label
-  clear:  [0.50, 0.22, 0.30, 1.00, 1.00, 0, 0.0, '☀ Clear'],
-  cloudy: [0.24, 0.72, 0.60, 0.50, 0.75, 0, 0.0, '☁ Cloudy'],
-  rain:   [0.16, 0.92, 0.80, 0.32, 0.58, 1, 0, '🌧 Rain'],
-  storm:  [0.08, 1.00, 0.95, 0.22, 0.45, 2, 0, '⛈ Thunderstorm'],
+  //        share  clouds dens  sun   sky   rain fog     label        (share: among the spells)
+  clear:  [0.00, 0.22, 0.30, 1.00, 1.00, 0, 0.0, '☀ Clear'],
+  cloudy: [0.50, 0.72, 0.60, 0.50, 0.75, 0, 0.0, '☁ Cloudy'],
+  rain:   [0.35, 0.92, 0.80, 0.32, 0.58, 1, 0, '🌧 Rain'],
+  storm:  [0.15, 1.00, 0.95, 0.22, 0.45, 2, 0, '⛈ Thunderstorm'],
 };
 const NAMES = Object.keys(WEATHERS);
 const hashU = (n) => { let h = Math.imul(n ^ 0x9e3779b9, 0x85ebca6b) >>> 0; h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
-function weatherAt(windowIndex) {
-  let u = hashU(windowIndex), acc = 0;
+/** Whether a spell of bad weather would start in this window (before the no-two-in-a-row rule). */
+const spellAt = (w) => hashU(w) < SPELL_CHANCE;
+function weatherAt(w) {
+  // Clear unless a spell starts here, and never two spells back to back: it always clears after one.
+  if (!spellAt(w) || spellAt(w - 1)) return 'clear';
+  let u = hashU(w * 7919 + 13), acc = 0;
   for (const n of NAMES) { acc += WEATHERS[n][0]; if (u < acc) return n; }
-  return 'clear';
+  return 'cloudy';
 }
 /** Time of day 0..1 (0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset) and the weather now. */
 export function worldClock(now = Date.now()) {
   const o = globalThis.__dzClock;   // (tests: { t, weather })
   if (o) return { t: o.t, weather: o.weather, prev: o.weather, blend: 1 };
-  const t = ((now % DAY_MS) + DAY_MS) % DAY_MS / DAY_MS;
+  // Real time through the cycle: the first three-quarters is 6 AM to 6 PM, the rest the night.
+  const r = ((now % DAY_MS) + DAY_MS) % DAY_MS / DAY_MS;
+  const t = r < DAYLIGHT ? 0.25 + (r / DAYLIGHT) * 0.5 : (0.75 + ((r - DAYLIGHT) / (1 - DAYLIGHT)) * 0.5) % 1;
   const w = Math.floor(now / WEATHER_MS), into = now - w * WEATHER_MS;
-  return { t, weather: weatherAt(w), prev: weatherAt(w - 1), blend: Math.min(1, into / BLEND_MS) };
+  const cur = weatherAt(w), next = weatherAt(w + 1), left = WEATHER_MS - into;
+  // Fade in at the start of a window; a spell fades back out in its last minute.
+  if (cur !== 'clear' && next === 'clear' && left < BLEND_MS) return { t, weather: 'clear', prev: cur, blend: 1 - left / BLEND_MS };
+  return { t, weather: cur, prev: weatherAt(w - 1), blend: Math.min(1, into / BLEND_MS) };
 }
 export function clockLabel(c) {
   const mins = Math.floor(c.t * 24 * 60), h = Math.floor(mins / 60), m = mins % 60, h12 = ((h + 11) % 12) + 1;
