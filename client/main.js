@@ -232,28 +232,41 @@ function initWorld(m) {
   }
 }
 
-// The back door of an RV, bus, box truck or houseboat someone lives in: a panel flush with the back,
-// in the vehicle's own paint, with a window and a handle (the lockable door the game breaks and hacks).
+// The door of a vehicle someone lives in, as that vehicle has it: an RV's entry door, a school bus's
+// folding glass doors, a box truck's roll-up door, a houseboat's cabin door. Flush with the body, on
+// the face of the lock's box nearest the vehicle (the lock itself is what the game breaks and hacks).
 const DOOR_DAMAGED = new THREE.Color(0x2a1a14);
-const HOME_PAINT = { rv: 0xece6d6, bus: 0xf2b829, truck: 0xe8e8ea, houseboat: 0xc4d2dc };
 function vehicleDoor(def, d) {
-  const g = new THREE.Group(), alongX = !!def.alongX;
-  const w = 1.4, hgt = Math.min(2.1, d.h - 0.15);
-  const paint = new THREE.Color(HOME_PAINT[def.vtype] || 0xcccccc);
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, 0.06), new THREE.MeshStandardMaterial({ color: paint, roughness: 0.6, metalness: 0.15 }));
-  const win = new THREE.Mesh(new THREE.BoxGeometry(w * 0.6, hgt * 0.26, 0.02), new THREE.MeshStandardMaterial({ color: 0x24323d, roughness: 0.15, metalness: 0.4 }));
-  win.position.set(0, hgt * 0.22, 0.04);
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.05, 0.05), new THREE.MeshStandardMaterial({ color: 0xc8c8c8, metalness: 0.8, roughness: 0.3 }));
-  handle.position.set(w * 0.32, -hgt * 0.05, 0.05);
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.1, hgt + 0.1, 0.04), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.8 }));
-  frame.position.z = -0.03;
-  g.add(frame, panel, win, handle);
-  // Flush against the vehicle's back (the near face of the lock's box), facing out.
-  const y = d.y0 + 0.55 + hgt / 2;
-  if (alongX) { g.position.set(d.minX + 0.03, y, (d.minZ + d.maxZ) / 2); g.rotation.y = Math.PI / 2; }
-  else { g.position.set((d.minX + d.maxX) / 2, y, d.minZ + 0.03); }
+  const g = new THREE.Group(), vt = def.vtype;
+  const sx = d.maxX - d.minX, sz = d.maxZ - d.minZ, thinX = sx < sz;
+  const w = (thinX ? sz : sx), floor = vt === 'houseboat' ? 0.5 : 0.75;
+  const hgt = vt === 'truck' ? Math.max(1.6, d.h - 0.9) : vt === 'bus' ? 2.0 : 1.9;
+  const M = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.15, ...extra });
+  const part = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m; };
+  const glass = M(0x24323d, { roughness: 0.15, metalness: 0.4 }), dark = M(0x262626, { roughness: 0.8 }), chrome = M(0xc8c8c8, { metalness: 0.8, roughness: 0.3 });
+  let panel;
+  if (vt === 'bus') {   // two tall glass leaves in a black frame
+    part(new THREE.BoxGeometry(w, hgt, 0.04), dark, 0, 0, 0);
+    for (const s of [-1, 1]) part(new THREE.BoxGeometry(w / 2 - 0.08, hgt - 0.16, 0.03), glass, s * w / 4, 0, 0.02);
+    panel = part(new THREE.BoxGeometry(0.04, hgt, 0.05), dark, 0, 0, 0.03);
+    panel.userData.paint = new THREE.Color(0x262626);
+  } else if (vt === 'truck') {   // a roll-up shutter with its slats
+    panel = part(new THREE.BoxGeometry(w, hgt, 0.05), M(0xd8d8da, { metalness: 0.35 }), 0, 0, 0);
+    for (let k = 1; k < 9; k++) part(new THREE.BoxGeometry(w, 0.025, 0.06), M(0xa8a8ac), 0, -hgt / 2 + (hgt * k) / 9, 0.01);
+    part(new THREE.BoxGeometry(0.3, 0.05, 0.06), chrome, 0, -hgt / 2 + 0.15, 0.04);
+  } else {   // an RV's or houseboat's door: a panel with a window and a handle
+    panel = part(new THREE.BoxGeometry(w, hgt, 0.05), M(0xece6d6), 0, 0, 0);
+    part(new THREE.BoxGeometry(w * 0.6, hgt * 0.24, 0.02), glass, 0, hgt * 0.22, 0.03);
+    part(new THREE.BoxGeometry(0.16, 0.04, 0.05), chrome, w * 0.3, -hgt * 0.05, 0.04);
+    part(new THREE.BoxGeometry(w + 0.06, 0.05, 0.03), dark, 0, hgt / 2 + 0.02, -0.01);
+  }
+  // On the face of the lock's box that touches the vehicle, facing out.
+  const cx = (d.minX + d.maxX) / 2, cz = (d.minZ + d.maxZ) / 2, toV = thinX ? Math.sign(def.x - cx) : Math.sign(def.z - cz);
+  const y = d.y0 + floor + hgt / 2;
+  if (thinX) { g.position.set(toV > 0 ? d.maxX - 0.03 : d.minX + 0.03, y, cz); g.rotation.y = toV > 0 ? -Math.PI / 2 : Math.PI / 2; }
+  else { g.position.set(cx, y, toV > 0 ? d.maxZ - 0.03 : d.minZ + 0.03); g.rotation.y = toV > 0 ? Math.PI : 0; }
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  g.userData = { panel, paint };
+  g.userData = { panel, paint: panel.material.color.clone() };
   return g;
 }
 function syncHouses(list) {

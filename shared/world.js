@@ -556,11 +556,22 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     const y0 = floating ? -0.4 : Math.min(terrain.exact(cx - hl, cz - hl), terrain.exact(cx + hl, cz + hl), terrain.exact(cx, cz)) - 0.3;
     const body = alongX ? [cx - hl, cz - hw, cx + hl, cz + hw] : [cx - hw, cz - hl, cx + hw, cz + hl];
     box(...body, v.h + 0.3, 'vehiclebody', { houseId: id, y0, vtype });
-    // Rear door (the lock) and the spot you stand to reach the stash inside.
-    const door = alongX
-      ? { minX: cx + hl, minZ: cz - 0.8, maxX: cx + hl + 0.35, maxZ: cz + 0.8, h: 2.3, y0 }
-      : { minX: cx - 0.8, minZ: cz + hl, maxX: cx + 0.8, maxZ: cz + hl + 0.35, h: 2.3, y0 };
-    const crate = alongX ? { x: cx + hl + 1.4, z: cz } : { x: cx, z: cz + hl + 1.4 };
+    // The door (the lock) where that kind of vehicle has one, and the spot you stand to reach the stash
+    // inside. The front is the low end of the long axis; the passenger (right) side is -z when the
+    // vehicle lies along x, +x when it lies along z. RV: the entry door on the right, ahead of the
+    // middle. School bus: the folding door at the front on the right. Box truck: the roll-up door across
+    // the back. Houseboat: the cabin door on the back deck.
+    let door, crate;
+    if (vtype === 'rv' || vtype === 'bus') {
+      const dw = vtype === 'bus' ? 1.0 : 0.8, at = vtype === 'bus' ? -(hl - 1.3) : -0.15 * v.len;
+      if (alongX) { const ax = cx + at; door = { minX: ax - dw / 2, maxX: ax + dw / 2, minZ: cz - hw - 0.35, maxZ: cz - hw, h: 2.3, y0 }; crate = { x: ax, z: cz - hw - 1.4 }; }
+      else { const az = cz + at; door = { minX: cx + hw, maxX: cx + hw + 0.35, minZ: az - dw / 2, maxZ: az + dw / 2, h: 2.3, y0 }; crate = { x: cx + hw + 1.4, z: az }; }
+    } else {
+      const half = vtype === 'truck' ? hw - 0.15 : 0.8;
+      door = alongX ? { minX: cx + hl, minZ: cz - half, maxX: cx + hl + 0.35, maxZ: cz + half, h: vtype === 'truck' ? v.h : 2.3, y0 }
+        : { minX: cx - half, minZ: cz + hl, maxX: cx + half, maxZ: cz + hl + 0.35, h: vtype === 'truck' ? v.h : 2.3, y0 };
+      crate = alongX ? { x: cx + hl + 1.4, z: cz } : { x: cx, z: cz + hl + 1.4 };
+    }
     houses.push({ id, kind: 'vehicle', vtype, townId: null, x: cx, z: cz, crate, door, biome: biomeName(terrain.biome(cx, cz)), alongX });
     reserve({ minX: body[0] - 3, minZ: body[1] - 3, maxX: body[2] + 3, maxZ: body[3] + 3, home: 1 });
     return id;

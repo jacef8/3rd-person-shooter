@@ -104,10 +104,13 @@ test('claims: markers, vehicles and locks, home levels, flags', async (t) => {
 
   // … so Ben shoots the lock off and gets in.
   const lockX = (rv.door.minX + rv.door.maxX) / 2, lockZ = (rv.door.minZ + rv.door.maxZ) / 2;
-  b.send({ t: 'dev', x: lockX + (rv.alongX ? 4 : 0), z: lockZ + (rv.alongX ? 0 : 4) }); await sleep(300);
+  // Outside the lock, wherever this vehicle has its door (an RV's is on its side): 4 m out from it.
+  const thinX = rv.door.maxX - rv.door.minX < rv.door.maxZ - rv.door.minZ;
+  const out = thinX ? [Math.sign(lockX - rv.x), 0] : [0, Math.sign(lockZ - rv.z)];
+  b.send({ t: 'dev', x: lockX + out[0] * 4, z: lockZ + out[1] * 4 }); await sleep(300);
   for (let i = 0; i < 400 && (b.snap?.houses.find((h) => h.id === rv.id)?.hp ?? 1) > 0; i++) {
     if (b.you.mag === 0) b.send({ t: 'reload' });
-    b.send({ t: 'shoot', dir: [rv.alongX ? -1 : 0, -0.12, rv.alongX ? 0 : -1] });
+    b.send({ t: 'shoot', dir: [-out[0], -0.12, -out[1]] });
     await sleep(110);
   }
   await until(() => b.snap.houses.find((h) => h.id === rv.id).hp === 0, 2000);
