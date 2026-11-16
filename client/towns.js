@@ -77,9 +77,38 @@ const GEO = {
   box: new THREE.BoxGeometry(1, 1, 1),
 };
 for (const g of Object.values(GEO)) g.userData.shared = true;
+// Paving: the photographed asphalt for lots, a lighter tint of it for concrete sidewalks.
+const asphaltTex = new THREE.TextureLoader().load('/textures/pbr/asphalt.jpg');
+asphaltTex.wrapS = asphaltTex.wrapT = THREE.RepeatWrapping; asphaltTex.colorSpace = THREE.SRGBColorSpace; asphaltTex.anisotropy = 4;
+const PAVE = {
+  lot: new THREE.MeshStandardMaterial({ map: asphaltTex, color: 0xb4b4b4, roughness: 0.95, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+  walk: new THREE.MeshStandardMaterial({ color: 0xbcb7ad, roughness: 0.9, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }),
+  line: new THREE.MeshBasicMaterial({ color: 0xe8e6de }),
+};
+/** A patch of ground following the terrain: corner c, along u for `a` metres, along n for `b` metres. */
+function drape(out, ground, c, u, n, a, b, step = 2.5) {
+  const nu = Math.max(1, Math.ceil(a / step)), nn = Math.max(1, Math.ceil(b / step)), base = out.pos.length / 3;
+  for (let j = 0; j <= nn; j++) for (let i = 0; i <= nu; i++) {
+    const x = c[0] + u[0] * a * i / nu + n[0] * b * j / nn, z = c[1] + u[1] * a * i / nu + n[1] * b * j / nn;
+    out.pos.push(x, ground(x, z) + 0.07, z); out.uv.push(x / 6, z / 6);
+  }
+  const up = u[0] * n[1] - u[1] * n[0] < 0;   // which way round the triangles go to face the sky
+  for (let j = 0; j < nn; j++) for (let i = 0; i < nu; i++) {
+    const p = base + j * (nu + 1) + i;
+    if (up) out.idx.push(p, p + nu + 1, p + 1, p + 1, p + nu + 1, p + nu + 2);
+    else out.idx.push(p, p + 1, p + nu + 1, p + 1, p + nu + 2, p + nu + 1);
+  }
+}
+const paveMesh = (d, mat) => {
+  if (!d.idx.length) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(d.pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(d.uv, 2));
+  g.setIndex(d.idx); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, mat); m.receiveShadow = true; return m;
+};
 const FRESH = [0xb8b8bc, 0x1d1d20, 0x8a1c1c, 0x2a4a7a, 0xe8e8e8, 0x5a5f66, 0x6b4a2a, 0x24482e];
 
-export function createTownDressing(scene, map, rows, ground) {
+export function createTownDressing(scene, map, rows, ground, onPaved = null) {
   const size = map.size;
   // Businesses on the map, by cell.
   const biz = new Map();
@@ -109,7 +138,8 @@ export function createTownDressing(scene, map, rows, ground) {
   const inTown = (x, z) => (map.terrain.hasCover ? map.terrain.cover(x, z) === COVER.town : map.towns.some((t) => x > t.rect.minX && x < t.rect.maxX && z > t.rect.minZ && z < t.rect.maxZ));
 
   function buildCell(cx, cz) {
-    const grp = new THREE.Group(), mats = [], lights = [], hydrants = [];
+    const grp = new THREE.Group(), mats = [], lights = [], hydrants = [], stripes = [];
+    const lot = { pos: [], uv: [], idx: [] }, walk = { pos: [], uv: [], idx: [] }, paved = [];   // paved: [corner x, z, along x, z, across x, z, a0, a1, b0, b1], for the grass
     const add = (o) => { grp.add(o); return o; };
     let cars = 0;
     const park = (x, z, yaw, seed) => {
@@ -154,6 +184,15 @@ export function createTownDressing(scene, map, rows, ground) {
       sign.rotation.y = Math.atan2(nx, nz);
       // Out front: a gas station's canopy and pumps, or a few customers' cars.
       const fx = f.cx + nx * out, fz = f.cz + nz * out;
+      // Paved out front to the road (a lot, with its stalls painted), and a sidewalk round the building.
+      const toRoad = road ? Math.max(0, (road.x - fx) * nx + (road.z - fz) * nz - (road.r.width || 8) / 2 + 0.3) : 12;
+      const depth = Math.max(8, Math.min(32, toRoad)), wideL = along + 4;
+      drape(lot, ground, [fx - ux * wideL, fz - uz * wideL], [ux, uz], [nx, nz], wideL * 2, depth);
+      paved.push([fx, fz, ux, uz, nx, nz, -wideL, wideL, 0, depth]);
+      { const A = f.hw + 1.8, B = f.hd + 1.8, n2 = [-f.sa, f.ca];
+        drape(walk, ground, [f.cx - f.ca * A - n2[0] * B, f.cz - f.sa * A - n2[1] * B], [f.ca, f.sa], n2, 2 * A, 2 * B, 3);
+        paved.push([f.cx, f.cz, f.ca, f.sa, n2[0], n2[1], -A, A, -B, B]); }
+      if (!gas && depth >= 8) for (let k = -Math.floor(wideL / 3); k <= Math.floor(wideL / 3); k++) stripes.push([fx + ux * (k * 3 + 1.5) + nx * 4.5, fz + uz * (k * 3 + 1.5) + nz * 4.5, Math.atan2(nx, nz)]);
       if (gas) {
         const gx = fx + nx * 10, gz = fz + nz * 10, gy = ground(gx, gz);
         if (!solidAt(gx, gz, 2) && roadClear(gx, gz, 3)) {
@@ -197,6 +236,12 @@ export function createTownDressing(scene, map, rows, ground) {
       const dx = r.x2 - r.x1, dz = r.z2 - r.z1, len = Math.hypot(dx, dz);
       if (len < 6) continue;
       const ux = dx / len, uz = dz / len, nx = -uz, nz = ux, half = (r.width || 8) / 2, seed = hash(`${Math.round(r.x1)},${Math.round(r.z1)}`);
+      // Sidewalks both sides.
+      for (const sd of [-1, 1]) {
+        const o0 = half + 0.4, cx0 = r.x1 + nx * sd * o0, cz0 = r.z1 + nz * sd * o0;
+        drape(walk, ground, [cx0, cz0], [ux, uz], [nx * sd, nz * sd], len, 2.2, 3);
+        paved.push([r.x1, r.z1, ux, uz, nx * sd, nz * sd, 0, len, half + 0.4, half + 2.6]);
+      }
       for (let t = 6 + (seed % 20), k = 0; t < len - 3; t += 34, k++) {
         const s = k % 2 ? 1 : -1, px = r.x1 + ux * t + nx * s * (half + 1.3), pz = r.z1 + uz * t + nz * s * (half + 1.3);
         if (!solidAt(px, pz) && map.terrain.height(px, pz) > 0.3) lights.push([px, pz, Math.atan2(-nx * s, -nz * s)]);
@@ -223,8 +268,16 @@ export function createTownDressing(scene, map, rows, ground) {
       const im = new THREE.InstancedMesh(GEO.hydrant, MAT.hydrant, hydrants.length), m4 = new THREE.Matrix4();
       hydrants.forEach(([x, z], i) => im.setMatrixAt(i, m4.makeTranslation(x, ground(x, z), z))); add(im);
     }
+    for (const [d, mat] of [[lot, PAVE.lot], [walk, PAVE.walk]]) { const m = paveMesh(d, mat); if (m) add(m); }
+    if (stripes.length) {
+      const im = new THREE.InstancedMesh(GEO.box, PAVE.line, stripes.length), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+      stripes.forEach(([x, z, yaw], i) => { q.setFromAxisAngle(up, yaw); im.setMatrixAt(i, m4.compose(new THREE.Vector3(x, ground(x, z) + 0.09, z), q, new THREE.Vector3(0.12, 0.02, 5))); });
+      add(im);
+    }
     grp.userData.mats = mats;
+    grp.userData.paved = paved;
     scene.add(grp);
+    onPaved?.();
     return grp;
   }
   function dispose(grp) {
@@ -247,6 +300,18 @@ export function createTownDressing(scene, map, rows, ground) {
         const [i, j] = k.split(',').map(Number);
         if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) > n + 1) { dispose(g); cells.delete(k); }
       }
+    },
+    /** Whether (x, z) is paved (a lot or a sidewalk). */
+    pavedAt(x, z) {
+      const g = cells.get(`${Math.floor(x / CELL)},${Math.floor(z / CELL)}`);
+      const lists = g ? [g] : [];
+      // (paving can spill a little over a cell's edge: check the neighbours too)
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const n = cells.get(`${Math.floor((x + dx * 30) / CELL)},${Math.floor((z + dz * 30) / CELL)}`); if (n && n !== g) lists.push(n); }
+      for (const c of lists) for (const [cx, cz, ux, uz, nx, nz, a0, a1, b0, b1] of c.userData.paved) {
+        const a = (x - cx) * ux + (z - cz) * uz, b = (x - cx) * nx + (z - cz) * nz;
+        if (a >= a0 && a <= a1 && b >= b0 && b <= b1) return true;
+      }
+      return false;
     },
     /** For night: how bright the street lamps and signs glow (0..1). */
     setGlow(k) { MAT.lamp.emissive.setRGB(0.27 + k * 0.73, 0.23 + k * 0.6, 0.13 + k * 0.35); for (const g of cells.values()) for (const m of g.userData.mats) m.emissiveIntensity = 0.25 + k * 0.75; },

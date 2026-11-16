@@ -278,7 +278,7 @@ function vehicleDoor(def, d) {
 // Lanterns by the doors of the homes people have claimed: they glow and flicker at night. The four
 // nearest also light up what's around them (a fixed set of lights, so nothing recompiles).
 const LANTERN = { frame: new THREE.MeshStandardMaterial({ color: 0x2b2620, roughness: 0.6, metalness: 0.4 }), geo: new THREE.BoxGeometry(0.16, 0.24, 0.16), cap: new THREE.ConeGeometry(0.13, 0.1, 4) };
-const lanternLights = [0, 1, 2, 3].map(() => { const l = new THREE.PointLight(0xffa040, 0, 14, 1.6); scene.add(l); return l; });
+const lanternLights = [0, 1, 2, 3].map(() => { const l = new THREE.PointLight(0xffa040, 0, 18, 1.5); scene.add(l); return l; });
 function makeLantern(def, d) {
   const g = new THREE.Group();
   const glass = new THREE.Mesh(LANTERN.geo, new THREE.MeshStandardMaterial({ color: 0xffd8a0, emissive: 0xff9a30, emissiveIntensity: 0, roughness: 0.3 }));
@@ -302,7 +302,7 @@ function updateLanterns(now) {
     if (!L?.visible) continue;
     const t = now / 1000 + L.userData.seed;
     const flick = 0.78 + 0.12 * Math.sin(t * 7.3) + 0.07 * Math.sin(t * 17.1 + 1.3) + 0.05 * Math.sin(t * 31.7);
-    L.userData.glass.material.emissiveIntensity = (0.15 + 2.2 * night) * flick;
+    L.userData.glass.material.emissiveIntensity = (0.2 + 5 * night) * flick;
     L.userData.flick = flick;
     if (night > 0.05) list.push([L.position.distanceToSquared(camera.position), L]);
   }
@@ -311,7 +311,7 @@ function updateLanterns(now) {
     const e = list[i];
     if (!e || e[0] > 90 * 90) { l.intensity = 0; return; }
     l.position.copy(e[1].position); l.position.y -= 0.05;
-    l.intensity = 3.2 * night * e[1].userData.flick;
+    l.intensity = 40 * night * e[1].userData.flick;
   });
 }
 function syncHouses(list) {
@@ -339,7 +339,7 @@ function syncHouses(list) {
     }
     const f = h.max ? h.hp / h.max : 0;
     v.door.visible = h.hp > 0 && !h.open;
-    v.lantern.visible = !!h.owner && h.hp > 0;   // someone lives here: a lantern by the door
+    v.lantern.visible = (!!h.owner || !!globalThis.__dzAllLanterns) && h.hp > 0;   // someone lives here: a lantern by the door (tests: all)
     if (v.door.userData.paint) v.door.userData.panel.material.color.copy(v.door.userData.paint).lerp(DOOR_DAMAGED, 0.85 * (1 - f));   // a vehicle's own back door, scorched as it's beaten in
     else v.door.material.color.setRGB(0.35 + 0.5 * (1 - f), 0.37 * f + 0.05, 0.4 * f + 0.05 + h.upg.door * 0.08);
     const own = h.id === state.houseId;
