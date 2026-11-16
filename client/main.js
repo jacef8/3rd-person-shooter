@@ -11,6 +11,7 @@ import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
 import { createTownDressing } from '/towns.js';
+import { withCounty } from '/shared/county.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { startLobbyFx } from '/lobbyfx.js';
@@ -159,7 +160,8 @@ async function loadRealData(info) {
   const [structures, roads, elev, cover, infrastructure, businesses] = await Promise.all([info.structures ? get('structures.json') : undefined, info.roads ? get('roads.json') : undefined,
     info.elevation ? elevation() : undefined, info.landcover ? landcover() : undefined, info.infrastructure ? whole('infrastructure.json') : undefined,
     get('businesses.json')]);   // (signs only: not part of the map, so it's fetched whatever the server says)
-  return { structures, roads, elevation: elev, landcover: cover, infrastructure, businesses };
+  const county = info.county ? await whole('county.json') : null;   // the county's own GIS, merged as the server does
+  return { ...withCounty({ structures, roads }, county), elevation: elev, landcover: cover, infrastructure, businesses, hydrants: county?.hydrants };
 }
 
 /** A loaded tree or rock by its id (nature boxes sit in the grid near where they grow). */
@@ -174,7 +176,7 @@ function initWorld(m) {
   // One coarse pass over the whole county, shared by the far landscape and the map screen.
   const land = sampleLand(map, MOBILE ? 120 : 75);
   state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: MOBILE, land });
-  state.towns = createTownDressing(scene, map, m.realData?.businesses, ground, () => state.view?.setPaved((x, z) => state.towns.pavedAt(x, z)));
+  state.towns = createTownDressing(scene, map, m.realData?.businesses, ground, m.realData?.hydrants, () => state.view?.setPaved((x, z) => state.towns.pavedAt(x, z)));
   state.env = createEnvironment({ scene, far: state.view.far, sky: state.view.sky, sun, hemi, renderer, camera, towns: state.towns, thunder: (x, y, z) => sfx.boom(x, y, z) });
   applyGfx();
   state.view.setOwnHouse(m.houseId);

@@ -12,11 +12,13 @@ import { generateMap, mapChecksum, moveWithCollision, PLAYER_RADIUS } from '../s
 import { parseElevation, parseLandcover, DEEP_WATER, BRIDGE_DECK, RELIEF, COVER } from '../shared/terrain.js';
 import { floats } from '../shared/boats.js';
 import { segDist } from '../shared/geography.js';
+import { withCounty } from '../shared/county.js';
 
 const REAL = new URL('../data/real/', import.meta.url);
 const rows = (name) => JSON.parse(fs.readFileSync(new URL(name, REAL))).rows;
-const real = () => ({ structures: rows('structures.json'), roads: rows('roads.json'), elevation: parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('elevation.bin.gz', REAL)))),
-  landcover: parseLandcover(zlib.gunzipSync(fs.readFileSync(new URL('landcover.bin.gz', REAL)))), infrastructure: JSON.parse(fs.readFileSync(new URL('infrastructure.json', REAL), 'utf8')) });
+// The open data with Liberty County's own GIS merged in, as the server and the clients build it.
+const real = () => withCounty({ structures: rows('structures.json'), roads: rows('roads.json'), elevation: parseElevation(zlib.gunzipSync(fs.readFileSync(new URL('elevation.bin.gz', REAL)))),
+  landcover: parseLandcover(zlib.gunzipSync(fs.readFileSync(new URL('landcover.bin.gz', REAL)))), infrastructure: JSON.parse(fs.readFileSync(new URL('infrastructure.json', REAL), 'utf8')) }, JSON.parse(fs.readFileSync(new URL('county.json', REAL), 'utf8')));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 10000) {
   const end = Date.now() + ms;
@@ -129,7 +131,7 @@ test('the server runs on the real map and hands the same data to clients', async
   await new Promise((r) => ws.on('open', r));
   ws.send(JSON.stringify({ t: 'join', name: 'Surveyor', token: 'ab'.repeat(16) }));
   const welcome = await until(() => got.find((m) => m.t === 'welcome'));
-  assert.deepEqual(welcome.real, { structures: true, roads: true, elevation: true, landcover: true, infrastructure: true });
+  assert.deepEqual(welcome.real, { county: true, structures: true, roads: true, elevation: true, landcover: true, infrastructure: true });
   const map = generateMap(welcome.seed, welcome.size, real());
   assert.equal(mapChecksum(map), welcome.mapSum, 'client and server build the same world');
   ws.send(JSON.stringify({ t: 'deploy', kind: 'contact', id: 0 }));

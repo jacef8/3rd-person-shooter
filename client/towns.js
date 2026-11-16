@@ -108,7 +108,7 @@ const paveMesh = (d, mat) => {
 };
 const FRESH = [0xb8b8bc, 0x1d1d20, 0x8a1c1c, 0x2a4a7a, 0xe8e8e8, 0x5a5f66, 0x6b4a2a, 0x24482e];
 
-export function createTownDressing(scene, map, rows, ground, onPaved = null) {
+export function createTownDressing(scene, map, rows, ground, realHydrants = null, onPaved = null) {
   const size = map.size;
   // Businesses on the map, by cell.
   const biz = new Map();
@@ -121,6 +121,9 @@ export function createTownDressing(scene, map, rows, ground, onPaved = null) {
     biz.get(k).push({ x: p.x, z: p.z, cat, name });
   }
   const cells = new Map();
+  // Real fire hydrants (Liberty County's own), by cell; made-up ones only well away from any of them.
+  const hyd = new Map(), hydFar = (x, z) => !(realHydrants || []).length || !(realHydrants._grid ??= (() => { const g = new Set(); for (const [la, lo] of realHydrants) { const p = project(la, lo, size); g.add(`${Math.floor(p.x / 3000)},${Math.floor(p.z / 3000)}`); } return g; })()).has(`${Math.floor(x / 3000)},${Math.floor(z / 3000)}`);
+  for (const [la, lo] of realHydrants || []) { const p = project(la, lo, size); const k = `${Math.floor(p.x / CELL)},${Math.floor(p.z / CELL)}`; if (!hyd.has(k)) hyd.set(k, []); hyd.get(k).push([p.x, p.z]); }
   const isBuilding = (b) => /^(building|civic|warehouse|barn|home|farmhouse|housewall)$/.test(b.type) && b.h > 2;
   const frameOf = (b) => b.ang != null ? { cx: b.cx, cz: b.cz, hw: b.hw, hd: b.hd, ca: b.ca ?? Math.cos(b.ang), sa: b.sa ?? Math.sin(b.ang) }
     : { cx: (b.minX + b.maxX) / 2, cz: (b.minZ + b.maxZ) / 2, hw: (b.maxX - b.minX) / 2, hd: (b.maxZ - b.minZ) / 2, ca: 1, sa: 0 };
@@ -246,7 +249,7 @@ export function createTownDressing(scene, map, rows, ground, onPaved = null) {
         const s = k % 2 ? 1 : -1, px = r.x1 + ux * t + nx * s * (half + 1.3), pz = r.z1 + uz * t + nz * s * (half + 1.3);
         if (!solidAt(px, pz) && map.terrain.height(px, pz) > 0.3) lights.push([px, pz, Math.atan2(-nx * s, -nz * s)]);
       }
-      for (let t = 20 + (seed % 40); t < len - 3; t += 85) {
+      if (hydFar(mx, mz)) for (let t = 20 + (seed % 40); t < len - 3; t += 85) {
         const px = r.x1 + ux * t + nx * (half + 2.2), pz = r.z1 + uz * t + nz * (half + 2.2);
         if (!solidAt(px, pz)) hydrants.push([px, pz]);
       }
@@ -264,6 +267,7 @@ export function createTownDressing(scene, map, rows, ground, onPaved = null) {
         im.castShadow = geo === GEO.pole; add(im);
       }
     }
+    for (const h of hyd.get(`${cx},${cz}`) || []) hydrants.push(h);
     if (hydrants.length) {
       const im = new THREE.InstancedMesh(GEO.hydrant, MAT.hydrant, hydrants.length), m4 = new THREE.Matrix4();
       hydrants.forEach(([x, z], i) => im.setMatrixAt(i, m4.makeTranslation(x, ground(x, z), z))); add(im);
