@@ -50,7 +50,7 @@ test('sites: taking from a sheriff\'s office sets off the alarm, and the loot is
   t.after(() => clearInterval(hold));
   const guards = await until(() => (snap?.bots || []).filter((b) => b.kind === 'guard' && Math.hypot(b.x - s.x, b.z - s.z) < 80).length >= 3);
   assert.ok(guards, 'guards turned up');
-  const box = await until(() => (snap?.loot || []).find((l) => l.hot && Math.hypot(l.x - s.x, l.z - s.z) < 90));
+  const box = await until(() => (snap?.loot || []).find((l) => l.kind === 'lockbox' && l.hot && Math.hypot(l.x - s.x, l.z - s.z) < 90));
   at = { x: box.x, z: box.z };
   send({ t: 'dev', ...at });
   await sleep(600);
@@ -58,4 +58,15 @@ test('sites: taking from a sheriff\'s office sets off the alarm, and the loot is
   await until(() => toasts.some((x) => /alarm at/.test(x)));
   await until(() => sites.find((q) => q.id === s.id).state === 'alarm');
   assert.equal(sites.find((q) => q.id === s.id).left, s.left - 1);
+  // Pry the locker open well away from the guards: what's inside goes into your supplies, still hot.
+  const locker = await until(() => you.inv.pack.find((i) => i.kind === 'lockbox'));
+  const before = { cash: you.cash || 0, intel: you.intel || 0, ammo: you.ammo || 0, parts: you.parts || 0 };
+  at = { x: s.x + 600, z: s.z + 600 };
+  send({ t: 'dev', ...at });
+  await sleep(1500);
+  send({ t: 'inv', action: 'breakbox', itemId: locker.id });
+  await until(() => toasts.some((x) => /Pried open/.test(x)) || !you.inv.pack.some((i) => i.id === locker.id), 20000);
+  await until(() => you.hotLoose && !you.inv.pack.some((i) => i.id === locker.id));
+  const gained = Object.keys(before).reduce((n, k) => n + ((you[k] || 0) - before[k]), 0);
+  assert.ok(gained > 0, 'the contents are in my supplies');
 });

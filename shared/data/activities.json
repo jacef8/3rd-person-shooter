@@ -509,6 +509,11 @@
     "caches": 14,
     "cachePingMs": 60000,
     "guardLeash": 60,
+    "lockboxBreak": {
+      "_about": "Prying a locker open in the field: how long you hold still, and how far away people (and rogues) hear it.",
+      "ms": 10000,
+      "heardM": 120
+    },
     "cache": {
       "_about": "What a scattered cache can be: weight, name, and contents (a hot lockbox) or a hot rare gun.",
       "kinds": [

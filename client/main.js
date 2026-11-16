@@ -437,7 +437,7 @@ function hotZoneLine() {
   const now = Date.now(), d = distText(Math.hypot(z.x - state.x, z.z - state.z)), left = z.crates.filter((c) => !c.opened).length;
   return z.open ? `🔥 Hot zone: ${z.name} · ${d} · closes in ${mmss(z.closesAt - now)} · ${left} crate${left === 1 ? '' : 's'} left` : `🔥 Hot zone: ${z.name} · ${d} · opens in ${mmss(z.opensAt - now)}`;
 }
-const carryingHot = () => { const me = state.me; return !!me && (['primary', 'primary2', 'secondary', 'armor'].some((s) => me.inv[s]?.hot) || me.inv.pack.some((i) => i.hot)); };
+const carryingHot = () => { const me = state.me; return !!me && (!!me.hotLoose || ['primary', 'primary2', 'secondary', 'armor'].some((s) => me.inv[s]?.hot) || me.inv.pack.some((i) => i.hot)); };
 
 // ---- helicopter extraction: red flare smoke at the pickup, then a helicopter that comes down to it
 const extractVis = new Map();   // id -> group
@@ -2066,7 +2066,7 @@ function statLine(item) {
   }
   if (item.kind === 'armor') { const a = armorStats(item); return `Armor ${a.armor}${a.mobility ? ` · ${Math.round(a.mobility * 100)}% speed` : ''}`; }
   if (item.kind === 'medkit') return 'Restores 60 health and 40 armor';
-  if (item.kind === 'lockbox') return `Opens at your stash: ${Object.entries(item.contents || {}).map(([k, v]) => (k === 'cash' ? `$${v}` : `${v} ${k}`)).join(', ')}`;
+  if (item.kind === 'lockbox') return `Break it open here (10 s, noisy) or it opens at your stash: ${Object.entries(item.contents || {}).map(([k, v]) => (k === 'cash' ? `$${v}` : `${v} ${k}`)).join(', ')}`;
   if (item.kind === 'hotflare') return 'Parachutes you (and crew beside you) in at the edge of an open hot zone. Fire it outdoors. One use.';
   if (item.kind === 'flare') return `Calls the helicopter home from anywhere outdoors. Hold ${HELI.rescueFlare.holdMs / 60000} min; seen ${distText(HELI.rescueFlare.alertRange)} away. One use.`;
   return '';
@@ -2245,6 +2245,7 @@ function buildInvColumns() {
       for (const slot of ['primary', 'primary2']) actions.push([inv[slot] ? `${SLOT_LABEL[slot]}: swap for ${inv[slot].name}` : `Carry as ${SLOT_LABEL[slot].toLowerCase()}`, () => send({ t: 'inv', action: 'equip', itemId: it.id, slot })]);
     } else if (it.kind === 'weapon' || it.kind === 'armor') actions.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })]);
     if (it.kind === 'medkit') actions.push(['Use', () => send({ t: 'inv', action: 'use' })]);
+    if (it.kind === 'lockbox') actions.push(['Break it open', () => { send({ t: 'inv', action: 'breakbox', itemId: it.id }); closeInventory(); }]);
     if (it.kind === 'flare') actions.push(['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }]);
     if (it.kind === 'hotflare') actions.push(['Fire it: hot drop', () => { send({ t: 'inv', action: 'hotdrop', itemId: it.id }); closeInventory(); }]);
     if (put) actions.push(['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })]);
@@ -3829,7 +3830,7 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING', rebuild: 'REBUILDING', selfrevive: 'PATCHING YOURSELF UP' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING', breakbox: 'PRYING OPEN THE LOCKER', rebuild: 'REBUILDING', selfrevive: 'PATCHING YOURSELF UP' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
   } else hb.hidden = true;
   // Stun flash fades out over the stun.
   const sf = $('stunfx'), sLeft = (state.stunnedUntil || 0) - performance.now();

@@ -455,7 +455,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', ...RESOURCES];
+const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -475,7 +475,7 @@ function privateState(p) {
     hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })), hideoutsAllowed: hideoutAllowance(p).allowed, hideoutNext: hideoutAllowance(p).next,
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
-    buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying,
+    buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying, hotLoose: !!p.hotLoose,
     food: Math.round(p.food ?? 0), foodMax: HOMESTEAD.hunger.max,
     boat: p.boat ? { id: p.boat, seat: p.seat } : null,
     shield: shielded(p), shieldLevel: SHIELD_LEVEL, selfRevive: !!p.downed && soloRevive(p),
@@ -833,7 +833,7 @@ function hotSpots() {
 const inHotZone = (c) => !!(hotZone?.open && c && Math.hypot(c.x - hotZone.x, c.z - hotZone.z) <= hotZone.radius);
 /** Within a mile of a hot zone that's announced or open: no taxi drops, fast travel or respawns there. */
 const nearHotZone = (x, z) => !!(hotZone && Math.hypot(x - hotZone.x, z - hotZone.z) < HZ.keepOutM);
-const hasHot = (p) => [...GUN_SLOTS, 'armor'].some((s) => p.inv[s]?.hot) || p.inv.pack.some((i) => i.hot);
+const hasHot = (p) => !!p.hotLoose || [...GUN_SLOTS, 'armor'].some((s) => p.inv[s]?.hot) || p.inv.pack.some((i) => i.hot);
 function hotZoneView() {
   if (!hotZone) return null;
   const z = hotZone;
@@ -985,6 +985,7 @@ function pingHot(p, first = false) {
 /** Hot loot made safe: home, a hideout, or flown out. Lockboxes open into your supplies. */
 function coolHot(p, how) {
   const got = {}, names = [];
+  if (p.hotLoose) { for (const [k, v] of Object.entries(p.hotLoose.got || {})) got[k] = (got[k] || 0) + v; p.hotLoose = null; }   // already in your supplies
   for (const s of [...GUN_SLOTS, 'armor']) if (p.inv[s]?.hot) { delete p.inv[s].hot; delete p.inv[s].hotTier; names.push(p.inv[s].name); }
   for (const it of [...p.inv.pack]) {
     if (!it.hot) continue;
@@ -997,6 +998,23 @@ function coolHot(p, how) {
   toast(p, `✅ Hot loot secured ${how}: ${[...names, ...res].join(', ')}. It's yours for good.`);
   award(p, 80, 'Hot loot extracted');
   feed(`✅ ${p.name} got hot-zone loot out`);
+  dirty(p);
+}
+/** A locker pried open in the field: what was inside goes into your supplies. Still hot until you get it home. */
+const LOCKBOX_BREAK = HZ.lockboxBreak;
+function finishBreakBox(p, id) {
+  const i = p.inv.pack.findIndex((q) => q.id === id && q.kind === 'lockbox');
+  if (i < 0) return send(p.ws, { t: 'hack', done: true, text: 'The locker is gone' });
+  const box = p.inv.pack.splice(i, 1)[0], got = {};
+  for (const [k, v] of Object.entries(box.contents || {})) { p[k] = (p[k] || 0) + v; got[k] = v; }
+  const what = Object.entries(got).map(([k, v]) => (k === 'cash' ? `$${v}` : `${v} ${k}`)).join(', ');
+  if (box.hot) {
+    const loose = p.hotLoose || { tier: 'cache', got: {} };
+    if (box.hotTier !== 'cache') loose.tier = box.hotTier;
+    for (const [k, v] of Object.entries(got)) loose.got[k] = (loose.got[k] || 0) + v;
+    p.hotLoose = loose;
+  }
+  send(p.ws, { t: 'hack', done: true, text: `Pried open: ${what || 'empty'}.${box.hot ? ' Still hot: you show on the map until you get it home. Die first and it all drops.' : ''}` });
   dirty(p);
 }
 function tickHotZone(now) {
@@ -1015,7 +1033,7 @@ function tickHotZone(now) {
     if (p.dead || p.deploying || !hasHot(p)) continue;
     // Home free: inside your stash house or at one of your hideouts.
     if (atOwnStash(p) || hideoutsOf(p).some((st) => Math.hypot(st.x - p.x, st.z - p.z) < 6)) { coolHot(p, 'at your stash'); continue; }
-    const loud = [...GUN_SLOTS, 'armor'].some((s) => p.inv[s]?.hot && p.inv[s].hotTier !== 'cache') || p.inv.pack.some((i) => i.hot && i.hotTier !== 'cache');
+    const loud = (p.hotLoose && p.hotLoose.tier !== 'cache') || [...GUN_SLOTS, 'armor'].some((s) => p.inv[s]?.hot && p.inv[s].hotTier !== 'cache') || p.inv.pack.some((i) => i.hot && i.hotTier !== 'cache');
     if (now - (p.hotPingAt || 0) >= (loud ? HZ_PING_MS : HZ_CACHE_PING_MS)) pingHot(p);
   }
   for (const [tok, h] of [...hotDrops]) if (now >= h.arrivesAt) { hotDrops.delete(tok); landHotDrop(tok, h, now); }
@@ -2923,7 +2941,7 @@ function startHack(p, kind, id, extra = {}) {
     if (!st || raidMul(baseOf(st), p) <= 0) return;
     if (kind === 'gatehack') { const bp = bypassOf('gate', id); extra = { ...extra, ms: bp.ms, tech: bp.tech }; }
   }
-  if (kind === 'rebuild' || kind === 'selfrevive' || kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire' || kind === 'hotcrate' || kind === 'disarm') {
+  if (kind === 'rebuild' || kind === 'selfrevive' || kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire' || kind === 'hotcrate' || kind === 'breakbox' || kind === 'disarm') {
     const ms = extra.ms ? extra.ms : kind === 'rebuild' ? RAIDS.ruin.rebuildMs : kind === 'selfrevive' ? DOWNED.selfReviveMs : kind === 'hotwire' ? RV.rules.hotwireMs : kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
@@ -3016,6 +3034,7 @@ function tickHacks(now) {
     if (h.kind === 'fish') { finishFishing(p); continue; }
     if (h.kind === 'hotwire') { finishHotwire(p, h.id); continue; }
     if (h.kind === 'hotcrate') { finishHotCrate(p, h.id); continue; }
+    if (h.kind === 'breakbox') { finishBreakBox(p, h.id); continue; }
     if (h.kind === 'disarm') {
       const st = structs.get(h.id);
       if (!st) { send(p.ws, { t: 'hack', done: true, text: 'Gone already' }); continue; }
@@ -3254,6 +3273,7 @@ function killPlayer(p, attacker, headshotKill) {
   p.mags = {}; p.armor = 0; p.camoOn = false;
   for (const r of RESOURCES) p[r] = 0;
   p.intel = keepIntel;
+  p.hotLoose = null;   // the loose cash and intel went into the bag with everything else
   cancelHack(p, 'You went down');
   markAssist(p, attacker);
   const by = attacker ? attacker.name : 'the city';
@@ -4444,6 +4464,15 @@ function invAction(p, msg) {
     const it = inv.pack.find((i) => i.id === msg.itemId && i.kind === 'flare');
     if (it) return callExtraction(p, it);
     return;
+  } else if (msg.action === 'breakbox') {
+    const it = inv.pack.find((i) => i.id === msg.itemId && i.kind === 'lockbox');
+    if (!it) return;
+    if (p.boat) return toast(p, 'Not while you\'re riding');
+    if (p.hack) return toast(p, 'Finish what you\'re doing first');
+    startHack(p, 'breakbox', it.id, { ms: LOCKBOX_BREAK.ms });
+    botsHear(p, LOCKBOX_BREAK.heardM);
+    for (const o of players.values()) if (o !== p && !o.dead && !sameSquad(o, p) && Math.hypot(o.x - p.x, o.z - p.z) < LOCKBOX_BREAK.heardM) send(o.ws, { t: 'alert', x: Math.round(p.x), z: Math.round(p.z), text: 'Someone is prying open a locker' });
+    return toast(p, `Prying open the ${it.name.toLowerCase()}: hold still for ${Math.round(LOCKBOX_BREAK.ms / 1000)}s. Anyone close by can hear it.`);
   } else if (msg.action === 'hotdrop') {
     const it = inv.pack.find((i) => i.id === msg.itemId && i.kind === 'hotflare');
     if (it) return callHotDrop(p, it);
