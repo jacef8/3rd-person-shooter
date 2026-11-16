@@ -76,7 +76,7 @@ function setupRig(holder, model) {
   const rest = [];
   const FINGERS = ['Index', 'Middle', 'Ring', 'Pinky'];
   const fingers = ['R', 'L'].map((s) => FINGERS.map((f) => [1, 2, 3].map((k) => B[`${f}${k}${s}`]).filter(Boolean)));
-  for (const n of ['Body', 'FootL', 'FootR', 'PTL', 'PTR', 'Abdomen', 'Chest', 'Neck', 'UpperLegL', 'UpperLegR', 'LowerLegL', 'LowerLegR', 'UpperArmL', 'UpperArmR', 'LowerArmL', 'LowerArmR', 'WristL', 'WristR'])
+  for (const n of ['Root', 'Body', 'FootL', 'FootR', 'PTL', 'PTR', 'Abdomen', 'Chest', 'Neck', 'UpperLegL', 'UpperLegR', 'LowerLegL', 'LowerLegR', 'UpperArmL', 'UpperArmR', 'LowerArmL', 'LowerArmR', 'WristL', 'WristR'])
     if (B[n]) rest.push([B[n], B[n].position.clone(), B[n].quaternion.clone()]);
   for (const hand of fingers) for (const chain of hand) for (const b of chain) rest.push([b, b.position.clone(), b.quaternion.clone()]);
   const mixer = new THREE.AnimationMixer(model);
@@ -160,7 +160,7 @@ export function animatePerson(holder, rig, st, dt) {
   const { lo, up, B } = rig;
   // Far away: animate less often.
   rig.skip += dt;
-  if (st.detail < 0.35 && rig.skip < 0.1) return st.detail >= 0.2;
+  if (st.detail < 0.35 && rig.skip < 0.05) return st.detail >= 0.2;
   dt = rig.skip; rig.skip = 0;
   rig.t += dt;
   const ease = Math.min(1, dt * 10);
@@ -169,15 +169,32 @@ export function animatePerson(holder, rig, st, dt) {
   rig.ak += ((st.armed ? 1 : 0) - rig.ak) * ease;
   // Legs: which way and how fast. Everything moving shares one stride phase so feet stay in step.
   const s = st.seated ? 0 : st.speed;
-  const moveK = smooth(0.25, 1.1, s), runK = smooth(1.6, 3.0, s);
-  const ang = Math.atan2(st.side, st.fwd);
-  let f = Math.max(0, Math.cos(ang)), bk = Math.max(0, -Math.cos(ang)), l = Math.max(0, Math.sin(ang)), r = Math.max(0, -Math.sin(ang));
-  const sum = f + bk + l + r || 1; f /= sum; bk /= sum; l /= sum; r /= sum;
-  const want = { Walk: moveK * f * (1 - runK), Run: moveK * f * runK, Run_Back: moveK * bk, Run_Left: moveK * l, Run_Right: moveK * r };
+  const moveK = smooth(0.25, 1.1, s), runK = smooth(2.0, 2.4, s);   // walk or run, not a mix of the two
+  // One direction clip at a time (forward, back, strafe left or right: mixing two at once tangles the
+  // legs, their steps don't line up); the hips turn toward where you're really going, the chest keeps
+  // facing the aim. A little hysteresis so the clip doesn't flicker on the 60° lines.
+  const ang = Math.atan2(st.side, st.fwd), D = Math.PI / 180;
+  if (moveK > 0.05) {
+    const lim = (sec) => (sec === 'f' ? 60 : sec === 'b' ? 120 : 0) * D;
+    const deg = Math.abs(ang), cur = rig.sector || 'f', h = 8 * D;
+    let sec = deg < 60 * D ? 'f' : deg > 120 * D ? 'b' : ang > 0 ? 'l' : 'r';
+    if (cur === 'f' && deg < lim('f') + h) sec = 'f';
+    else if (cur === 'b' && deg > lim('b') - h) sec = 'b';
+    else if ((cur === 'l' || cur === 'r') && deg > 60 * D - h && deg < 120 * D + h && Math.sign(ang) === (cur === 'l' ? 1 : -1)) sec = cur;
+    rig.sector = sec;
+  }
+  const sec = rig.sector || 'f';
+  const aim = { f: 0, l: Math.PI / 2, r: -Math.PI / 2, b: Math.PI }[sec];
+  let hipT = Math.atan2(Math.sin(ang - aim), Math.cos(ang - aim)) * moveK;
+  hipT = Math.max(-1.0, Math.min(1.0, hipT));
+  rig.hy = (rig.hy || 0) + (hipT - (rig.hy || 0)) * Math.min(1, dt * 8);
+  const want = { Walk: 0, Run: 0, Run_Back: 0, Run_Left: 0, Run_Right: 0 };
+  if (sec === 'f') { want.Walk = moveK * (1 - runK); want.Run = moveK * runK; }
+  else want[{ b: 'Run_Back', l: 'Run_Left', r: 'Run_Right' }[sec]] = moveK;
   rig.phase = (rig.phase + dt * (s < 1.6 ? s / 1.5 : s / (2.4 + 0.25 * s))) % 1;
   const idleW = 1 - moveK;
   const w = rig.w;
-  for (const n of LOCO) { w[n] = (w[n] ?? 0) + (want[n] - (w[n] ?? 0)) * ease; lo[n].setEffectiveWeight(w[n]); lo[n].time = rig.phase * lo[n].getClip().duration; }
+  for (const n of LOCO) { w[n] = (w[n] ?? 0) + (want[n] - (w[n] ?? 0)) * Math.min(1, dt * 14); lo[n].setEffectiveWeight(w[n]); lo[n].time = rig.phase * lo[n].getClip().duration; }
   lo.Idle_Gun.setEffectiveWeight(idleW * rig.ak); lo.Idle_Neutral.setEffectiveWeight(idleW * (1 - rig.ak));
   for (const n of IDLES) lo[n].time = rig.t % lo[n].getClip().duration;
   // Upper body: holding a gun, or arms swinging with the legs.
@@ -189,6 +206,12 @@ export function animatePerson(holder, rig, st, dt) {
   holder.updateMatrixWorld(true);
   if (st.detail < 0.2) return false;   // a long way off: the clips are enough
 
+  // Hips toward the way you're going: the whole lower body (feet included) turns, the chest turns back.
+  if (Math.abs(rig.hy) > 0.003 && !st.seated) {
+    const up = V().set(0, 1, 0);
+    _q.setFromAxisAngle(up, rig.hy); turnWorld(B.Root, _q);
+    _q.setFromAxisAngle(up, -rig.hy * 0.85); turnWorld(B.Abdomen, _q);
+  }
   // In code: the hips drop to crouch or sit, the feet stay put (or go forward to sit), the legs bend to suit.
   const right = _x.set(-1, 0, 0).transformDirection(holder.matrixWorld).clone();
   const fwd = V().set(0, 0, 1).transformDirection(holder.matrixWorld);
@@ -204,11 +227,15 @@ export function animatePerson(holder, rig, st, dt) {
       lg.foot.getWorldPosition(_a); _b.copy(_a).addScaledVector(fwd, 0.42 * rig.sk); _b.y += 0.05 * rig.sk;
       lg.foot.parent.worldToLocal(_b); lg.foot.parent.worldToLocal(_a); lg.foot.position.add(_b.sub(_a)); lg.foot.updateMatrixWorld(true);
     }
-    for (const lg of rig.legs) {
-      lg.foot.getWorldPosition(_c);
-      const tgt = _c.clone(), pole = _c.clone().addScaledVector(fwd, 2).setY(_c.y + 1.2);
-      ik2(lg.up, lg.lo, lg.tip, tgt, pole);
-    }
+  }
+  // Every frame the shins are brought to the feet. The pack's feet are their own bones; blending the
+  // run, strafe and walk clips (or just playing them) lets a foot drift off the end of its shin, which
+  // looks like a broken ankle. The knee keeps the bend the clip gave it (further forward when crouched).
+  const bendFwd = 0.4 + 1.6 * Math.max(rig.ck, rig.sk);
+  for (const lg of rig.legs) {
+    const knee = lg.lo.getWorldPosition(V()).addScaledVector(fwd, bendFwd);
+    if (rig.ck > 0.01 || rig.sk > 0.01) knee.y += 0.6 * Math.max(rig.ck, rig.sk);
+    ik2(lg.up, lg.lo, lg.tip, lg.foot.getWorldPosition(V()), knee);
   }
   // The spine follows the aim (and leans in a little when crouched).
   const pitch = Math.max(-1.1, Math.min(1.1, st.pitch || 0)) * rig.ak;

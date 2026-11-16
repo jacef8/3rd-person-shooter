@@ -1120,7 +1120,7 @@ function updateCharacterMesh(g, c, dt) {
     const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming);
     const armed = !!gunObj && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
     u.gun.visible = armed;
-    const cd = camera.position.distanceTo(g.position), detail = cd < 40 ? 1 : cd < 110 ? 0.3 : 0.1;
+    const cd = camera.position.distanceTo(g.position), detail = cd < 60 ? 1 : cd < 130 ? 0.3 : 0.1;
     const pitch = c.pitch || 0;
     const fine = animatePerson(g, u.rig, { speed: still ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched, seated, armed, pitch, detail }, adt);
     // The gun rides on the chest, turned with the aim; up to the eye when aiming down the sights.
