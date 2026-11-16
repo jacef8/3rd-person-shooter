@@ -168,6 +168,34 @@ export const VEHICLE_TYPES = {
  * The countryside's trees, rocks and scrub (hundreds of thousands at real scale) aren't stored:
  * they're generated per 128 m tile, deterministically, the first time anything looks at that tile.
  */
+/**
+ * Round the corners of a road line ([[x, z], ...]): each bend becomes a curve of up to `radius` metres
+ * (smaller where the straights either side are short), drawn as short pieces every ~6° of turn.
+ */
+export function roundCorners(pts, radius = 60) {
+  if (pts.length < 3) return pts.map((p) => [p[0], p[1]]);
+  const out = [[pts[0][0], pts[0][1]]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [ax, az] = pts[i - 1], [bx, bz] = pts[i], [cx, cz] = pts[i + 1];
+    const l1 = Math.hypot(bx - ax, bz - az), l2 = Math.hypot(cx - bx, cz - bz);
+    if (l1 < 0.5 || l2 < 0.5) continue;
+    const ux = (bx - ax) / l1, uz = (bz - az) / l1, vx = (cx - bx) / l2, vz = (cz - bz) / l2;
+    const turn = Math.acos(Math.max(-1, Math.min(1, ux * vx + uz * vz)));
+    if (turn < 0.05 || turn > 2.9) { out.push([bx, bz]); continue; }   // straight on, or doubling back: leave it
+    const d = Math.min(l1 * 0.48, l2 * 0.48, radius * Math.tan(turn / 2));
+    if (d < 0.8) { out.push([bx, bz]); continue; }
+    // A quadratic curve from d before the corner to d after it, the corner as its control point.
+    const sx = bx - ux * d, sz = bz - uz * d, ex = bx + vx * d, ez = bz + vz * d, n = Math.max(2, Math.ceil(turn / 0.1));
+    for (let k = 0; k <= n; k++) {
+      const t = k / n, a = (1 - t) * (1 - t), b = 2 * (1 - t) * t, c = t * t;
+      out.push([a * sx + b * bx + c * ex, a * sz + b * bz + c * ez]);
+    }
+  }
+  const last = pts[pts.length - 1];
+  out.push([last[0], last[1]]);
+  return out;
+}
+
 export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const rand = mulberry32(seed);
   const half = size / 2;
@@ -651,18 +679,20 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     }
   }
 
-  // ---- roads: the traced highways, plus every imported OpenStreetMap road
+  // ---- roads: the traced highways, plus every imported OpenStreetMap road. The data is straight runs
+  // between points; every bend is rounded into a curve (straights stay straight).
   const highways = geo.roads;
-  for (const hw of highways) for (let i = 0; i < hw.pts.length - 1; i++) addRoadSeg(hw.pts[i][0], hw.pts[i][1], hw.pts[i + 1][0], hw.pts[i + 1][1], hw.name, 12, { hw: 1 });
+  for (const hw of highways) { const q = roundCorners(hw.pts, 220); for (let i = 0; i < q.length - 1; i++) addRoadSeg(q[i][0], q[i][1], q[i + 1][0], q[i + 1][1], hw.name, 12, { hw: 1 }); }
   const ROAD_W = { motorway: 14, trunk: 12, primary: 11, secondary: 9, tertiary: 8, unclassified: 6, residential: 6, service: 4, track: 4 };
   const realHighways = [];
   for (const [name, cls, pts] of real.roads || []) {
     const w = ROAD_W[cls] || 5;
     const p = pts.map(([lat, lon]) => project(lat, lon, size));
     if ((cls === 'primary' || cls === 'trunk') && p.length > 3) realHighways.push({ name: name || '', pts: p.map((q) => [q.x, q.z]) });
-    for (let i = 0; i < p.length - 1; i++) {
-      if (Math.max(Math.abs(p[i].x), Math.abs(p[i].z), Math.abs(p[i + 1].x), Math.abs(p[i + 1].z)) > half + 200) continue;
-      addRoadSeg(p[i].x, p[i].z, p[i + 1].x, p[i + 1].z, name || '', w, cls === 'track' ? { cls, dirt: 1 } : { cls });
+    const q = roundCorners(p.map((v) => [v.x, v.z]), cls === 'primary' || cls === 'trunk' || cls === 'motorway' ? 180 : cls === 'secondary' || cls === 'tertiary' ? 90 : 45);
+    for (let i = 0; i < q.length - 1; i++) {
+      if (Math.max(Math.abs(q[i][0]), Math.abs(q[i][1]), Math.abs(q[i + 1][0]), Math.abs(q[i + 1][1])) > half + 200) continue;
+      addRoadSeg(q[i][0], q[i][1], q[i + 1][0], q[i + 1][1], name || '', w, cls === 'track' ? { cls, dirt: 1 } : { cls });
     }
   }
 

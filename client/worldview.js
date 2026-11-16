@@ -391,13 +391,26 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
         const [ax, az] = pts[k], [bx, bz] = pts[k + 1];
         const dx = bx - ax, dz = bz - az, l = Math.hypot(dx, dz) || 1, nx = -dz / l * half, nz = dx / l * half;
         const base = pos.length / 3;
-        for (const [x, z] of [[ax + nx, az + nz], [ax - nx, az - nz], [bx + nx, bz + nz], [bx - nx, bz - nz]]) {
-          const hg = meshHeight(x, z);
-          pos.push(x, Math.max(hg, terrain.drawn(x, z)) + lift, z);
+        // Edge, middle, edge at each end: the middle follows the ground too, so a crowned or tilted
+        // stretch doesn't let the grass show through the centre of a wide road.
+        const row = half > 1.5 ? [[ax + nx, az + nz], [ax, az], [ax - nx, az - nz], [bx + nx, bz + nz], [bx, bz], [bx - nx, bz - nz]] : [[ax + nx, az + nz], [ax - nx, az - nz], [bx + nx, bz + nz], [bx - nx, bz - nz]];
+        for (const [x, z] of row) {
+          const hg = Math.max(meshHeight(x, z), terrain.drawn(x, z), meshHeight(x + 0.8, z), meshHeight(x - 0.8, z), meshHeight(x, z + 0.8), meshHeight(x, z - 0.8));
+          pos.push(x, hg + lift, z);
           col.push(c[0], c[1], c[2]);
         }
-        idx.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+        if (row.length === 6) idx.push(base, base + 3, base + 1, base + 1, base + 3, base + 4, base + 1, base + 4, base + 2, base + 2, base + 4, base + 5);
+        else idx.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
       }
+    };
+    const disc = (cx, cz, rad, c, lift) => {
+      const base = pos.length / 3, N = 10;
+      pos.push(cx, Math.max(meshHeight(cx, cz), terrain.drawn(cx, cz)) + lift, cz); col.push(c[0], c[1], c[2]);
+      for (let k = 0; k < N; k++) {
+        const a = (k / N) * Math.PI * 2, x = cx + Math.cos(a) * rad, z = cz + Math.sin(a) * rad;
+        pos.push(x, Math.max(meshHeight(x, z), terrain.drawn(x, z)) + lift, z); col.push(c[0], c[1], c[2]);
+      }
+      for (let k = 0; k < N; k++) idx.push(base, base + 1 + ((k + 1) % N), base + 1 + k);
     };
     for (const r of map.roadGrid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK, [], true)) {
       const len = Math.hypot(r.x2 - r.x1, r.z2 - r.z1);
@@ -419,6 +432,11 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
       }
       flush();
       const surface = r.dirt ? ROAD_COL.dirt : r.hw ? ROAD_COL.route : ROAD_COL.asphalt;
+      // A round patch at each end, so bends and junctions have no wedge-shaped gaps.
+      for (const [ex, ez] of [[r.x1, r.z1], [r.x2, r.z2]]) {
+        if (ex < x0 || ex >= x0 + CHUNK || ez < z0 || ez >= z0 + CHUNK || terrain.drawn(ex, ez) <= 0.15 || terrain.underDeck(ex, ez, 6)) continue;
+        disc(ex, ez, w / 2, surface, 0.055);
+      }
       for (const pts of runs) {
         strip(pts, w / 2, surface, 0.06);
         if (r.dirt || w < 8) continue;
