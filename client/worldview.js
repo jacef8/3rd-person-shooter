@@ -30,6 +30,7 @@ const WAREHOUSE_COLORS = [[0.5, 0.47, 0.42], [0.6, 0.6, 0.58], [0.45, 0.5, 0.54]
 const BRICK_COLORS = [[0.64, 0.31, 0.24], [0.56, 0.27, 0.21], [0.72, 0.43, 0.32], [0.8, 0.68, 0.54], [0.5, 0.33, 0.27], [0.62, 0.38, 0.3]];
 const CIVIC_COLORS = [[0.62, 0.36, 0.28], [0.7, 0.44, 0.33], [0.8, 0.76, 0.68], [0.56, 0.33, 0.27]];
 const ROOF_COLORS = [[0.3, 0.28, 0.27], [0.42, 0.24, 0.18], [0.36, 0.37, 0.39], [0.5, 0.5, 0.48], [0.26, 0.3, 0.34]];
+const METAL_ROOFS = [[0.62, 0.63, 0.64], [0.55, 0.57, 0.58], [0.3, 0.36, 0.44], [0.45, 0.22, 0.18]];   // galvanised, faded blue, barn red
 const FLOOR_COLORS = { home: [0.5, 0.38, 0.26], farmhouse: [0.5, 0.38, 0.26], barn: [0.42, 0.36, 0.28], civic: [0.56, 0.5, 0.42] };
 const FLOOR_DEFAULT = [0.5, 0.5, 0.49];
 const VEHICLE_COLORS = { rv: [0.86, 0.84, 0.78], bus: [0.95, 0.72, 0.12], truck: [0.82, 0.82, 0.84], houseboat: [0.55, 0.65, 0.72] };
@@ -129,15 +130,99 @@ export function pushBox(buf, b, color, tile) {
   }
 }
 /** A pitched roof over a building record: one per piece of a real building, turned to its walls. */
-export function pushRoof(buf, r, color, wall) {
-  if (!r.rects) return roofPiece(buf, r.minX, r.minZ, r.maxX, r.maxZ, r.top, color, wall, 1, 0, 0, 0);
+export function pushRoof(buf, r, color, wall, low = false) {
+  if (!r.rects) return roofPiece(buf, r.minX, r.minZ, r.maxX, r.maxZ, r.top, color, wall, 1, 0, 0, 0, low);
   const ca = Math.cos(r.ang), sa = Math.sin(r.ang);
-  for (const [x0, z0, x1, z1] of r.rects) roofPiece(buf, x0, z0, x1, z1, r.top, color, wall, ca, sa, r.cx, r.cz);
+  for (const [x0, z0, x1, z1] of r.rects) roofPiece(buf, x0, z0, x1, z1, r.top, color, wall, ca, sa, r.cx, r.cz, low);
+}
+/**
+ * The top of a flat-roofed building (shops, offices, halls): a dark roof membrane, a parapet in a trim
+ * colour round the edge (the roof line you see from the street), and, on a big roof, a unit or two of
+ * air conditioning. For drawing only (nothing up there to stand on).
+ */
+export function pushFlatRoof(buf, r, wall) {
+  const turned = !!r.rects;
+  const pieces = turned ? r.rects : [[r.minX, r.minZ, r.maxX, r.maxZ]];
+  const ca = turned ? Math.cos(r.ang) : 1, sa = turned ? Math.sin(r.ang) : 0, ox = turned ? r.cx : 0, oz = turned ? r.cz : 0;
+  const lum = wall[0] * 0.3 + wall[1] * 0.59 + wall[2] * 0.11;
+  const trim = lum > 0.5 ? [0.3, 0.29, 0.28] : [0.84, 0.8, 0.72];   // a cream cornice on dark walls, dark bronze on light ones
+  const tar = [0.27, 0.27, 0.28], unit = [0.66, 0.67, 0.68], top = r.top, seed = hash(r.bldg ?? `${r.minX},${r.minZ}`);
+  const at = (x0, z0, x1, z1, y0, h, c) => {
+    const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
+    pushBox(buf, { ang: r.ang || 0, ca, sa, cx: ox + mx * ca - mz * sa, cz: oz + mx * sa + mz * ca, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, y0, h }, c, 0);
+  };
+  pieces.forEach(([x0, z0, x1, z1], i) => {
+    at(x0 + 0.1, z0 + 0.1, x1 - 0.1, z1 - 0.1, top - 0.08, 0.12, tar);
+    const o = 0.1, t = 0.3, yb = top - 0.5, h = 1.2;   // cap: from just below the top of the wall to 0.7 m above it
+    at(x0 - o, z0 - o, x1 + o, z0 - o + t, yb, h, trim);
+    at(x0 - o, z1 + o - t, x1 + o, z1 + o, yb, h, trim);
+    at(x0 - o, z0 - o + t, x0 - o + t, z1 + o - t, yb, h, trim);
+    at(x1 + o - t, z0 - o + t, x1 + o, z1 + o - t, yb, h, trim);
+    const w = x1 - x0, d = z1 - z0;
+    if (i === 0 && w * d > 140) {
+      for (let k = 0; k < 1 + (seed % 2) + (w * d > 900 ? 1 : 0); k++) {
+        const ux = x0 + w * (0.25 + 0.5 * (((seed >> (k * 3)) % 7) / 7)), uz = z0 + d * (0.25 + 0.5 * (((seed >> (k * 3 + 9)) % 5) / 5));
+        at(ux - 0.9, uz - 0.7, ux + 0.9, uz + 0.7, top, 1.1, unit);
+      }
+    }
+  });
 }
 /** Two slopes along the long side and two gable ends, over one rectangle (in its own frame, turned into place). */
-function roofPiece(buf, minX, minZ, maxX, maxZ, top, color, wall, ca, sa, cx, cz) {
-  const o = 0.4, x0 = minX - o, x1 = maxX + o, z0 = minZ - o, z1 = maxZ + o, y = top;
-  const alongX = x1 - x0 >= z1 - z0, span = alongX ? z1 - z0 : x1 - x0, rh = Math.min(3.2, span * 0.38);
+/**
+ * A shop front on the wall that faces the road (`toward`: a point on it): a glass front in panes with
+ * a door in the middle, a kick plate under it, an awning over it, and a row of windows on each floor
+ * above. For drawing only.
+ */
+const GLASS = [0.16, 0.22, 0.28], FRAME = [0.14, 0.13, 0.12], KICK = [0.55, 0.54, 0.52], AWNINGS = [[0.55, 0.12, 0.1], [0.12, 0.3, 0.2], [0.14, 0.2, 0.4], [0.3, 0.3, 0.32], [0.5, 0.36, 0.16]];
+export function pushStorefront(buf, r, toward) {
+  const turned = !!r.rects;
+  const pieces = turned ? r.rects : [[r.minX, r.minZ, r.maxX, r.maxZ]];
+  const ca = turned ? Math.cos(r.ang) : 1, sa = turned ? Math.sin(r.ang) : 0, ox = turned ? r.cx : 0, oz = turned ? r.cz : 0;
+  // The road point in the building's own frame; the piece and wall that face it.
+  const tx = toward.x - ox, tz = toward.z - oz, lx = tx * ca + tz * sa, lz = -tx * sa + tz * ca;
+  let best = null;
+  for (const [x0, z0, x1, z1] of pieces) {
+    const cxp = (x0 + x1) / 2, czp = (z0 + z1) / 2;
+    for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const wx = nx ? (nx > 0 ? x1 : x0) : cxp, wz = nz ? (nz > 0 ? z1 : z0) : czp;
+      const score = (lx - wx) * nx + (lz - wz) * nz;   // how far out in front of this wall the road is
+      const len = nx ? z1 - z0 : x1 - x0;
+      if (len > 4 && (!best || score > best.score)) best = { score, nx, nz, wx, wz, len, ux: nz, uz: -nx };
+    }
+  }
+  if (!best || best.score < 1) return;
+  const { nx, nz, wx, wz, len, ux, uz } = best, seed = hash(r.bldg ?? 1), floor = r.floor ?? 0, height = r.top - floor;
+  const at = (u, out, y0, h, w, d, c) => {   // a box centred `u` along the wall, `out` from it
+    const px = wx + ux * u + nx * out, pz = wz + uz * u + nz * out;
+    const hw = Math.abs(ux) * w / 2 + Math.abs(nx) * d / 2, hd = Math.abs(uz) * w / 2 + Math.abs(nz) * d / 2;
+    pushBox(buf, { ang: r.ang || 0, ca, sa, cx: ox + px * ca - pz * sa, cz: oz + px * sa + pz * ca, hw, hd, y0, h }, c, 0);
+  };
+  const front = Math.min(len - 1.2, Math.max(4, len * 0.7)), y0 = floor + 0.5, gh = Math.min(2.3, height - 1.2);
+  if (gh < 1.6) return;
+  // Glass in panes about 2 m wide, framed; the door in the middle.
+  const n = Math.max(2, Math.round(front / 2.1)), pw = front / n;
+  at(0, 0.04, y0 - 0.5, 0.5, front + 0.2, 0.06, KICK);
+  at(0, 0.05, y0 + gh, 0.14, front + 0.2, 0.08, FRAME);
+  for (let i = 0; i < n; i++) {
+    const u = -front / 2 + pw * (i + 0.5);
+    const door = i === Math.floor(n / 2);
+    if (door) { at(u, 0.05, floor, gh + 0.5, Math.min(1.9, pw - 0.1), 0.06, FRAME); at(u, 0.08, floor + 0.08, gh + 0.32, Math.min(1.6, pw - 0.35), 0.03, GLASS); }
+    else at(u, 0.05, y0, gh, pw - 0.12, 0.05, GLASS);
+    at(-front / 2 + pw * i, 0.06, y0, gh, 0.1, 0.07, FRAME);
+  }
+  at(front / 2, 0.06, y0, gh, 0.1, 0.07, FRAME);
+  // Awning (most shops have one) over the front.
+  if (seed % 3 !== 0) at(0, 0.6, y0 + gh + 0.2, 0.16, front + 0.6, 1.2, AWNINGS[seed % AWNINGS.length]);
+  // Upper floors: a window every 3 m.
+  for (let fy = floor + 3.6; fy + 1.6 < r.top - 0.4; fy += 3.4) {
+    const m = Math.max(1, Math.floor((len - 2) / 3));
+    for (let i = 0; i < m; i++) at(-((m - 1) * 3) / 2 + i * 3, 0.04, fy + 0.3, 1.4, 1.2, 0.05, GLASS);
+  }
+}
+function roofPiece(buf, minX, minZ, maxX, maxZ, top, color, wall, ca, sa, cx, cz, low = false) {
+  const o = low ? 0.5 : 0.4, x0 = minX - o, x1 = maxX + o, z0 = minZ - o, z1 = maxZ + o, y = top;
+  // (low: the shallow metal roof of a warehouse or big shed)
+  const alongX = x1 - x0 >= z1 - z0, span = alongX ? z1 - z0 : x1 - x0, rh = low ? Math.min(2.2, span * 0.1) : Math.min(3.2, span * 0.38);
   const face = (pts, n, c) => {
     const l = Math.hypot(...n), nn = n.map((v) => v / l), base = buf.pos.length / 3;
     for (const [px, py, pz] of pts) { buf.pos.push(cx + px * ca - pz * sa, py, cz + px * sa + pz * ca); buf.nor.push(nn[0] * ca - nn[2] * sa, nn[1], nn[0] * sa + nn[2] * ca); buf.col.push(...c); if (buf.uv) buf.uv.push(0.02, 0.02); }
@@ -904,6 +989,18 @@ vBlade = position.y;
     }
     for (const r of buildingsIn.get(key(cx, cz)) || []) {
       if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
+      else if (r.type === 'warehouse') pushRoof(roof, r, pick(METAL_ROOFS, r.bldg), wallColor(r), true);
+      else if (r.type === 'building' || r.type === 'civic') pushFlatRoof(plain, r, wallColor(r));
+      if ((r.type === 'building' || r.type === 'civic') && r.top - (r.floor ?? 0) > 2.8) {
+        const cxr = (r.minX + r.maxX) / 2, czr = (r.minZ + r.maxZ) / 2;
+        let near = null, nd = 60;
+        for (const q of map.roadsNear(cxr, czr, 60)) {
+          const dx = q.x2 - q.x1, dz = q.z2 - q.z1, l2 = dx * dx + dz * dz || 1, u = Math.max(0, Math.min(1, ((cxr - q.x1) * dx + (czr - q.z1) * dz) / l2));
+          const px = q.x1 + dx * u, pz = q.z1 + dz * u, d = Math.hypot(px - cxr, pz - czr);
+          if (d < nd) { nd = d; near = { x: px, z: pz }; }
+        }
+        if (near) pushStorefront(plain, r, near);
+      }
       // A floor on the building's level pad (real buildings; the others stand on town paving).
       if (r.pad !== undefined && r.rects) {
         const ca = Math.cos(r.ang), sa = Math.sin(r.ang);
@@ -1001,7 +1098,11 @@ vBlade = position.y;
       if (b.nature || FAR_SKIP.has(b.type) || !ownChunk(b, x0, z0)) continue;
       pushBox(boxes, b, paint(b)[0], 0);
     }
-    for (const r of buildingsIn.get(key(cx, cz)) || []) if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
+    for (const r of buildingsIn.get(key(cx, cz)) || []) {
+      if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
+      else if (r.type === 'warehouse') pushRoof(roof, r, pick(METAL_ROOFS, r.bldg), wallColor(r), true);
+      else if (r.type === 'building' || r.type === 'civic') pushFlatRoof(boxes, r, wallColor(r));
+    }
     const T = map.natureTileSize, trees = [], pines = [];
     for (let tx = Math.floor((x0 + map.half) / T); tx <= Math.floor((x0 + CHUNK + map.half) / T); tx++) {
       for (let tz = Math.floor((z0 + map.half) / T); tz <= Math.floor((z0 + CHUNK + map.half) / T); tz++) {
