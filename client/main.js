@@ -3253,7 +3253,18 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyX' && !e.repeat) doAction('build');
   if (build.on && /^Digit[1-9]$/.test(e.code)) { const k = Object.keys(PIECES).filter((x) => !PIECES[x].auto)[Number(e.code.slice(5)) - 1]; if (k) { build.piece = k; renderBuildBar(); } e.stopImmediatePropagation(); }
 }, true);
-addEventListener('wheel', (e) => { if (build.on && document.pointerLockElement === canvas) build.rot ^= 1; });
+addEventListener('wheel', (e) => {
+  if (document.pointerLockElement !== canvas) return;
+  if (build.on) { build.rot ^= 1; return; }
+  // The mouse wheel steps through the guns you carry (primary, second primary, sidearm), skipping empty slots.
+  const me = state.me, now = performance.now();
+  if (!me || state.nadeAim || now - (state.wheelAt || 0) < 140 || Math.abs(e.deltaY) < 1) return;
+  state.wheelAt = now;
+  const slots = ['primary', 'primary2', 'secondary'].filter((sl) => me.inv?.[sl]);
+  if (slots.length < 2) return;
+  const i = Math.max(0, slots.indexOf(me.active));
+  send({ t: 'weapon', slot: slots[(i + (e.deltaY > 0 ? 1 : slots.length - 1)) % slots.length] });
+});
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
   KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', KeyH: 'heal', ControlLeft: 'crouch', Space: 'jump',
@@ -3388,7 +3399,7 @@ function toggleNadeAim() {
 }
 function putNadeAway() {
   state.nadeAim = null;
-  for (const o of Object.values(nadeFx)) o.visible = false;
+  for (const o of Object.values(nadeFx)) if (o?.isObject3D) o.visible = false;
   $('nadecook').hidden = true;
 }
 /** Where a throw at the current aim goes: the path (points) and where it comes down. */
@@ -3429,6 +3440,7 @@ function updateNadeAim(now) {
   if (!state.mouseDown) state.firedThisPress = false;
   if (held && !a.cookAt) { a.cookAt = now; if (a.kind === 'frag') sfx.empty(); }
   const cookEl = $('nadecook');
+  state.nadeSeen = now;
   if (a.cookAt && a.kind === 'frag') {
     const fuse = COMBAT_RULES.frag.fuseMs, cooked = now - a.cookAt, left = fuse - cooked;
     cookEl.hidden = false; cookEl.textContent = `💣 ${Math.max(0, left / 1000).toFixed(1)}`; cookEl.classList.toggle('hot', left < 1200);
@@ -4505,38 +4517,101 @@ function stunBlastFx(x, y, z) {
 // recompile, a stutter right when it matters).
 const boomLight = new THREE.PointLight(0xffb060, 0, 60, 1.6);
 scene.add(boomLight);
-const BOOM_SPHERE = new THREE.SphereGeometry(1, 16, 12), BOOM_RING = new THREE.RingGeometry(0.8, 1, 48), BOOM_BIT = new THREE.BoxGeometry(0.12, 0.12, 0.12);
-const BIT_MAT = new THREE.MeshStandardMaterial({ color: 0x2a2620, roughness: 1 });
-/** An explosion big enough to read from across a field: a white flash, a rolling fireball, a dust
- *  ring racing out along the ground, debris thrown up, and smoke that climbs and hangs a while.
- *  r is the blast's danger radius (metres): grenades ~7, rockets ~5.5, mines ~4.5. */
+// Explosion sprites: Kenney's Particle Pack (CC0), white with alpha, tinted per use.
+const FX_TEX = Object.fromEntries(['burst', 'fire', 'puff', 'smoke1', 'smoke2', 'smoke3', 'dirt', 'glow'].map((n) => {
+  const t = new THREE.TextureLoader().load(`/textures/fx/${n}.png`); t.colorSpace = THREE.SRGBColorSpace; return [n, t];
+}));
+const SCORCH_GEO = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+/** An explosion that reads from across a field: a white-hot flash and starburst, a rolling fireball
+ *  of flame puffs, dirt and debris thrown up and falling back, a ring of dust racing out along the
+ *  ground, thick smoke that climbs and drifts and thins over several seconds, and a scorch mark left
+ *  on the ground. r is the blast's danger radius (metres): grenades ~7, rockets ~5.5, mines ~4.5. */
 function boomFx(x, y, z, r = 6) {
   const g0 = ground(x, z), t0 = performance.now(), parts = [];
-  const add = (mesh) => { scene.add(mesh); parts.push(mesh); return mesh; };
-  const fade = (color, op) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, depthWrite: false });
-  const flash = add(new THREE.Mesh(BOOM_SPHERE, fade(0xfff6d8, 1)));
-  flash.position.set(x, y, z);
-  const fire = [0, 1, 2, 3, 4].map((i) => { const m = add(new THREE.Mesh(BOOM_SPHERE, fade([0xff6a10, 0xffa020, 0xff3d0a, 0xffc040, 0xff8a1a][i], 0.95))); m.position.set(x + (Math.random() - 0.5) * r * 0.3, y + Math.random() * r * 0.2, z + (Math.random() - 0.5) * r * 0.3); return m; });
-  const ring = add(new THREE.Mesh(BOOM_RING, fade(0xd8c8a8, 0.7)));
-  ring.rotation.x = -Math.PI / 2; ring.position.set(x, g0 + 0.15, z);
-  const smoke = Array.from({ length: 9 }, (_, i) => { const m = add(new THREE.Mesh(BOOM_SPHERE, fade(i % 3 ? 0x5a5650 : 0x3a3834, 0))); m.userData = { dx: (Math.random() - 0.5) * r * 0.5, dz: (Math.random() - 0.5) * r * 0.5, rise: 2 + Math.random() * 3, s: r * (0.35 + Math.random() * 0.3), delay: 0.08 + i * 0.03 }; return m; });
-  const bits = Array.from({ length: 16 }, () => { const m = add(new THREE.Mesh(BOOM_BIT, BIT_MAT)); const a = Math.random() * Math.PI * 2, sp = 5 + Math.random() * 9; m.userData = { vx: Math.cos(a) * sp, vy: 5 + Math.random() * 9, vz: Math.sin(a) * sp }; m.position.set(x, y, z); return m; });
-  boomLight.position.set(x, y + 1.5, z);
+  const sprite = (tex, color, opacity, additive = false) => {
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: FX_TEX[tex], color, transparent: true, opacity, depthWrite: false, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, rotation: Math.random() * Math.PI * 2 }));
+    scene.add(m); parts.push(m); return m;
+  };
+  const R = (a) => (Math.random() - 0.5) * 2 * a;
+  const base = Math.max(y, g0 + 0.3);
+  // Flash and starburst: a blink of white-hot light.
+  const flash = sprite('glow', 0xfff3c8, 1, true), burst = sprite('burst', 0xffd890, 1, true);
+  flash.position.set(x, base + 0.6, z); burst.position.copy(flash.position);
+  // Fireball: flame puffs that swell, roll upward and cool from yellow to deep orange to soot.
+  const fire = Array.from({ length: 10 }, (_, i) => {
+    const m = sprite(i % 3 ? 'puff' : 'fire', 0xffb040, 0, true);
+    m.userData = { dx: R(r * 0.18), dy: Math.random() * r * 0.15, dz: R(r * 0.18), s: r * (0.35 + Math.random() * 0.3), spin: R(1.5), delay: i * 0.012 };
+    return m;
+  });
+  // Dirt clods thrown up (sprites of chunks), falling back under gravity.
+  const dirt = Array.from({ length: 12 }, () => {
+    const m = sprite('dirt', 0x4a3d2c, 1);
+    const a = Math.random() * Math.PI * 2, sp = 4 + Math.random() * 9;
+    m.userData = { vx: Math.cos(a) * sp, vy: 6 + Math.random() * 10, vz: Math.sin(a) * sp, s: 0.5 + Math.random() * 0.8 };
+    m.position.set(x, base, z); m.scale.setScalar(m.userData.s);
+    return m;
+  });
+  // Dust skirt racing out along the ground.
+  const dust = Array.from({ length: 10 }, (_, i) => {
+    const m = sprite(['smoke1', 'smoke2', 'smoke3'][i % 3], 0x9a8a72, 0);
+    const a = (i / 10) * Math.PI * 2 + R(0.3);
+    m.userData = { ax: Math.cos(a), az: Math.sin(a), s: r * (0.3 + Math.random() * 0.2) };
+    return m;
+  });
+  // Smoke column: dark, thick, climbing and spreading, thinning out over ~7 s.
+  const smoke = Array.from({ length: 14 }, (_, i) => {
+    const m = sprite(['smoke1', 'smoke2', 'smoke3', 'puff'][i % 4], i % 2 ? 0x3c3a37 : 0x56524c, 0);
+    m.userData = { dx: R(r * 0.3), dz: R(r * 0.3), rise: 2.5 + Math.random() * 5, s: r * (0.45 + Math.random() * 0.35), delay: 0.15 + i * 0.04, spin: R(0.3), wind: 0.3 + Math.random() * 0.5 };
+    return m;
+  });
+  // Scorch mark left on the ground (fades after a while).
+  const scorch = new THREE.Mesh(SCORCH_GEO, new THREE.MeshBasicMaterial({ map: FX_TEX.smoke2, color: 0x000000, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+  scorch.position.set(x, g0 + 0.04, z); scorch.scale.setScalar(r * 0.9); scorch.rotation.y = Math.random() * 6;
+  scene.add(scorch); parts.push(scorch);
+  boomLight.position.set(x, base + 1.5, z);
+  const hot = new THREE.Color(0xfff0a0), warm = new THREE.Color(0xff7a1a), soot = new THREE.Color(0x3a2a20);
+  let last = t0;
   const step = () => {
-    const t = (performance.now() - t0) / 1000;
-    // flash: a blink
-    flash.scale.setScalar(r * (0.3 + Math.min(1, t / 0.12) * 0.6)); flash.material.opacity = Math.max(0, 1 - t / 0.25);
-    // fireball: swells fast, then cools and fades
-    fire.forEach((m, i) => { const f = Math.min(1, t / (0.35 + i * 0.05)); m.scale.setScalar(r * (0.25 + 0.6 * Math.sqrt(f))); m.position.y += 0.02; m.material.opacity = Math.max(0, 0.95 * (1 - Math.max(0, t - 0.35) / 0.7)); });
-    // dust ring along the ground
-    ring.scale.setScalar(r * (0.3 + 2.2 * Math.min(1, t / 0.5))); ring.material.opacity = Math.max(0, 0.7 * (1 - t / 0.6));
-    // smoke: climbs, spreads, hangs, thins
-    smoke.forEach((m) => { const u = m.userData, f = Math.max(0, t - u.delay); m.position.set(x + u.dx * (1 + f * 0.4), y + 0.5 + u.rise * Math.min(1, f / 2.2) + f * 0.6, z + u.dz * (1 + f * 0.4)); m.scale.setScalar(u.s * (0.6 + Math.min(1.6, f * 0.7))); m.material.opacity = f <= 0 ? 0 : Math.min(0.8, f * 3) * Math.max(0, 1 - f / 6); });
-    // debris thrown up and falling back
-    bits.forEach((m) => { const u = m.userData; u.vy -= 22 * 0.016; m.position.x += u.vx * 0.016; m.position.y = Math.max(g0 + 0.06, m.position.y + u.vy * 0.016); m.position.z += u.vz * 0.016; m.rotation.x += 0.3; m.rotation.z += 0.2; m.visible = t < 1.6; });
-    boomLight.intensity = Math.max(0, 1 - t / 0.5) * 300;
-    if (t < 6.2) requestAnimationFrame(step);
-    else { boomLight.intensity = 0; for (const m of parts) { scene.remove(m); if (m.material !== BIT_MAT) m.material.dispose(); } }
+    const now = performance.now(), t = (now - t0) / 1000, dt = Math.min(0.05, (now - last) / 1000); last = now;
+    flash.scale.setScalar(r * (1.2 + t * 6)); flash.material.opacity = Math.max(0, 1 - t / 0.18);
+    burst.scale.setScalar(r * (0.8 + t * 5)); burst.material.opacity = Math.max(0, 1 - t / 0.22);
+    for (const m of fire) {
+      const u = m.userData, f = Math.max(0, t - u.delay), grow = Math.min(1, f / 0.25);
+      m.position.set(x + u.dx * (1 + f), base + 0.4 + u.dy + f * 2.2, z + u.dz * (1 + f));
+      m.scale.setScalar(u.s * (0.4 + 0.9 * Math.sqrt(grow) + f * 0.4));
+      m.material.rotation += u.spin * dt;
+      // White-hot, then orange, then sooty, fading out by ~0.9 s.
+      const k = Math.min(1, f / 0.5);
+      m.material.color.copy(hot).lerp(warm, Math.min(1, k * 1.6)).lerp(soot, Math.max(0, k * 1.5 - 0.6));
+      m.material.opacity = f <= 0 ? 0 : Math.max(0, 1 - Math.max(0, f - 0.25) / 0.65);
+    }
+    for (const m of dirt) {
+      const u = m.userData;
+      u.vy -= 22 * dt;
+      m.position.x += u.vx * dt; m.position.z += u.vz * dt;
+      m.position.y = Math.max(g0 + 0.15, m.position.y + u.vy * dt);
+      m.material.rotation += dt * 3;
+      m.material.opacity = Math.max(0, 1 - Math.max(0, t - 1.3) / 0.5);
+    }
+    for (const m of dust) {
+      const u = m.userData, f = Math.min(1, t / 0.6), d = r * (0.25 + 0.9 * Math.sqrt(f));
+      m.position.set(x + u.ax * d, g0 + 0.6 + t * 0.3, z + u.az * d);
+      m.scale.setScalar(u.s * (1 + t * 1.2));
+      m.material.opacity = Math.min(0.75, t * 6) * Math.max(0, 1 - t / 2.5);
+    }
+    for (const m of smoke) {
+      const u = m.userData, f = Math.max(0, t - u.delay);
+      m.position.set(x + u.dx * (1 + f * 0.3) + f * u.wind, base + 0.8 + u.rise * Math.min(1, f / 2.5) + f * 0.5, z + u.dz * (1 + f * 0.3));
+      m.scale.setScalar(u.s * (0.6 + Math.min(2.2, f * 0.6)));
+      m.material.rotation += u.spin * dt;
+      m.material.opacity = f <= 0 ? 0 : Math.min(0.85, f * 2.5) * Math.max(0, 1 - f / 7);
+    }
+    scorch.material.opacity = 0.75 * Math.max(0, 1 - Math.max(0, t - 20) / 10);
+    boomLight.intensity = Math.max(0, 1 - t / 0.45) * 320;
+    if (t < 30) requestAnimationFrame(step);
+    else { boomLight.intensity = 0; for (const m of parts) { scene.remove(m); m.material.dispose(); } }
+    // Once the smoke has gone, only the scorch mark is left: drop the sprites early.
+    if (t > 8 && parts.length > 1) { for (const m of parts) if (m !== scorch) { scene.remove(m); m.material.dispose(); } parts.length = 0; parts.push(scorch); }
   };
   step();
   // A jolt you feel up close.
@@ -4812,24 +4887,12 @@ function frame(now) {
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }
   $('crosshair').classList.toggle('aim', aim);
+  // The grenade's arc and cook timer only show while the throw is really being lined up this frame.
+  if (now - (state.nadeSeen || 0) > 150 && (!$('nadecook').hidden || nadeFx.ring.visible)) { $('nadecook').hidden = true; for (const o of Object.values(nadeFx)) if (o?.isObject3D) o.visible = false; }
   // Steady: a single-shot gun, aimed, standing still, a breath since the last shot: the next round goes
   // exactly where the crosshair is, and the crosshair closes up to say so.
   const moved = Math.hypot(state.vel?.[0] || 0, state.vel?.[1] || 0) > 0.5;
   $('crosshair').classList.toggle('steady', !!(aim && ws?.semi && (ws.pellets || 1) === 1 && !moved && now - (state.lastShot || 0) >= Math.max(350, 60000 / ws.rpm * 1.4)));
-  // Obstructed: something close between your gun and what the crosshair is on (a corner, a door frame,
-  // a low wall: the over-the-shoulder camera sees past it, the gun doesn't). Those shots hit it.
-  if (alive && ws && !state.air) {
-    const t = aimPoint(), e = new THREE.Vector3(state.x, eyeHeight(), state.z), dir = t.clone().sub(e), L = dir.length();
-    if (L > 1) {
-      dir.normalize();
-      const blk = Math.min(rayAgainstBoxes(e.x, e.y, e.z, dir.x, dir.y, dir.z, solidsAlongRay(e.x, e.z, dir.x, dir.z, L), L).t, state.map.terrain.ray(e.x, e.y, e.z, dir.x, dir.y, dir.z, L));
-      const raw = blk < L - 2 && blk < L * 0.9;   // something well short of the target, not the ground right at it
-      state.blkFor = raw ? (state.blkFor || 0) + dt : 0;
-      state.clearFor = raw ? 0 : (state.clearFor || 0) + dt;
-      if (state.blkFor > 0.18) $('crosshair').classList.add('blocked');
-      else if (state.clearFor > 0.25) $('crosshair').classList.remove('blocked');
-    } else $('crosshair').classList.remove('blocked');
-  }
   // The crosshair opens up to show how far shots can stray (hip fire, moving, crouched, prone).
   if (ws) {
     const moving = Math.hypot(pad.moveX, pad.moveY) > 0.2 || Math.hypot(touch.moveX, touch.moveY) > 0.2 || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => state.keys.has(k));

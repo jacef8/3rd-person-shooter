@@ -129,7 +129,7 @@ button.ghost { background: transparent; color: var(--ink); border-color: var(--l
 #levelrow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 #level { font-weight: 800; font-size: 12px; color: var(--gold); letter-spacing: 0.1em; white-space: nowrap; }
 #levelrow .bar { flex: 1; margin: 0; height: 8px; }
-#levelrow .bar span { font-size: 12px; line-height: 8px; }
+#xptext { font-size: 12px; font-weight: 700; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .bar .fill.xpfill { background: var(--xp); }
 #xpfeed { position: absolute; bottom: 110px; left: 24px; font-size: 13px; color: var(--gold); }
 #levelup { position: absolute; top: 26%; left: 50%; transform: translateX(-50%); text-align: center; background: var(--surface); border: 1px solid var(--gold); padding: 12px 28px; border-radius: 4px; max-width: 70vw; }
@@ -187,7 +187,7 @@ button.ghost { background: transparent; color: var(--ink); border-color: var(--l
 .gadget.cooldown, .gadget.notech { opacity: 0.55; border-color: var(--line-2); }
 .gadget.on { border-color: var(--tech); color: var(--tech); }
 /* What you carry: each number with its word, on a solid strip. */
-#resources { position: absolute; bottom: 162px; right: 24px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; max-width: 520px; padding: 5px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+#resources { display: none !important; position: absolute; bottom: 162px; right: 24px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; max-width: 520px; padding: 5px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 #resources b { color: var(--ink); font-weight: 700; }
 /* Stance: what you are now and the buttons that change it. */
 #stance { position: absolute; bottom: 86px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: baseline; padding: 4px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; white-space: nowrap; }
@@ -645,9 +645,6 @@ body.touchui .tbtn.use { right: calc(30px + env(safe-area-inset-right)); bottom:
 body.touchui .tbtn.r4 { right: calc(96px + env(safe-area-inset-right)); bottom: 134px; }   /* grenade */
 body.touchui .tbtn.r5 { right: calc(156px + env(safe-area-inset-right)); bottom: 128px; }  /* tag */
 
-/* The gun's line is blocked short of the crosshair: red, with an X. */
-#crosshair.blocked i { background: #ff4d4d; }
-#crosshair.blocked::after { content: '✕'; position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); color: #ff4d4d; font: 700 18px/1 var(--font-text); }
 
 /* Phone buttons, final layout: four short columns right of the weapon strip, nothing higher than the
    bottom of the minimap. (Moved buttons from the layout editor still win.) */
