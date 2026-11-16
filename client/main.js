@@ -2719,7 +2719,7 @@ function mapOptions() {
   }
   if (state.mapMode === 'taxi' && state.taxi) {
     const t = state.taxi, list = [];
-    if (!t.from.startsWith('as')) list.push({ label: '🚁 Extraction home (free · hold the flare 90 s)', x: state.x, z: state.z, msg: { t: 'extract' }, color: '#ff7a1a', close: true });
+    if (!t.from.startsWith('as')) list.push({ label: '🚁 Extraction home (free · hold the flare 60 s)', x: state.x, z: state.z, msg: { t: 'extract' }, color: '#ff7a1a', close: true });
     for (const d of [...t.dests].sort((a, b) => a.fare - b.fare)) {
       list.push({ label: `🚁 ${d.name} · ${d.miles} mi · $${d.fare}${t.cash < d.fare ? ' (not enough cash)' : ''}`, x: d.x, z: d.z, msg: { t: 'taxi', action: 'call', to: d.id }, color: '#e0e0e0', close: true });
     }

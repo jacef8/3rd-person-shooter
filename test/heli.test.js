@@ -91,10 +91,31 @@ test('a rescue flare calls the helicopter home from the open, and is used up', a
   t.after(() => srv.proc.kill('SIGKILL'));
   const a = await join(srv.port, 'Stranded', A);
   a.send({ t: 'inv', action: 'flare', itemId: flare.id });
-  await a.toast(/Flare up at a rescue flare/);
+  await a.toast(/Flare lit/);
   await until(() => !a.you.inv.pack.some((i) => i.id === flare.id));   // burning: one use
   await until(() => a.msgs.some((m) => m.t === 'extracted'));
   assert.ok(Math.hypot(a.at.x - h.x, a.at.z - h.z) < 12, 'flown home to the stash house');
+});
+
+test("a rescue flare has no zone to hold: wander off, but miss the landing and it's gone", async (t) => {
+  const h = map.houses.find((x) => x.kind === 'house' || x.kind === 'cave');
+  const A = 'd5'.repeat(16);
+  let spot = null;
+  for (let r = 300; r < 4000 && !spot; r += 100) for (let k = 0; k < 16 && !spot; k++) {
+    const x = h.x + Math.cos(k) * r, z = h.z + Math.sin(k) * r;
+    if (map.terrain.height(x, z) > 1 && !map.buildings.some((b) => x > b.minX - 5 && x < b.maxX + 5 && z > b.minZ - 5 && z < b.maxZ + 5)) spot = { x, z };
+  }
+  const flare = { id: 'fl-miss', kind: 'flare', name: 'Rescue flare' };
+  const srv = await world({ [A]: person('Wanderer', spot.x, spot.z, { inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [flare] } }) },
+    { houses: { [h.id]: { owner: A, ownerName: 'Wanderer', items: [], doorHp: 100, upg: {} } } }, { EXTRACT_HOLD_MS: '1500', FLARE_WAIT_MS: '600' });
+  t.after(() => srv.proc.kill('SIGKILL'));
+  const a = await join(srv.port, 'Wanderer', A);
+  a.send({ t: 'inv', action: 'flare', itemId: flare.id });
+  await a.toast(/Flare lit/);
+  a.send({ t: 'dev', x: spot.x + 120, z: spot.z });   // off you go: nothing aborts
+  await a.toast(/helicopter is down at your flare/);
+  await a.toast(/You missed the helicopter/);
+  assert.ok(!a.msgs.some((m) => m.t === 'extracted'));
 });
 
 test('jumping from the taxi: freefall, pull the chute, get shot on the way down, land on open ground', async (t) => {

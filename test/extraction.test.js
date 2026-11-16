@@ -36,7 +36,7 @@ fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 12, size: 30000, ho
 
 test('extraction: flare, hold the zone, fly home with your loot; leaving aborts', async (t) => {
   const proc = spawn(process.execPath, ['server/index.js'], {
-    env: { ...process.env, REAL_DATA: '0', PORT, DATA_FILE: FILE, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EXTRACT_HOLD_MS: '1500' },
+    env: { ...process.env, REAL_DATA: '0', PORT, DATA_FILE: FILE, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EXTRACT_HOLD_MS: '1500', EXTRACT_GRACE_MS: '300' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   t.after(() => proc.kill('SIGKILL'));
@@ -84,7 +84,7 @@ test('extraction: a held pickup flies you home with everything you carry', async
   Object.assign(db.characters[TOK], { x: lz.x + 2, z: lz.z + 2 });
   fs.writeFileSync(file2, JSON.stringify(db));
   const proc = spawn(process.execPath, ['server/index.js'], {
-    env: { ...process.env, REAL_DATA: '0', PORT: PORT2, DATA_FILE: file2, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EXTRACT_HOLD_MS: '1500' },
+    env: { ...process.env, REAL_DATA: '0', PORT: PORT2, DATA_FILE: file2, BOTS: '0', ALLOW_DEV: '1', SUPPLY_EVERY_MS: '99999999', EXTRACT_HOLD_MS: '1500', EXTRACT_GRACE_MS: '300' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   t.after(() => proc.kill('SIGKILL'));

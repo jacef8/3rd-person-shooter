@@ -4429,6 +4429,7 @@ function discoverContacts(p) {
 
 // ---------------------------------------------------------------- helicopter extraction
 const EXTRACT_HOLD_MS = Number(process.env.EXTRACT_HOLD_MS || EXTRACT.holdMs);
+const EXTRACT_GRACE_MS = Number(process.env.EXTRACT_GRACE_MS ?? EXTRACT.graceMs ?? 10000);
 const extractions = new Map();   // id -> { id, x, z, site, owner, ownerName, arrivesAt }
 function extractList() { return [...extractions.values()].map((e) => ({ id: e.id, x: e.x, z: e.z, site: e.site, by: e.ownerName, arrivesAt: e.arrivesAt })); }
 function sendEvents(extra = {}) { broadcast({ t: 'events', drops: dropList(), extracts: extractList(), ...extra }); }
@@ -4538,7 +4539,6 @@ function callExtraction(p, flare = null) {
   if (flare) {
     if (buildingAt(p.x, p.z) >= 0) return toast(p, 'Get outside: the helicopter can\'t see a flare indoors');
     if (terrain.height(p.x, p.z) < 0.3 || p.boat) return toast(p, 'Get onto dry land to fire the flare');
-    if (now - (p.lastHit || 0) < 10_000) return toast(p, 'Not while you\'re being shot at: break contact first');
   }
   for (const e of extractions.values()) {
     if (e.owner === p.token || (Math.hypot(e.x - site.x, e.z - site.z) < EXTRACT.radius * 2 && tokenInSquadWith(p, e.owner))) return toast(p, `Extraction already inbound — ${Math.ceil((e.arrivesAt - now) / 1000)}s. Hold the zone.`);
@@ -4546,10 +4546,12 @@ function callExtraction(p, flare = null) {
   }
   if (!flare && (p.extractReadyAt || 0) > now) return toast(p, `Pilot unavailable — try again in ${Math.ceil((p.extractReadyAt - now) / 1000)}s`);
   if (flare) { p.inv.pack.splice(p.inv.pack.indexOf(flare), 1); dirty(p); }   // one use: it's burning now
-  const hold = flare ? Math.min(FLARE.holdMs, EXTRACT_HOLD_MS * 2) : EXTRACT_HOLD_MS, alertRange = flare ? FLARE.alertRange : EXTRACT.alertRange;
+  const hold = flare ? Math.min(FLARE.holdMs, EXTRACT_HOLD_MS) : EXTRACT_HOLD_MS, alertRange = flare ? FLARE.alertRange : EXTRACT.alertRange;
   const id = uid('x');
-  extractions.set(id, { id, x: site.x, z: site.z, site: site.name, owner: p.token, ownerName: p.name, arrivesAt: now + hold });
-  toast(p, `🔴 Flare up at ${site.name}. Helicopter in ${Math.round(hold / 1000)}s — stay within ${feet(EXTRACT.radius)} of the flare. Squadmates in the zone ride along.`);
+  extractions.set(id, { id, x: site.x, z: site.z, site: site.name, owner: p.token, ownerName: p.name, arrivesAt: now + hold, flare: !!flare });
+  toast(p, flare
+    ? `🔴 Flare lit. The helicopter lands here in ${Math.round(hold / 1000)}s and waits ${Math.round(FLARE_WAIT_MS / 1000)}s: be within ${feet(EXTRACT.radius)} of the flare then (go where you like till then). Crew beside you ride along.`
+    : `🔴 Flare up at ${site.name}. Helicopter in ${Math.round(hold / 1000)}s — stay within ${feet(EXTRACT.radius)} of the flare. Squadmates in the zone ride along.`);
   for (const o of players.values()) {
     if (o === p || o.dead) continue;
     const d = Math.hypot(o.x - site.x, o.z - site.z);
@@ -4558,17 +4560,47 @@ function callExtraction(p, flare = null) {
   }
   sendEvents();
 }
+const FLARE_WAIT_MS = Number(process.env.FLARE_WAIT_MS || FLARE.waitMs || 20000);
 function tickExtractions(now) {
   for (const e of [...extractions.values()]) {
     const caller = onlineByToken(e.owner);
     const inZone = (o) => o && !o.dead && Math.hypot(o.x - e.x, o.z - e.z) <= EXTRACT.radius;
-    if (!inZone(caller) || caller.downed) {
+    // A rescue flare: no zone to hold. The helicopter lands at the flare when it said it would and
+    // waits a little; be there (crew too) and you're off, or you miss it.
+    if (e.flare) {
+      if (now < e.arrivesAt) continue;
+      if (!e.landed) {
+        e.landed = true;
+        if (caller && !inZone(caller)) toast(caller, `🚁 The helicopter is down at your flare (${distText(Math.hypot(caller.x - e.x, caller.z - e.z))} away). It leaves in ${Math.round(FLARE_WAIT_MS / 1000)}s.`);
+        sendEvents();
+      }
+      if (caller && inZone(caller)) { flyOut(e, caller, now, inZone); continue; }
+      if (now > e.arrivesAt + FLARE_WAIT_MS) {
+        extractions.delete(e.id);
+        if (caller) toast(caller, '🚁 You missed the helicopter: it waited at the flare, then flew off');
+        sendEvents();
+      }
+      continue;
+    }
+    // Getting shot, even going down, doesn't call it off (the crew chief patches you up on board).
+    // Dying does; so does staying out of the zone for more than a few seconds.
+    if (caller && !caller.dead && !inZone(caller)) {
+      if (!e.outSince) { e.outSince = now; toast(caller, `⚠ Get back to the flare: the helicopter leaves without you in ${Math.round(EXTRACT_GRACE_MS / 1000)}s`); }
+    } else e.outSince = 0;
+    if (!caller || caller.dead || (e.outSince && now - e.outSince > EXTRACT_GRACE_MS)) {
       extractions.delete(e.id);
-      if (caller) { caller.extractReadyAt = now + EXTRACT.cooldownMs; toast(caller, caller.dead || caller.downed ? 'Extraction aborted — you went down' : 'Extraction aborted — you left the pickup zone'); }
+      if (caller) { caller.extractReadyAt = now + EXTRACT.cooldownMs; toast(caller, caller.dead ? 'Extraction aborted — you were killed' : 'Extraction aborted — you left the pickup zone'); }
       sendEvents();
       continue;
     }
+    if (now >= e.arrivesAt && !inZone(caller)) continue;   // it waits over the zone for you, for the grace time
     if (now < e.arrivesAt) continue;
+    flyOut(e, caller, now, inZone);
+  }
+}
+/** The helicopter lifts off with the caller and every crewmate in the pickup zone, to their stash houses. */
+function flyOut(e, caller, now, inZone) {
+  {
     extractions.delete(e.id);
     const riders = [...players.values()].filter((o) => inZone(o) && (o === caller || sameSquad(o, caller)));
     for (const o of riders) {

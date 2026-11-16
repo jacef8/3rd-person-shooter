@@ -382,8 +382,9 @@
     }
   },
   "extraction": {
-    "holdMs": 90000,
+    "holdMs": 60000,
     "radius": 25,
+    "graceMs": 10000,
     "callRange": 20,
     "alertRange": 800,
     "cooldownMs": 300000,
@@ -412,8 +413,9 @@
     ]
   },
   "rescueFlare": {
-    "_about": "A one-use flare that calls the extraction helicopter from anywhere in the open county (not indoors, not in water, not while you've been shot in the last 10 s, not with freight). Longer to hold and seen from further away than a landing-zone flare. Lamar sells them; supply drops and Lieutenants sometimes carry one.",
-    "holdMs": 120000,
+    "_about": "A one-use flare that calls the extraction helicopter from anywhere in the open county (not indoors, not in water, not with freight): the helicopter lands at the flare 30 s later, gunfight or not, and waits 20 s: no zone to hold, but if you're not at the flare when it's there, you miss it. Seen from further away than a landing-zone flare. Lamar sells them; supply drops and Lieutenants sometimes carry one.",
+    "holdMs": 30000,
+    "waitMs": 20000,
     "alertRange": 1600,
     "price": 600,
     "dropChance": 0.15,
