@@ -124,6 +124,7 @@ function loadDb() {
 }
 const db = loadDb();
 Object.assign(db, { seed: SEED, version: DB_VERSION, size: WORLD_SIZE });
+remapHouseClaims(db);
 for (const h of map.houses) {
   db.houses[h.id] = { ...freshHouse(), ...(db.houses[h.id] || {}) };
   db.houses[h.id].upg = { door: 0, storage: 0, alarm: 0, generator: 0, infirmary: 0, workbench: 0, ...db.houses[h.id].upg };
@@ -133,7 +134,37 @@ db.boats ??= [];
 db.crews ??= {};
 db.lastSeen ??= {};   // login token -> when they were last online (fair raids)
 
+/**
+ * Stash houses are numbered by where they come in the map's list, and new real buildings (or any change
+ * to the map data) can renumber that list. So each claimed home's save also notes where it stands, and
+ * at start-up every claim is matched back to the home at that spot (the nearest of the same kind within
+ * 8 m). A claim whose home is gone is set aside in db.lostHouses rather than landing on someone else's.
+ */
+function remapHouseClaims(d) {
+  const saved = d.houses || {}, out = {}, taken = new Set();
+  let moved = 0, lost = 0;
+  for (const [id, st] of Object.entries(saved)) {
+    if (!st?.owner) continue;
+    const h = map.houses[id];
+    if (!st.at) { if (h) { out[id] = st; taken.add(+id); } continue; }   // (saved before positions were kept: trust the number)
+    const [ax, az, kind] = st.at;
+    if (h && h.kind === kind && Math.hypot(h.x - ax, h.z - az) < 3) { out[id] = st; taken.add(+id); continue; }
+    let best = null;
+    for (const q of map.houses) {
+      if (taken.has(q.id) || q.kind !== kind) continue;
+      const dd = Math.hypot(q.x - ax, q.z - az);
+      if (dd < 8 && (!best || dd < best.d)) best = { d: dd, q };
+    }
+    if (best) { out[best.q.id] = st; taken.add(best.q.id); moved++; }
+    else { (d.lostHouses ??= []).push(st); lost++; }
+  }
+  for (const [id, st] of Object.entries(saved)) if (!st?.owner && !taken.has(+id) && map.houses[id]) out[id] ??= st;   // unclaimed state (doors) where it still fits
+  d.houses = out;
+  if (moved || lost) console.log(`Stash house claims matched to the map: ${moved} moved to their new numbers, ${lost} set aside (home gone)`);
+}
 function saveDb() {
+  // Where each claimed home stands, so its claim survives a change to the map (see remapHouseClaims).
+  for (const h of map.houses) { const st = db.houses[h.id]; if (st?.owner) st.at = [Math.round(h.x * 10) / 10, Math.round(h.z * 10) / 10, h.kind]; }
   for (const p of players.values()) { persistCharacter(p); db.lastSeen[p.token] = Date.now(); }
   db.crews = Object.fromEntries([...squads.values()].map((s) => [s.id, { ...s, officers: [...s.officers], members: [...s.members] }]));
   fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
