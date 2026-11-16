@@ -1959,6 +1959,7 @@ function handle(m) {
       break;
     case 'sites':
       state.sites = m.sites || [];
+      if (m.noClaim) state.noClaim = new Set(m.noClaim);   // businesses, shops and sites: nobody's stash house
       break;
     case 'events':
       state.drops = m.drops;
@@ -3748,7 +3749,8 @@ function nearestInteractable() {
       const held = [...structVis.values()].find((sv) => PIECES[sv.data.type].claim && sv.data.x > b.minX && sv.data.x < b.maxX && sv.data.z > b.minZ && sv.data.z < b.maxZ);
       const what = b.name || ({ building: 'building', home: 'house', civic: 'hall' }[b.type] || b.type);
       const it = b.name ? `the ${b.name}` : `this ${what}`;
-      if (held) best = held.data.mine ? null : `${held.data.owner}'s ${b.name || 'building'}`;
+      if (b.shop || state.noClaim?.has(state.map.buildings.indexOf(b))) best = held ? null : b.name ? `${b.name}: open to everyone, nobody's stash house` : null;
+      else if (held) best = held.data.mine ? null : `${held.data.owner}'s ${b.name || 'building'}`;
       else if (me.claim) best = `${b.name || `Unclaimed ${what}`} (${state.squad.id ? 'your crew has' : 'you have'} a stash house)`;
       else if (me.inv.pack.some((i) => i.kind === 'marker')) best = `Make ${it} your stash house (8 s): your own locker, and doors only your crew can open`;
       else best = `${b.name || `Unclaimed ${what}`} — a claim marker makes it your stash house`;

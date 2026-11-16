@@ -161,6 +161,7 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
         const d = Math.hypot(Math.max(0, Math.abs(lx) - f.hw), Math.max(0, Math.abs(lz) - f.hd));
         if (d < bd) { bd = d; bld = b; }
       }
+      if (bld?.shop) continue;   // Lamar's and the trading posts carry their own sign, nobody else's
       const road = nearestRoad(bz.x, bz.z, 150);
       if (!bld) {
         // A sign on a post by the road.

@@ -13,6 +13,8 @@ Writes data/real/county.json, which the server and every client add to the open 
               the nearest road, kept off the road itself
   roads       county roads the open data hasn't got (mostly private roads and long driveways)
   surface     open-data roads the county says are dirt (or paved): [road index, 'track'|'paved']
+  move        open-data minor roads the county surveyed elsewhere (same name, ours 10+ m off along most
+              of it): [road index, the road's points snapped onto the county's line]
   hydrants    the county's fire hydrants
 
 Only where things are and what kind of thing they are is used. The address points also carry
@@ -20,7 +22,7 @@ dispatch notes, owners' names and phone numbers: none of that is read or written
 
 Needs: pip install pyshp
 """
-import collections, json, math, os, sys
+import collections, json, math, os, re, sys
 import shapefile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,6 +45,13 @@ inside = lambda x, z: abs(x) < H and abs(z) < H
 DIRT = {'FD', 'CD', 'GM', 'PR', 'DIRT'}
 PAVED = {'SR', 'CP', 'BP', 'FP'}
 TITLE = {'NW': 'NW', 'NE': 'NE', 'SW': 'SW', 'SE': 'SE', 'SR': 'SR', 'CR': 'CR', 'FR': 'FR', 'US': 'US'}
+# Road names compared across the two sources: 'NW Lindsey Ln' is 'Lindsey Lane'.
+ABBR = {'road': 'rd', 'lane': 'ln', 'drive': 'dr', 'trail': 'tr', 'circle': 'cir', 'loop': 'lp', 'lp': 'lp', 'street': 'st',
+        'avenue': 'ave', 'court': 'ct', 'place': 'pl', 'highway': 'hwy', 'boulevard': 'blvd', 'way': 'wy', 'path': 'pth'}
+def key(name):
+    w = [ABBR.get(t, t) for t in re.sub(r'[^a-z0-9 ]', ' ', (name or '').lower()).split()]
+    while w and w[0] in ('nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w', 'northwest', 'northeast', 'southwest', 'southeast'): w = w[1:]
+    return ' '.join(w)
 def nice(label):
     return ' '.join(TITLE.get(w, w.capitalize()) for w in (label or '').split())
 
@@ -64,6 +73,87 @@ def near(g, x, z, d):
                 if dd < d and (best is None or dd < best[0]):
                     best = (dd, p)
     return best
+bld = grid_of([(*xz(r[0], r[1]), max(r[2], r[3])) for r in structs])
+
+# ---- county roads: surfaces for ours, and the ones we haven't got
+rr = shapefile.Reader(os.path.join(roads_dir, 'Roads'))
+RF = [f[0] for f in rr.fields[1:]]
+ours_by_name = collections.defaultdict(list)   # name key -> our roads' points
+for _n, _c, _pts in roads:
+    if key(_n): ours_by_name[key(_n)] += [xz(*p) for p in _pts]
+def through_building(run):
+    """A driveway drawn straight through someone's house: leave it out."""
+    for (la1, lo1), (la2, lo2) in zip(run, run[1:]):
+        (x1, z1), (x2, z2) = xz(la1, lo1), xz(la2, lo2)
+        n = max(1, int(math.hypot(x2 - x1, z2 - z1) / 3))
+        for k in range(n + 1):
+            x, z = x1 + (x2 - x1) * k / n, z1 + (z2 - z1) * k / n
+            hit = near(bld, x, z, 15)
+            if hit and hit[0] < hit[1][2] * 0.4: return True
+    return False
+def same_as_ours(label, run):
+    """A county road we'd add that's really one of ours under the county's spelling, drawn a little way off."""
+    pts = ours_by_name.get(key(label))
+    if not pts: return False
+    mx, mz = xz(*run[len(run) // 2])
+    return min(math.hypot(x - mx, z - mz) for x, z in pts) < 120
+# ---- our minor roads that the county puts somewhere else: the county's 911 centrelines are surveyed;
+# the open data's minor roads are often old census traces, 40-80 m off. Same name, and ours more than
+# 10 m from the county's along most of it: ours moves onto the county's line (same number, same name).
+by_name = collections.defaultdict(list)   # name key -> county polylines, in the game's metres
+for sh, rec in zip(rr.shapes(), rr.records()):
+    d = dict(zip(RF, rec))
+    k = key(d['street_lab'])
+    if k: by_name[k].append([ll(x, y) for x, y in sh.points])
+def dist_to(poly, x, z):
+    best = 1e9
+    for (x1, z1), (x2, z2) in zip(poly, poly[1:]):
+        dx, dz = x2 - x1, z2 - z1; L = dx * dx + dz * dz or 1
+        t = max(0, min(1, ((x - x1) * dx + (z - z1) * dz) / L))
+        best = min(best, math.hypot(x - x1 - dx * t, z - z1 - dz * t))
+    return best
+move, moved_keys = [], {}
+for idx, (name, cls, pts) in enumerate(roads):
+    k = key(name)
+    if not k or k not in by_name or cls in ('primary', 'secondary', 'trunk', 'motorway'): continue
+    P = [xz(*p) for p in pts]
+    if not inside(*P[len(P) // 2]): continue
+    cands = [[xz(*q) for q in poly] for poly in by_name[k]]
+    near_c = [c for c in cands if min(dist_to(c, x, z) for x, z in P[::max(1, len(P) // 6)]) < 150]
+    if not near_c: continue
+    ds = sorted(min(dist_to(c, x, z) for c in near_c) for x, z in P)
+    med = ds[len(ds) // 2]
+    if med <= 10 or ds[int(len(ds) * 0.8)] > 150: continue
+    # Each point of ours (every ~12 m) snapped onto the nearest county line: the same stretch of road,
+    # just where the county says it is.
+    def snap(x, z):
+        best = None
+        for c in near_c:
+            for (x1, z1), (x2, z2) in zip(c, c[1:]):
+                dx, dz = x2 - x1, z2 - z1; L = dx * dx + dz * dz or 1
+                t = max(0, min(1, ((x - x1) * dx + (z - z1) * dz) / L))
+                px, pz = x1 + dx * t, z1 + dz * t
+                d = math.hypot(x - px, z - pz)
+                if best is None or d < best[0]: best = (d, px, pz)
+        return best
+    dense = []
+    for (x1, z1), (x2, z2) in zip(P, P[1:]):
+        n = max(1, int(math.hypot(x2 - x1, z2 - z1) / 12))
+        dense += [(x1 + (x2 - x1) * k / n, z1 + (z2 - z1) * k / n) for k in range(n)]
+    dense.append(P[-1])
+    seg = []
+    for x, z in dense:
+        b = snap(x, z)
+        if b and b[0] < 150 and (not seg or math.hypot(b[1] - seg[-1][0], b[2] - seg[-1][1]) > 1.5): seg.append((b[1], b[2]))
+    if len(seg) < 2: continue
+    plen = lambda Q: sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(Q, Q[1:]))
+    if plen(seg) < 0.7 * plen(P): continue   # ours runs on past where the county's ends: leave it be
+    lls = [[round(O['lat'] - (z + CZ) / MLAT, 6), round(O['lon'] + (x + CX) / MLON, 6)] for x, z in seg]
+    move.append([idx, lls])
+    moved_keys.setdefault(k, []).append(seg)
+# Our roads where they'll be drawn now.
+roads = [list(r) for r in roads]
+for idx, lls in move: roads[idx][2] = lls
 # Points every ~8 m along our roads, carrying the road's index and direction.
 road_pts = []
 for idx, (name, cls, pts) in enumerate(roads):
@@ -74,11 +164,6 @@ for idx, (name, cls, pts) in enumerate(roads):
         for k in range(n + 1):
             road_pts.append((x1 + (x2 - x1) * k / n, z1 + (z2 - z1) * k / n, idx, (x2 - x1) / (L or 1), (z2 - z1) / (L or 1)))
 ours = grid_of(road_pts)
-bld = grid_of([(*xz(r[0], r[1]), max(r[2], r[3])) for r in structs])
-
-# ---- county roads: surfaces for ours, and the ones we haven't got
-rr = shapefile.Reader(os.path.join(roads_dir, 'Roads'))
-RF = [f[0] for f in rr.fields[1:]]
 votes = collections.defaultdict(collections.Counter)
 new_roads, county_pts = [], []
 for sh, rec in zip(rr.shapes(), rr.records()):
@@ -109,7 +194,7 @@ for sh, rec in zip(rr.shapes(), rr.records()):
             run.append(LL[i + 1])
         if (not miss or i == len(missing) - 1) and len(run) > 1:
             Lrun = sum(math.hypot(*(a - b for a, b in zip(xz(*p), xz(*q)))) for p, q in zip(run, run[1:]))
-            if Lrun >= 40:
+            if Lrun >= 40 and not same_as_ours(d['street_lab'], run) and not through_building(run):
                 new_roads.append([nice(d['street_lab']), 'track' if kind != 'paved' else 'residential', [[round(a, 6), round(b, 6)] for a, b in run]])
             run = []
 surface = []
@@ -172,9 +257,9 @@ for lat, lon, d in address_points():
     homes.append([round(lat, 6), round(lon, 6), w, dd, 0, 'resid', '', round(ang, 1)])
 
 out = {'source': "Liberty County, Florida: its 911 road centrelines and address points (locations and kinds of thing only). See ATTRIBUTION.md.",
-       'structures': homes, 'roads': new_roads, 'surface': surface, 'hydrants': hydrants}
+       'structures': homes, 'roads': new_roads, 'surface': surface, 'move': move, 'hydrants': hydrants}
 with open(os.path.join(REAL, 'county.json'), 'w') as fh:
     json.dump(out, fh, separators=(',', ':'))
 km = sum(sum(math.hypot(*(a - b for a, b in zip(xz(*p), xz(*q)))) for p, q in zip(r[2], r[2][1:])) for r in new_roads) / 1000
-print(f'county: {len(homes)} homes added, {len(new_roads)} roads added ({km:.0f} km), {len(surface)} surfaces corrected '
+print(f'county: {len(move)} of our roads moved onto the county line; {len(homes)} homes added, {len(new_roads)} roads added ({km:.0f} km), {len(surface)} surfaces corrected '
       f"({sum(1 for s in surface if s[1] == 'track')} to dirt, {sum(1 for s in surface if s[1] == 'paved')} to paved), {len(hydrants)} hydrants")

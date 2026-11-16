@@ -863,6 +863,8 @@ def write_infrastructure():
 
 
 # ------------------------------------------------------------------ businesses
+# Listings that are wrong on the ground (checked by someone who lives there): never imported.
+BUSINESS_DROP = {'850 Racing & Automotive'}   # pinned onto Lamar's Pawn
 BUSINESS_SKIP = re.compile(r'(church|religio|place_of_worship|mosque|synagogue|school|education|preschool|day_care|child_care|'
                            r'college|university|cemetery|funeral|residen|apartment|^home_|structure_and_geography|'
                            r'landmark|^park$|nature_reserve|lake|river|forest|mountain|island|beach|campground|boat|'
@@ -881,7 +883,7 @@ def write_businesses():
         cat = (pl['taxonomy'][i] or {}).get('primary') or pl['basic_category'][i] or ''
         nm = ((pl['names'][i] or {}).get('primary') or '').strip()
         conf = pl['confidence'][i] or 0
-        if not nm or not cat or conf < 0.5 or BUSINESS_SKIP.search(cat) or (pl['operating_status'][i] or 'open') != 'open':
+        if not nm or not cat or conf < 0.5 or nm in BUSINESS_DROP or BUSINESS_SKIP.search(cat) or (pl['operating_status'][i] or 'open') != 'open':
             continue
         # Not people's own names (a practitioner listed under their name and credentials), not kiosks or ATMs.
         if re.search(r',|\b(APRN|MSN|MD|DO|DDS|DMD|LCSW|LMHC|PA-C|NP|PhD|CPA|Esq)\b', nm) or re.search(r'kiosk|atm|familysearch|bitcoin', nm + ' ' + cat, re.I):

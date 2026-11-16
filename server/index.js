@@ -8,6 +8,7 @@
 
 import { withCounty } from '../shared/county.js';
 import { SITES, findSites } from '../shared/sites.js';
+import { project } from '../shared/geography.js';
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
@@ -669,7 +670,7 @@ function buildingClaimant(idx) { for (const st of structs.values()) if (PIECES[s
 // Loot spots inside a claimed building stop restocking: it's someone's home now.
 const spawnBuilding = map.lootSpawns.map((sp) => (sp.indoor ? buildingAt(sp.x, sp.z) : -1));
 function startClaimBuilding(p, idx) {
-  if (map.buildings[idx]?.shop) return toast(p, `${map.buildings[idx].name} is open for business, not for claiming`);
+  if (NO_CLAIM.has(idx)) return toast(p, NO_CLAIM.get(idx));
   const held = buildingClaimant(idx);
   if (held) return toast(p, `${storeOwnerLabel(held)} holds this building — break in through a door`);
   if (claimOf(p)) return toast(p, squadOf(p) ? 'Your crew already has a stash house' : 'You already have a stash house. Abandon it before claiming another.');
@@ -1052,8 +1053,27 @@ const sites = (SITE_ON ? findSites(realFiles.infrastructure, readReal('businesse
   return { ...s, x: Math.round(c.x), z: Math.round(c.z), K, buildings: near, state: 'stocked', caches: [], guards: [], awake: false, lastNear: 0, alarmUntil: 0, reinforceAt: 0, raider: null, restockAt: 0 };
 });
 const siteById = new Map(sites.map((s) => [s.id, s]));
+// Buildings nobody can make a stash house: Lamar's and the trading posts, the high-value sites, and
+// every shop, office or hall a real business is in (a business run from a house doesn't count).
+const NO_CLAIM = new Map();   // building index -> why
+{
+  for (const b of map.buildings) if (b.shop) NO_CLAIM.set(b.idx, `${b.name} is open for business, not for claiming`);
+  for (const s of sites) for (const b of s.buildings) NO_CLAIM.set(b.idx, `${s.name} can't be anyone's stash house`);
+  const rows = SITE_ON ? readReal('businesses.json')?.rows || [] : [];
+  for (const [lat, lon, , name] of rows) {
+    const { x, z } = project(lat, lon, map.size);
+    let best = null, bd = 20;
+    for (const b of buildingGrid.near(x, z, 20)) {
+      if (b.type === 'home' || b.type === 'farmhouse' || b.type === 'barn') continue;
+      const d = Math.hypot(Math.max(0, b.minX - x, x - b.maxX), Math.max(0, b.minZ - z, z - b.maxZ));
+      if (d < bd) { bd = d; best = b; }
+    }
+    if (best && !NO_CLAIM.has(best.idx)) NO_CLAIM.set(best.idx, `${name} is a business, not a stash house`);
+  }
+}
+if (NO_CLAIM.size) console.log(`${NO_CLAIM.size} buildings are businesses, shops or sites: nobody can claim them`);
 const siteView = (s) => ({ id: s.id, kind: s.kind, name: s.name, x: s.x, z: s.z, r: Math.min(s.K.radius, 120), state: s.alarmUntil > Date.now() && s.state === 'stocked' ? 'alarm' : s.state, left: s.caches.length, restockAt: s.restockAt });
-const sendSites = (to) => { const msg = { t: 'sites', sites: sites.map(siteView) }; if (to) send(to, msg); else broadcast(msg); };
+const sendSites = (to) => { const msg = { t: 'sites', sites: sites.map(siteView), ...(to ? { noClaim: [...NO_CLAIM.keys()] } : {}) }; if (to) send(to, msg); else broadcast(msg); };
 const pickW = (list) => { let r = Math.random() * list.reduce((n, k) => n + k.w, 0); for (const k of list) { r -= k.w; if (r <= 0) return k; } return list[0]; };
 /** A spot inside one of the site's buildings, else outside close by. */
 function siteSpot(s) {

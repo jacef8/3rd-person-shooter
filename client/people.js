@@ -169,17 +169,21 @@ export function animatePerson(holder, rig, st, dt) {
   }
   const dir = rig.dir ?? 0;
   // The hips turn the rest of the way toward where you're really going; the chest keeps facing the aim.
-  const hipT = moving ? Math.max(-0.5, Math.min(0.5, Math.atan2(Math.sin(ang - dir * D), Math.cos(ang - dir * D)))) : 0;
-  rig.hy = (rig.hy || 0) + (hipT - (rig.hy || 0)) * Math.min(1, dt * 8);
   // Which clip: crouch-walk, walk, jog or sprint by speed; standing still, aiming or just holding.
   const crouch = st.crouch && !st.seated;
   let gait = crouch ? 'cwalk' : s < (rig.gait === 'run' ? 3.3 : 3.8) ? 'walk' : 'run';
   const want = !moving ? (crouch ? 'crouch' : !st.armed ? 'idle' : st.aiming ? 'aim' : 'hold')   // standing tall unless aiming or shooting
-    : gait === 'run' && DIRS[dir] === 'f' && s > (rig.cur === 'sprint' ? 6.8 : 7.3) ? 'sprint' : `${gait}_${DIRS[dir]}`;
+    // Running straight ahead is a real upright run (the sprint clip, played at your pace); the rifle jog,
+    // which is low and short-stepped, is kept for strafing and backing up.
+    : gait === 'run' && (DIRS[dir] === 'f' || DIRS[dir] === 'fl' || DIRS[dir] === 'fr') && s > (rig.cur === 'sprint' ? 3.9 : 4.3) ? 'sprint' : `${gait}_${DIRS[dir]}`;
   if (want === 'sprint') gait = 'sprint';
   rig.gait = gait; rig.cur = want;
+  // (the run straight ahead also covers the diagonals ahead: the hips turn the whole way toward them)
+  const hipT = !moving ? 0 : want === 'sprint' ? Math.max(-0.85, Math.min(0.85, ang)) : Math.max(-0.5, Math.min(0.5, Math.atan2(Math.sin(ang - dir * D), Math.cos(ang - dir * D))));
+  rig.hy = (rig.hy || 0) + (hipT - (rig.hy || 0)) * Math.min(1, dt * 8);
   // One stride phase for every locomotion clip, so changing direction or speed keeps the feet in step.
-  if (moving) rig.phase = (rig.phase + dt * s / STRIDE[gait]) % 1;
+  // (a longer stride the faster you go, as a runner's is)
+  if (moving) rig.phase = (rig.phase + dt * s / (gait === 'sprint' ? 2.9 + 0.17 * s : STRIDE[gait])) % 1;
   const w = rig.w, fade = Math.min(1, dt * 9);
   for (const [n, a] of Object.entries(acts)) {
     const target = n === want ? 1 : 0;
