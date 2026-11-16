@@ -52,28 +52,28 @@
       "_about": "Swamp-country workhorse: almost as quick off the road as on it."
     },
     "golfcart": {
-      "name": "Golf cart", "icon": "🛺", "speed": 10, "offroad": 0.8, "reverse": 4, "accel": 5, "brake": 10, "turn": 1.6, "hp": 160,
+      "name": "Golf cart", "icon": "🛺", "speed": 12, "offroad": 0.8, "reverse": 4, "accel": 5, "brake": 10, "turn": 1.6, "hp": 160,
       "len": 2.4, "wid": 1.2, "h": 1.75, "hold": 2, "keys": 0.9, "seatH": 0.6, "spawn": "town", "count": 25,
       "seats": [[0.3, 0.1], [-0.3, 0.1]],
       "colors": [16777215, 3368550, 13421721, 2263842],
       "_about": "Slow, quiet, usually has the key in it. Beats walking."
     },
     "bicycle": {
-      "name": "Bicycle", "icon": "🚲", "speed": 9.5, "offroad": 0.65, "reverse": 1.5, "accel": 4.5, "brake": 9, "turn": 2.1, "hp": 60,
+      "name": "Bicycle", "icon": "🚲", "speed": 11.5, "offroad": 0.65, "reverse": 1.5, "accel": 4.5, "brake": 9, "turn": 2.1, "hp": 60,
       "len": 1.75, "wid": 0.6, "h": 1.0, "hold": 0, "keys": 1, "seatH": 0.85, "spawn": "town", "count": 45, "lean": true, "pedal": true,
       "seats": [[0, -0.15]],
       "colors": [12779520, 1131664, 1118481, 16766720, 3381606],
       "_about": "Silent and nearly twice walking speed. No keys needed."
     },
     "skateboard": {
-      "name": "Skateboard", "icon": "🛹", "speed": 7.8, "offroad": 0.35, "reverse": 1, "accel": 3.5, "brake": 7, "turn": 2.4, "hp": 30,
+      "name": "Skateboard", "icon": "🛹", "speed": 10, "offroad": 0.35, "reverse": 1, "accel": 3.5, "brake": 7, "turn": 2.4, "hp": 30,
       "len": 0.85, "wid": 0.25, "h": 0.15, "hold": 0, "keys": 1, "seatH": 0.12, "spawn": "town", "count": 25, "stand": true,
       "seats": [[0, 0]],
       "colors": [16737792, 2245836, 1118481, 13369344],
       "_about": "Quick on pavement, useless on grass. Carry nothing, ride standing up."
     },
     "tractor": {
-      "name": "Tractor", "icon": "🚜", "speed": 9, "offroad": 1, "reverse": 3, "accel": 3, "brake": 8, "turn": 1.0, "hp": 600,
+      "name": "Tractor", "icon": "🚜", "speed": 10.5, "offroad": 1, "reverse": 3, "accel": 3, "brake": 8, "turn": 1.0, "hp": 600,
       "len": 3.8, "wid": 2.0, "h": 2.6, "hold": 4, "keys": 0.7, "seatH": 1.3, "spawn": "field", "count": 25, "loud": 200,
       "seats": [[0, -0.4]],
       "colors": [3381555, 13382400, 16750848, 3368550],
