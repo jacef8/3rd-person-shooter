@@ -11,6 +11,7 @@ import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
 import { createTownDressing } from '/towns.js';
+import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
@@ -97,7 +98,8 @@ function renderWorld() {
   }
   renderer.render(scene, camera);
 }
-scene.add(new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 0.85));
+const hemi = new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 0.85);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1dc, 2.0);
 sun.castShadow = true;
 sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);
@@ -172,7 +174,8 @@ function initWorld(m) {
   // One coarse pass over the whole county, shared by the far landscape and the map screen.
   const land = sampleLand(map, MOBILE ? 120 : 75);
   state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: MOBILE, land });
-  state.towns = createTownDressing(scene, map, m.realData?.businesses, ground);
+  state.towns = createTownDressing(scene, map, m.realData?.businesses, ground, () => state.view?.setPaved((x, z) => state.towns.pavedAt(x, z)));
+  state.env = createEnvironment({ scene, far: state.view.far, sky: state.view.sky, sun, hemi, renderer, camera, towns: state.towns, thunder: (x, y, z) => sfx.boom(x, y, z) });
   applyGfx();
   state.view.setOwnHouse(m.houseId);
   state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000, land);
@@ -272,6 +275,45 @@ function vehicleDoor(def, d) {
   g.userData = { panel, paint: panel.material.color.clone() };
   return g;
 }
+// Lanterns by the doors of the homes people have claimed: they glow and flicker at night. The four
+// nearest also light up what's around them (a fixed set of lights, so nothing recompiles).
+const LANTERN = { frame: new THREE.MeshStandardMaterial({ color: 0x2b2620, roughness: 0.6, metalness: 0.4 }), geo: new THREE.BoxGeometry(0.16, 0.24, 0.16), cap: new THREE.ConeGeometry(0.13, 0.1, 4) };
+const lanternLights = [0, 1, 2, 3].map(() => { const l = new THREE.PointLight(0xffa040, 0, 14, 1.6); scene.add(l); return l; });
+function makeLantern(def, d) {
+  const g = new THREE.Group();
+  const glass = new THREE.Mesh(LANTERN.geo, new THREE.MeshStandardMaterial({ color: 0xffd8a0, emissive: 0xff9a30, emissiveIntensity: 0, roughness: 0.3 }));
+  const cap = new THREE.Mesh(LANTERN.cap, LANTERN.frame); cap.position.y = 0.17; cap.rotation.y = Math.PI / 4;
+  const hook = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.25), LANTERN.frame); hook.position.set(0, 0.24, -0.1);
+  g.add(glass, cap, hook);
+  // Beside the door, on the outside: the door's thin side faces out, away from the middle of the home.
+  const cx = (d.minX + d.maxX) / 2, cz = (d.minZ + d.maxZ) / 2, thinX = d.maxX - d.minX < d.maxZ - d.minZ;
+  const out = thinX ? Math.sign(cx - def.x) || 1 : Math.sign(cz - def.z) || 1, wide = thinX ? (d.maxZ - d.minZ) / 2 : (d.maxX - d.minX) / 2;
+  const ox = thinX ? out * 0.28 : wide + 0.3, oz = thinX ? wide + 0.3 : out * 0.28;
+  g.position.set(cx + ox, (d.y0 || ground(cx, cz)) + Math.min(2.0, d.h + 0.1), cz + oz);
+  g.rotation.y = thinX ? (out > 0 ? -Math.PI / 2 : Math.PI / 2) : (out > 0 ? Math.PI : 0);
+  g.userData = { glass, seed: Math.random() * 100 };
+  g.visible = false;
+  return g;
+}
+function updateLanterns(now) {
+  const night = state.env?.state.night ?? 0, list = [];
+  for (const [, v] of houseVis) {
+    const L = v.lantern;
+    if (!L?.visible) continue;
+    const t = now / 1000 + L.userData.seed;
+    const flick = 0.78 + 0.12 * Math.sin(t * 7.3) + 0.07 * Math.sin(t * 17.1 + 1.3) + 0.05 * Math.sin(t * 31.7);
+    L.userData.glass.material.emissiveIntensity = (0.15 + 2.2 * night) * flick;
+    L.userData.flick = flick;
+    if (night > 0.05) list.push([L.position.distanceToSquared(camera.position), L]);
+  }
+  list.sort((a, b) => a[0] - b[0]);
+  lanternLights.forEach((l, i) => {
+    const e = list[i];
+    if (!e || e[0] > 90 * 90) { l.intensity = 0; return; }
+    l.position.copy(e[1].position); l.position.y -= 0.05;
+    l.intensity = 3.2 * night * e[1].userData.flick;
+  });
+}
 function syncHouses(list) {
   const seen = new Set();
   for (const h of list) {
@@ -291,10 +333,13 @@ function syncHouses(list) {
       const label = makeLabel('', 0.012);
       label.position.set(def.x, ground(def.x, def.z) + (def.kind === 'vehicle' ? 4.6 : def.kind === 'room' ? 6 : 5.2), def.z);
       scene.add(door, label);
-      houseVis.set(h.id, (v = { door, label }));
+      const lantern = makeLantern(def, d);
+      scene.add(lantern);
+      houseVis.set(h.id, (v = { door, label, lantern }));
     }
     const f = h.max ? h.hp / h.max : 0;
     v.door.visible = h.hp > 0 && !h.open;
+    v.lantern.visible = !!h.owner && h.hp > 0;   // someone lives here: a lantern by the door
     if (v.door.userData.paint) v.door.userData.panel.material.color.copy(v.door.userData.paint).lerp(DOOR_DAMAGED, 0.85 * (1 - f));   // a vehicle's own back door, scorched as it's beaten in
     else v.door.material.color.setRGB(0.35 + 0.5 * (1 - f), 0.37 * f + 0.05, 0.4 * f + 0.05 + h.upg.door * 0.08);
     const own = h.id === state.houseId;
@@ -302,7 +347,7 @@ function syncHouses(list) {
     const kn = homeKindName(def);
     setLabel(v.label, h.owner ? `${own ? 'YOUR ' + kn.toUpperCase() : `${h.owner}'s ${kn.toLowerCase()}`} · Lv${h.hl} · ${status}` : `Unclaimed ${kn.toLowerCase()} · plant a claim marker`, own ? '#7dff9a' : !h.owner ? '#c9c9c9' : h.hp <= 0 ? '#ff6b6b' : '#ffd29a');
   }
-  for (const [id, v] of houseVis) if (!seen.has(id)) { scene.remove(v.door, v.label); v.door.traverse((o) => o.geometry?.dispose()); houseVis.delete(id); state.houseState.delete(id); }
+  for (const [id, v] of houseVis) if (!seen.has(id)) { scene.remove(v.door, v.label, v.lantern); v.door.traverse((o) => o.geometry?.dispose()); houseVis.delete(id); state.houseState.delete(id); }
   state.doorSolids = list.filter((h) => h.hp > 0 && !h.open).map((h) => ({ ...state.map.houses[h.id].door, type: 'door' }));
 }
 
@@ -4955,8 +5000,13 @@ function frame(now) {
   animateExtracts();
   for (const g of lzVis) g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
   const gy0 = ground(state.x, state.z);
-  sun.position.set(state.x + 62, gy0 + 46, state.z + 38);   // a lower sun, so slopes read as light and shade
-  sun.target.position.set(state.x, gy0, state.z);
+  // Day and night, and the weather: the sun or moon, the sky, fog, rain and lightning (client/daynight.js).
+  if (state.env) {
+    state.env.update(new THREE.Vector3(state.x, gy0, state.z), dt);
+    updateLanterns(now);
+    if (now - (state.clockShown || 0) > 1000) { state.clockShown = now; $('whereClock').textContent = clockLabel(state.env.state.clock); }
+  }
+  else { sun.position.set(state.x + 62, gy0 + 46, state.z + 38); sun.target.position.set(state.x, gy0, state.z); }
 
   for (let i = tracers.length - 1; i >= 0; i--) {
     const t = tracers[i];
@@ -4984,7 +5034,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis };
+window.__dz = { nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis, houseVis };
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere

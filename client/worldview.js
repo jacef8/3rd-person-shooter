@@ -842,6 +842,7 @@ vBlade = position.y;
     grassMesh.receiveShadow = !mobile;
     scene.add(grassMesh);
   }
+  let pavedAt = null;   // parking lots and sidewalks (client/towns.js): no grass on them
   function layGrass(px, pz) {
     const cx = Math.round(px), cz = Math.round(pz), N = GRASS_R * 2 + 1;
     // What blades can't grow in: buildings and solid things (trees are fine), roads.
@@ -868,7 +869,7 @@ vBlade = position.y;
         c = gc && gc[1] > gc[0] * 1.08 && gc[1] > gc[2] * 1.25 ? gc : null;   // green ground only
         colorAt.set(ck, c);
       }
-      if (!c || onRoad(gx + 0.5, gz + 0.5)) continue;
+      if (!c || onRoad(gx + 0.5, gz + 0.5) || pavedAt?.(gx + 0.5, gz + 0.5)) continue;
       for (let k = 0; k < kmax && n < cap; k++) {
         const x = gx + ghash(gx, gz, k * 3 + 1), z = gz + ghash(gx, gz, k * 3 + 2), r = ghash(gx, gz, k * 3 + 3);
         const hgt = 0.18 + r * 0.38;
@@ -1043,6 +1044,10 @@ vBlade = position.y;
   return {
     /** The far scene: draw it first with a long-range camera at the same place, then clear depth. */
     far,
+    /** The sky dome (its sun and clouds follow the day and the weather). */
+    sky,
+    /** Where the ground is paved (a test (x, z) => bool): grass is kept off it. */
+    setPaved(fn) { pavedAt = fn; grassAt = null; },
     /** A tree cut down to a stump, or grown back. */
     setFelled(t) { setTreeMatrix(t); },
     setOwnHouse(id) {
