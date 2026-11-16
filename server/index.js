@@ -5017,6 +5017,7 @@ const loop = setInterval(() => {
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : p.hop ? Math.round(p.hop.alt * 100) / 100 : undefined,
       y: !p.boat && standing(p) > terrain.height(p.x, p.z) + 0.8 ? +standing(p).toFixed(2) : undefined,   // up on a bridge deck
+      aim: p.aiming && !p.dead ? 1 : 0,
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),

@@ -89,7 +89,7 @@ export function buildGunModel(gun) {
     const gripL = box(0.04, 0.13, 0.05, metal(0x1e1f21)); gripL.position.set(0, -0.11, 0.05); g.add(gripL);
     const sight = box(0.03, 0.08, 0.04, metal(0x1e1f21)); sight.position.set(0.05, 0.08, 0.35); g.add(sight);
     g.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.userData.explode = new THREE.Vector3(); c.userData.home = c.position.clone(); } });
-    Object.assign(g.userData, { muzzle: new THREE.Vector3(0, 0, 0.9), back: new THREE.Vector3(0, 0, -0.38), eject: null, mag: null, archetype: a });
+    Object.assign(g.userData, { muzzle: new THREE.Vector3(0, 0, 0.9), back: new THREE.Vector3(0, 0, -0.38), eject: null, mag: null, archetype: a, grip: new THREE.Vector3(0, -0.15, 0.05), fore: new THREE.Vector3(0, -0.07, 0.38) });
     return g;
   }
   const [L, B, H] = SIZE[a] || SIZE.carbine;
@@ -229,7 +229,11 @@ export function buildGunModel(gun) {
   if (hasStock) place((STOCK[parts.stock] || STOCK.stdStock)(), [0, 0, -0.16], 'stock');
   // For the shot and reload effects: where the flash comes out, where the empties fly from, the mag.
   const mlen = parts.muzzle === 'suppressor' ? 0.22 : parts.muzzle === 'intSup' ? 0.18 : muzzle ? 0.06 : 0;
+  // Where the hands go: the right on the pistol grip, the left on the handguard (or, on a pistol,
+  // cupping the right).
+  const foreZ = a === 'sidearm' || blen <= 0.1 ? 0.02 : front + Math.min(blen * 0.7, 0.3) * 0.55;
   Object.assign(g.userData, { muzzle: new THREE.Vector3(0, H * 0.15, tip + mlen + 0.02), eject: new THREE.Vector3(-0.04, H * 0.3, L * 0.22), mag, archetype: a,
+    grip: new THREE.Vector3(0, -H / 2 - 0.06, -0.03), fore: a === 'sidearm' ? new THREE.Vector3(0.035, -H / 2 - 0.07, 0.0) : new THREE.Vector3(0, -H * 0.45, foreZ),
     suppressed: parts.muzzle === 'suppressor' || parts.muzzle === 'intSup' });
   return g;
 }

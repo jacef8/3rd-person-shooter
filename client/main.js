@@ -9,6 +9,7 @@ import {
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import * as sfx from '/sound.js';
+import { attachPerson, animatePerson, handsOnGun, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox } from '/mapview.js';
@@ -818,9 +819,63 @@ const clathe = (key, prof, depth) => {
 const csph = (r) => { const k = `sph${r}`; if (!CHAR_GEO.has(k)) CHAR_GEO.set(k, new THREE.SphereGeometry(r, 14, 10)); return CHAR_GEO.get(k); };
 const TORSO = [[0.0, 0.0], [0.15, 0.0], [0.16, 0.08], [0.15, 0.2], [0.18, 0.36], [0.205, 0.5], [0.19, 0.57], [0.11, 0.62], [0.0, 0.63]];
 const VEST_SHAPE = [[0.0, 0.18], [0.19, 0.18], [0.215, 0.32], [0.225, 0.5], [0.2, 0.56], [0.0, 0.57]];
+const PLAYER_OUTFITS = ['swat', 'adventurer', 'worker', 'casual', 'farmer', 'beach'];
+/**
+ * A person: a rigged model (client/people.js) in a Group whose +Z is forward and y = 0 the soles.
+ * The gun is held on a pivot that follows the chest and the aim; slung guns and the holster hang off
+ * the back and the right thigh. The outfit and skin come from the name, so everyone looks a bit
+ * different and always the same to everyone: Rogues in black or punk gear, Contacts in work clothes.
+ */
 function makeCharacter(kind, name) {
   const g = new THREE.Group();
   const h = nameHash(kind === 'self' ? (localStorage.getItem('dz_name') || 'you') : name), pick = (list, n) => list[(h >>> n) % list.length];
+  const joint = (x, y, z, parent) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
+  const aimPivot = joint(0, 1.3, 0, g);
+  const gun = joint(-0.17, -0.06, 0.24, aimPivot);
+  const sling = [joint(-0.06, 1.33, -0.22, g), joint(0.06, 1.33, -0.25, g)];
+  for (const [i, sl] of sling.entries()) { sl.rotation.order = 'ZXY'; sl.rotation.set(-Math.PI / 2, 0, i ? -0.5 : 0.5); }
+  const thigh = joint(-0.1, 0.9, 0, g);
+  const holster = joint(-0.1, -0.12, 0.02, thigh);
+  holster.rotation.x = Math.PI / 2;
+  g.userData = { gun, aimPivot, sling, holster, stowedKey: '', phase: 0, last: null, lastT: performance.now() };
+  if (kind !== 'self') {
+    const label = makeLabel(name, kind === 'contact' ? 0.006 : 0.0042, kind === 'bot' ? '#ff6b6b' : '#ffb27a');
+    label.position.y = 2.25;
+    g.add(label);
+    const barBg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.08), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.6 }));
+    const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.08), new THREE.MeshBasicMaterial({ color: 0xff3b3b }));
+    const armorBar = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.05), new THREE.MeshBasicMaterial({ color: 0x5aa8ff }));
+    const bars = new THREE.Group();
+    bars.add(barBg, bar, armorBar);
+    bar.position.z = 0.001; armorBar.position.set(0, 0.08, 0.001);
+    bars.position.y = 2.02;
+    g.add(bars);
+    Object.assign(g.userData, { label, bar, armorBar, bars });
+  }
+  scene.add(g);
+  const outfit = kind === 'bot' ? pick(['punk', 'swat'], 5) : kind === 'contact' ? pick(['farmer', 'worker', 'casual'], 5) : pick(PLAYER_OUTFITS, 5);
+  // Players' tactical gear in slate grey (the pack's near-black reads as a silhouette out here);
+  // the Rogues keep it black, with a red visor.
+  const tint = kind === 'bot' && outfit === 'swat' ? { Swat: 0x1c1b1f, Swat_Black: 0x0b0b0c, Visor: 0x8a0f0f } : outfit === 'swat' ? { Swat: 0x56606e, Swat_Black: 0x2b2e33 } : {};
+  attachPerson(g, outfit, {
+    skin: kind === 'bot' ? 0x6b5848 : pick(SKIN, 3), tint,
+    onReady: (rig) => {
+      const back = hangFrom(rig, 'Chest', g, [0, 0.95, 0]);
+      for (const sl of sling) { sl.position.y -= 0.95; back.add(sl); }
+      hangFrom(rig, 'UpperLegR', g, [-0.1, 0.9, 0]).add(holster);
+      g.remove(thigh);
+      g.userData.rig = rig;
+      if (g.userData.cloak != null && g.userData.cloak < 1) { const c = g.userData.cloak; g.userData.cloak = null; setCloak(g, c); }
+    },
+    onFail: () => { g.remove(thigh); buildBlockBody(g, kind, name, h); },
+  });
+  return g;
+}
+/** The old hand-built body: only if a person's model can't be loaded. Moves the gun, sling and
+ *  holster joints onto it. */
+function buildBlockBody(g, kind, name, h) {
+  const pick = (list, n) => list[(h >>> n) % list.length];
+  const keep = g.userData;
   const skin = cmat(kind === 'bot' ? 0x6b5848 : pick(SKIN, 3)), jacket = cmat(kind === 'bot' ? 0x2b2a2e : pick(JACKET, 7)), pants = cmat(kind === 'bot' ? 0x1f1f22 : pick(PANTS, 11));
   const vest = cmat(VEST[kind] || VEST.player), boots = cmat(0x2a221b), dark = cmat(0x1b1d20), gear = cmat(0x3b3a30);
   const part = (geo, mat, x, y, z, parent) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
@@ -873,31 +928,14 @@ function makeCharacter(kind, name) {
     return shoulder;
   };
   const arms = [arm(-1, -0.45, -0.05, -1.1), arm(1, -1.2, -0.75, -0.35)];
-  const gun = joint(-0.3, 0.4, 0.22, upper);   // the gunsmith-built weapon model goes in here: held at the right side, where the camera over your shoulder can see it
+  const gun = keep.gun; upper.add(gun); gun.position.set(-0.3, 0.4, 0.22); keep.gunHome = null;
   // Guns you carry but aren't holding: two main guns slung crossways on the back, the sidearm in a
   // holster on the right thigh.
-  const sling = [joint(-0.06, 0.4, -0.33, upper), joint(0.06, 0.4, -0.37, upper)];
-  for (const [i, sl] of sling.entries()) { sl.rotation.order = 'ZXY'; sl.rotation.set(-Math.PI / 2, 0, i ? -0.5 : 0.5); }
-  const holster = joint(-0.1, -0.12, 0.02, legs[1].thigh);
-  holster.rotation.x = Math.PI / 2;
+  const sling = keep.sling;
+  sling.forEach((sl, i) => { upper.add(sl); sl.position.set(i ? 0.06 : -0.06, 0.4, i ? -0.37 : -0.33); });
+  const holster = keep.holster; legs[1].thigh.add(holster); holster.position.set(-0.1, -0.12, 0.02);
   part(cbox(0.06, 0.16, 0.1), dark, -0.105, -0.16, 0.01, legs[1].thigh);   // the holster itself
-  g.userData = { hips, legs, upper, head, arms, gun, sling, holster, stowedKey: '', phase: 0, last: null, lastT: performance.now() };
-  if (kind !== 'self') {
-    const label = makeLabel(name, kind === 'contact' ? 0.006 : 0.0042, kind === 'bot' ? '#ff6b6b' : '#ffb27a');
-    label.position.y = 2.35;
-    g.add(label);
-    const barBg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.08), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.6 }));
-    const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.08), new THREE.MeshBasicMaterial({ color: 0xff3b3b }));
-    const armorBar = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.05), new THREE.MeshBasicMaterial({ color: 0x5aa8ff }));
-    const bars = new THREE.Group();
-    bars.add(barBg, bar, armorBar);
-    bar.position.z = 0.001; armorBar.position.set(0, 0.08, 0.001);
-    bars.position.y = 2.12;
-    g.add(bars);
-    Object.assign(g.userData, { label, bar, armorBar, bars });
-  }
-  scene.add(g);
-  return g;
+  Object.assign(keep, { hips, legs, upper, head, arms });
 }
 
 /** Show the guns a character carries but isn't holding ([{ slot, a, parts, paint }]). */
@@ -1067,14 +1105,40 @@ function updateCharacterMesh(g, c, dt) {
   // Pose: walk cycle from how fast the character is really moving, crouch, sitting in a boat.
   const u = g.userData, now = performance.now(), adt = Math.min(0.1, (now - u.lastT) / 1000) || 0.016;
   u.lastT = now;
-  gunPose(g, c, now, adt);
-  const speed = u.last ? Math.hypot(g.position.x - u.last.x, g.position.z - u.last.z) / adt : 0;
+  const dxm = u.last ? g.position.x - u.last.x : 0, dzm = u.last ? g.position.z - u.last.z : 0;
+  const speed = Math.hypot(dxm, dzm) / adt;
   u.last = { x: g.position.x, z: g.position.z };
   u.speed = (u.speed || 0) + (Math.min(8, speed) - (u.speed || 0)) * Math.min(1, adt * 10);
+  const seated = !!c.boat && !(onRide && BOATS[rv.data.type].stand), crouched = !!c.crouch && !seated;
+  if (u.rig) {
+    // Which way you're really moving, against the way you face: forward, back, or strafing.
+    const vk = Math.min(1, adt * 10), tooFar = speed > 25;   // a teleport isn't a step
+    u.vx = (u.vx || 0) + ((tooFar ? 0 : dxm / adt) - (u.vx || 0)) * vk; u.vz = (u.vz || 0) + ((tooFar ? 0 : dzm / adt) - (u.vz || 0)) * vk;
+    const yaw = g.rotation.y, still = c.boat || c.downed || c.prone || c.air;
+    const fwd = u.vx * Math.sin(yaw) + u.vz * Math.cos(yaw), side = u.vx * Math.cos(yaw) - u.vz * Math.sin(yaw);
+    const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming);
+    const armed = !!gunObj && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
+    u.gun.visible = armed;
+    const cd = camera.position.distanceTo(g.position), detail = cd < 40 ? 1 : cd < 110 ? 0.3 : 0.1;
+    const pitch = c.pitch || 0;
+    const fine = animatePerson(g, u.rig, { speed: still ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched, seated, armed, pitch, detail }, adt);
+    // The gun rides on the chest, turned with the aim; up to the eye when aiming down the sights.
+    u.aimK = (u.aimK || 0) + ((aimNow ? 1 : 0) - (u.aimK || 0)) * Math.min(1, adt * 12);
+    if (fine) chestAt(g, u.rig, u.aimPivot.position);
+    else u.aimPivot.position.set(0, 1.3 - 0.36 * (crouched ? 1 : 0), 0);
+    u.aimPivot.rotation.x = -Math.max(-1.1, Math.min(1.1, pitch));
+    u.gunHome = (u.gunHome || new THREE.Vector3()).set(-0.17 + 0.07 * u.aimK, 0.17 * u.aimK, 0.26 - 0.02 * u.aimK);
+    gunPose(g, c, now, adt);
+    if (fine && armed) {
+      const mag = u.rlEnd && now < u.rlEnd && gunObj.userData.mag ? gunObj.userData.mag.getWorldPosition(new THREE.Vector3()) : null;
+      const f = mag ? 1 - (u.rlEnd - now) / u.rlDur : 0;
+      handsOnGun(g, u.rig, gunObj, mag && f > 0.12 && f < 0.8 ? mag : null);
+    }
+  } else if (u.hips) {
+  gunPose(g, c, now, adt);
   const moving = Math.min(1, u.speed / 3) * (c.boat || c.downed ? 0 : 1);
   u.phase += adt * (4 + u.speed * 1.6) * (moving > 0.05 ? 1 : 0);
   const kp = Math.min(1, adt * 12), ease = (o, key, v) => { o[key] += (v - o[key]) * kp; };
-  const seated = !!c.boat && !(onRide && BOATS[rv.data.type].stand), crouched = !!c.crouch && !seated;
   ease(u.hips.position, 'y', seated ? 0.5 : crouched ? 0.62 : 0.95 + Math.abs(Math.sin(u.phase)) * 0.03 * moving);
   ease(u.upper.rotation, 'x', crouched ? 0.28 : seated ? 0.05 : 0.08 * moving);
   u.legs.forEach((l, i) => {
@@ -1084,6 +1148,7 @@ function updateCharacterMesh(g, c, dt) {
     ease(l.thigh.rotation, 'x', thigh);
     ease(l.knee.rotation, 'x', knee);
   });
+  }
   g.visible = !c.dead;
   // Downed: lying on the ground.
   g.rotation.order = 'YXZ';
@@ -1149,6 +1214,7 @@ function animateFlyBys(dt) {
   }
 }
 
+preloadPeople(['swat', 'punk']);
 const selfMesh = makeCharacter('self', '');
 selfMesh.visible = false;
 
@@ -4546,7 +4612,7 @@ function frame(now) {
   // Self mesh.
   if (state.reloadAt && (performance.now() - state.reloadAt > 6000 || !state.me || state.me.dead)) state.reloadAt = 0;
   const myRl = state.reloadAt ? Math.max(0, (weaponStats(state.me.inv[state.me.active])?.reloadMs || 2000) - (performance.now() - state.reloadAt)) : 0;
-  updateCharacterMesh(selfMesh, { rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
