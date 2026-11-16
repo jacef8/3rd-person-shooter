@@ -1437,6 +1437,7 @@ function drawMinimap() {
     let lx = X(r.x1 + dx * t), ly = Z(r.z1 + dz * t);
     const off = Math.hypot(lx - R, ly - R);
     if (off > R - 30) { lx = R + (lx - R) * (R - 30) / off; ly = R + (ly - R) * (R - 30) / off; }
+    ly = Math.max(ly, 44);   // (clear of the N at the top)
     if (placed.some((q) => Math.abs(q - ly) < 22)) ly += 24;
     placed.push(ly);
     const w = Math.min(176, g.measureText(name).width + 12);
@@ -1452,6 +1453,12 @@ function drawMinimap() {
   g.fillStyle = '#5aa8ff';
   g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 6); g.lineTo(-5, 6); g.closePath(); g.fill();
   g.restore();
+  // North is always straight up (the map never turns; your arrow does): a red N pointer on the rim.
+  g.fillStyle = '#161a22'; g.beginPath(); g.arc(R, 17, 13, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#ff4a3a'; g.beginPath(); g.moveTo(R, 0); g.lineTo(R + 6, 8); g.lineTo(R - 6, 8); g.closePath(); g.fill();
+  g.fillStyle = '#ffffff'; g.font = '800 16px "Archivo", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('N', R, 19);
+  g.textBaseline = 'alphabetic';
 }
 
 // ------------------------------------------------------------------ special sights: thermal, spotter, rangefinder, lens glint
