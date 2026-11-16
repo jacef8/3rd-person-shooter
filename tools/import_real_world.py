@@ -53,7 +53,7 @@ from shapely.ops import linemerge, substring
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUCKET = 'https://overturemaps-us-west-2.s3.amazonaws.com/'
 MAP_JSON = os.path.join(ROOT, 'shared', 'data', 'map-bristol.json')
-STEPS = ['rivers', 'highways', 'buildings', 'roads', 'elevation', 'landcover', 'infrastructure']
+STEPS = ['rivers', 'highways', 'buildings', 'roads', 'elevation', 'landcover', 'infrastructure', 'businesses']
 
 ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
 ap.add_argument('--release', default=None, help='Overture release, e.g. 2026-10-21.0 (default: the latest)')
@@ -862,6 +862,55 @@ def write_infrastructure():
     print(f'wrote {p} ({os.path.getsize(p) / 1e3:.0f} KB)')
 
 
+# ------------------------------------------------------------------ businesses
+BUSINESS_SKIP = re.compile(r'(church|religio|place_of_worship|mosque|synagogue|school|education|preschool|day_care|child_care|'
+                           r'college|university|cemetery|funeral|residen|apartment|^home_|structure_and_geography|'
+                           r'landmark|^park$|nature_reserve|lake|river|forest|mountain|island|beach|campground|boat|'
+                           r'post_office|historic_site)')
+
+
+def write_businesses():
+    """businesses.json: the real shops, gas stations, restaurants and other businesses with their real
+    names and where they are, so the game can put each one's sign on its building (decoration only:
+    it doesn't change the map). [lat, lon, category, name, brand or null, confidence]. Places that
+    aren't open-to-the-public businesses (churches, schools, homes, landmarks) are left out."""
+    inside = lambda lat, lon: BBOX[1] <= lat <= BBOX[3] and BBOX[0] <= lon <= BBOX[2]
+    pl = fetch('places', 'theme=places/type=place', ['id', 'geometry', 'names', 'basic_category', 'taxonomy', 'confidence', 'brand', 'operating_status']).to_pydict()
+    out, seen = [], set()
+    for i in range(len(pl['id'])):
+        cat = (pl['taxonomy'][i] or {}).get('primary') or pl['basic_category'][i] or ''
+        nm = ((pl['names'][i] or {}).get('primary') or '').strip()
+        conf = pl['confidence'][i] or 0
+        if not nm or not cat or conf < 0.5 or BUSINESS_SKIP.search(cat) or (pl['operating_status'][i] or 'open') != 'open':
+            continue
+        # Not people's own names (a practitioner listed under their name and credentials), not kiosks or ATMs.
+        if re.search(r',|\b(APRN|MSN|MD|DO|DDS|DMD|LCSW|LMHC|PA-C|NP|PhD|CPA|Esq)\b', nm) or re.search(r'kiosk|atm|familysearch|bitcoin', nm + ' ' + cat, re.I):
+            continue
+        g = wkb.loads(pl['geometry'][i])
+        if not inside(g.y, g.x):
+            continue
+        key = (nm.lower(), round(g.y, 3), round(g.x, 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        brand = ((pl['brand'][i] or {}).get('names') or {}).get('primary') if pl['brand'][i] else None
+        out.append([round(g.y, 6), round(g.x, 6), cat, nm, brand, round(conf, 2)])
+    # The same shop listed twice (a branch number, a different spelling): keep the surest one.
+    out.sort(key=lambda r: (-r[5], r[3]))
+    norm = lambda n: re.sub(r'[^a-z]', '', n.lower().split(' store')[0].split(' station')[0])[:10]
+    kept = []
+    for r in out:
+        if any(norm(q[3]) == norm(r[3]) and abs(q[0] - r[0]) * 110540 < 150 and abs(q[1] - r[1]) * 96000 < 150 for q in kept):
+            continue
+        kept.append(r)
+    out = kept
+    os.makedirs(args.out, exist_ok=True)
+    p = os.path.join(args.out, 'businesses.json')
+    with open(p, 'w') as fh:
+        json.dump({'source': f'Overture Maps Foundation, release {RELEASE}: places (CDLA Permissive 2.0). See ATTRIBUTION.md.', 'rows': out}, fh, separators=(',', ':'), ensure_ascii=False)
+    print(f'businesses: {len(out)}; wrote {p} ({os.path.getsize(p) / 1e3:.0f} KB)')
+
+
 # ------------------------------------------------------------------ output
 def write_json(name, rows):
     os.makedirs(args.out, exist_ok=True)
@@ -881,6 +930,7 @@ Made by `tools/import_real_world.py` from open data. Keep this file with the dat
 | `roads.json` | Roads, their names and route numbers | Overture Maps Foundation, release {release}; road data **© OpenStreetMap contributors** (ODbL 1.0). |
 | `landcover.bin.gz` | What covers the ground: woods, fields, pasture, town, marsh | **ESA WorldCover 10 m 2021 v200** © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0). |
 | `infrastructure.json` | Towers, water towers, substations, power lines, the solar farm, railways, landings and public places | Overture Maps Foundation, release {release}: infrastructure and transportation **© OpenStreetMap contributors** (ODbL 1.0); places from Overture's places data (CDLA Permissive 2.0). |
+| `businesses.json` | Real shops, gas stations, restaurants and other businesses, for the signs on their buildings (churches, schools and people's own names left out) | Overture Maps Foundation, release {release}: places (CDLA Permissive 2.0). |
 | `elevation.bin.gz` | Ground elevation, with rivers, lakes and ponds cut in | **USGS 3D Elevation Program** 1 m lidar DEM, FL Hurricane Michael 2020 survey (public domain); **AWS Terrain Tiles** (USGS 3DEP 1/3 arc-second) where the lidar has no value. Water outlines **© OpenStreetMap contributors** (ODbL 1.0) via Overture. |
 
 The river's course and the highway lines in `shared/data/map-bristol.json` also come from
@@ -912,6 +962,8 @@ if 'landcover' in ONLY:
     write_landcover()
 if 'infrastructure' in ONLY:
     write_infrastructure()
+if 'businesses' in ONLY:
+    write_businesses()
 os.makedirs(args.out, exist_ok=True)
 with open(os.path.join(args.out, 'ATTRIBUTION.md'), 'w') as fh:
     fh.write(ATTRIBUTION.format(release=RELEASE))

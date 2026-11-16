@@ -8,6 +8,7 @@ Made by `tools/import_real_world.py` from open data. Keep this file with the dat
 | `roads.json` | Roads, their names and route numbers | Overture Maps Foundation, release 2026-10-21.0; road data **© OpenStreetMap contributors** (ODbL 1.0). |
 | `landcover.bin.gz` | What covers the ground: woods, fields, pasture, town, marsh | **ESA WorldCover 10 m 2021 v200** © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0). |
 | `infrastructure.json` | Towers, water towers, substations, power lines, the solar farm, railways, landings and public places | Overture Maps Foundation, release 2026-10-21.0: infrastructure and transportation **© OpenStreetMap contributors** (ODbL 1.0); places from Overture's places data (CDLA Permissive 2.0). |
+| `businesses.json` | Real shops, gas stations, restaurants and other businesses, for the signs on their buildings (churches, schools and people's own names left out) | Overture Maps Foundation, release 2026-10-21.0: places (CDLA Permissive 2.0). |
 | `elevation.bin.gz` | Ground elevation, with rivers, lakes and ponds cut in | **USGS 3D Elevation Program** 1 m lidar DEM, FL Hurricane Michael 2020 survey (public domain); **AWS Terrain Tiles** (USGS 3DEP 1/3 arc-second) where the lidar has no value. Water outlines **© OpenStreetMap contributors** (ODbL 1.0) via Overture. |
 
 The river's course and the highway lines in `shared/data/map-bristol.json` also come from

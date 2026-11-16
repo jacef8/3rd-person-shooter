@@ -10,6 +10,7 @@ import {
 import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
+import { createTownDressing } from '/towns.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
@@ -153,9 +154,10 @@ async function loadRealData(info) {
     } catch { return undefined; }
   };
   const whole = async (name) => { try { const r = await fetch(`/data/real/${name}`); return r.ok ? await r.json() : undefined; } catch { return undefined; } };
-  const [structures, roads, elev, cover, infrastructure] = await Promise.all([info.structures ? get('structures.json') : undefined, info.roads ? get('roads.json') : undefined,
-    info.elevation ? elevation() : undefined, info.landcover ? landcover() : undefined, info.infrastructure ? whole('infrastructure.json') : undefined]);
-  return { structures, roads, elevation: elev, landcover: cover, infrastructure };
+  const [structures, roads, elev, cover, infrastructure, businesses] = await Promise.all([info.structures ? get('structures.json') : undefined, info.roads ? get('roads.json') : undefined,
+    info.elevation ? elevation() : undefined, info.landcover ? landcover() : undefined, info.infrastructure ? whole('infrastructure.json') : undefined,
+    get('businesses.json')]);   // (signs only: not part of the map, so it's fetched whatever the server says)
+  return { structures, roads, elevation: elev, landcover: cover, infrastructure, businesses };
 }
 
 /** A loaded tree or rock by its id (nature boxes sit in the grid near where they grow). */
@@ -170,6 +172,7 @@ function initWorld(m) {
   // One coarse pass over the whole county, shared by the far landscape and the map screen.
   const land = sampleLand(map, MOBILE ? 120 : 75);
   state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: MOBILE, land });
+  state.towns = createTownDressing(scene, map, m.realData?.businesses, ground);
   applyGfx();
   state.view.setOwnHouse(m.houseId);
   state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000, land);
@@ -4931,6 +4934,7 @@ function frame(now) {
   // Hide stash labels you're standing right under.
   for (const [id, v] of houseVis) { const h = state.map.houses[id]; v.label.visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; }
   state.view.update(state.x, state.z, state.boat ? Math.abs(state.boat.speed || 0) : state.me?.boat ? 12 : 0);
+  state.towns?.update(state.x, state.z);
   for (const g of state.contactMeshes) {
     g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
     // Name tags float at a fixed size: up close they'd fill the screen, so they hide within 7 m.
