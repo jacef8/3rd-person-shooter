@@ -14,6 +14,7 @@ import { createTownDressing } from '/towns.js';
 import { withCounty } from '/shared/county.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
+import { ACT_POSE, updateAction } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox } from '/mapview.js';
@@ -1107,11 +1108,16 @@ function updateCharacterMesh(g, c, dt) {
     const yaw = g.rotation.y, still = c.boat || c.downed || c.prone || c.air;
     const fwd = u.vx * Math.sin(yaw) + u.vz * Math.cos(yaw), side = u.vx * Math.cos(yaw) - u.vz * Math.sin(yaw);
     const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming) || now - (u.firedAt || 0) < 900;   // shooting brings the gun up to the shoulder, as aiming does
-    const armed = !!gunObj && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
+    // Busy with something that takes a while (a locker, a flag, a flare…): the gun goes away for the pose.
+    const act = c.act && !c.dead && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] ? c.act : null;
+    const kneel = act && ['pry', 'revive', 'cook'].includes(ACT_POSE[act]);
+    const armed = !!gunObj && !act && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
     u.gun.visible = armed;
     const cd = camera.position.distanceTo(g.position), detail = cd < 60 ? 1 : cd < 130 ? 0.3 : 0.1;
     const pitch = c.pitch || 0;
-    const fine = animatePerson(g, u.rig, { speed: still ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched, seated, armed, aiming: aimNow, pitch, detail }, adt);
+    const fine = animatePerson(g, u.rig, { speed: still || act ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched || !!kneel, seated, armed, aiming: aimNow && !act, pitch: act ? 0 : pitch, detail }, adt);
+    const acting = fine && updateAction(g, act, c.ap || 0, adt);
+    if (!fine && u.props) updateAction(g, null, 0, adt);
     // The gun rides on the chest, turned with the aim; up to the eye when aiming down the sights.
     u.aimK = (u.aimK || 0) + ((aimNow ? 1 : 0) - (u.aimK || 0)) * Math.min(1, adt * 12);
     if (fine) chestAt(g, u.rig, u.aimPivot.position);
@@ -1119,7 +1125,9 @@ function updateCharacterMesh(g, c, dt) {
     u.aimPivot.rotation.x = -Math.max(-1.1, Math.min(1.1, pitch));
     u.gunHome = (u.gunHome || new THREE.Vector3()).set(-0.17 + 0.07 * u.aimK, 0.17 * u.aimK, 0.26 - 0.02 * u.aimK);
     gunPose(g, c, now, adt);
-    if (fine && armed) {
+    if (acting) {
+      // (posed by updateAction)
+    } else if (fine && armed) {
       const mag = u.rlEnd && now < u.rlEnd && gunObj.userData.mag ? gunObj.userData.mag.getWorldPosition(new THREE.Vector3()) : null;
       const f = mag ? 1 - (u.rlEnd - now) / u.rlDur : 0;
       handsOnGun(g, u.rig, gunObj, mag && f > 0.12 && f < 0.8 ? mag : null);
@@ -1941,6 +1949,9 @@ function handle(m) {
       state.view.setOwnHouse(state.houseId);
       toast(m.kind === 'claim' ? `Stash house claimed. Open the crate (${glyph('E')}) to reach your stash, gunsmith and upgrades.` : 'Deployed — 10 seconds of spawn protection.');
       lockPointer();
+      break;
+    case 'gesture':
+      state.gesture = { kind: m.kind, start: performance.now(), until: performance.now() + m.ms };
       break;
     case 'hotzone':
       state.hotZone = m.zone;
@@ -4945,7 +4956,10 @@ function frame(now) {
   // Self mesh.
   if (state.reloadAt && (performance.now() - state.reloadAt > 6000 || !state.me || state.me.dead)) state.reloadAt = 0;
   const myRl = state.reloadAt ? Math.max(0, (weaponStats(state.me.inv[state.me.active])?.reloadMs || 2000) - (performance.now() - state.reloadAt)) : 0;
-  updateCharacterMesh(selfMesh, { rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  const nowP = performance.now();
+  const myAct = state.hack ? { act: state.hack.kind, ap: Math.min(1, (nowP - state.hack.start) / state.hack.total) }
+    : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) } : {};
+  updateCharacterMesh(selfMesh, { ...myAct, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);

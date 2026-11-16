@@ -1176,6 +1176,7 @@ function callHotDrop(p, flare) {
   if (hotDrops.has(p.token) || taxis.has(p.token)) return toast(p, 'A helicopter is already on its way to you');
   p.inv.pack.splice(p.inv.pack.indexOf(flare), 1);
   hotDrops.set(p.token, { arrivesAt: now + HOTDROP_WAIT_MS, x: p.x, z: p.z, flare });
+  gesture(p, 'flare', 2200);
   toast(p, `🚁 Hot-drop flare lit. The helicopter lands in ${Math.round(HOTDROP_WAIT_MS / 1000)}s: stay close. Crew beside you ride along. It drops you at the edge of ${hotZone.name}.`);
   dirty(p);
 }
@@ -2985,6 +2986,14 @@ function startHack(p, kind, id, extra = {}) {
     if (o !== p && !sameSquad(o, p) && Math.hypot(o.x - src.x, o.z - src.z) < 80) send(o.ws, { t: 'alert', x: src.x, z: src.z, text });
   }
 }
+/** A short one-off action others see (a flare held up). */
+function gesture(p, kind, ms) { p.gesture = { kind, start: Date.now(), until: Date.now() + ms }; send(p.ws, { t: 'gesture', kind, ms }); }
+/** What a player is busy with, for the snapshot: { act: kind, ap: how far along }. */
+function actionView(p, now) {
+  if (p.hack && !p.dead) return { act: p.hack.kind, ap: Math.round(Math.min(1, Math.max(0, (now - p.hack.start) / Math.max(1, p.hack.until - p.hack.start))) * 100) / 100 };
+  if (p.gesture && p.gesture.until > now) return { act: p.gesture.kind, ap: Math.round((now - p.gesture.start) / (p.gesture.until - p.gesture.start) * 100) / 100 };
+  return {};
+}
 function cancelHack(p, reason) { if (!p.hack) return; p.hack = null; send(p.ws, { t: 'hack', cancel: true, reason }); }
 
 const TEAM_HACK = ACTIVITIES.teamHack;
@@ -4767,6 +4776,7 @@ function callExtraction(p, flare = null) {
   const hold = flare ? Math.min(FLARE.holdMs, EXTRACT_HOLD_MS) : EXTRACT_HOLD_MS, alertRange = flare ? FLARE.alertRange : EXTRACT.alertRange;
   const id = uid('x');
   extractions.set(id, { id, x: site.x, z: site.z, site: site.name, owner: p.token, ownerName: p.name, arrivesAt: now + hold, flare: !!flare });
+  gesture(p, 'flare', 2200);   // the flare goes up in your hand
   toast(p, flare
     ? `🔴 Flare lit. The helicopter lands here in ${Math.round(hold / 1000)}s and waits ${Math.round(FLARE_WAIT_MS / 1000)}s: be within ${feet(EXTRACT.radius)} of the flare then (go where you like till then). Crew beside you ride along.`
     : `🔴 Flare up at ${site.name}. Helicopter in ${Math.round(hold / 1000)}s — stay within ${feet(EXTRACT.radius)} of the flare. Squadmates in the zone ride along.`);
@@ -5168,6 +5178,7 @@ wss.on('connection', (ws) => {
         // Test-only helpers (teleport / die), never enabled unless the server is started with ALLOW_DEV=1.
         if (process.env.ALLOW_DEV !== '1') return;
         if (msg.kill) return !p.dead && killPlayer(p, null);
+        if (typeof msg.gesture === 'string' && msg.gesture.length < 20) return gesture(p, msg.gesture, Math.min(60000, Number(msg.ms) || 3000));
         if (Number.isFinite(msg.damage)) return applyDamage(p, msg.damage, null, false);
         if (Array.isArray(msg.spawnBots)) { for (const q of msg.spawnBots.slice(0, 6)) if (Number.isFinite(q.x) && Number.isFinite(q.z)) spawnBot(q.x, q.z, 'ambient', { hp: q.hp || 140, maxHp: q.hp || 140 }); return; }
         if (msg.event) { const e = startEvent(msg.event); if (e && Number.isFinite(msg.x)) { e.x = msg.x; e.z = msg.z; } return; }
@@ -5301,6 +5312,7 @@ const loop = setInterval(() => {
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),
       rl: p.reloadUntil > now ? Math.round(p.reloadUntil - now) : undefined,   // reloading: ms left
+      ...actionView(p, now),   // doing something that takes a while (client/actions.js poses it)
     }]));
     for (const v of views.values()) Object.defineProperty(v, 'json', { value: JSON.stringify(v) });   // not enumerable: never encoded twice
     for (const r of players.values()) if (r.ws.readyState === 1) r.ws.send(snapshotFor(r, views, now));

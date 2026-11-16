@@ -256,3 +256,39 @@ export function handsOnBars(holder, rig, R, L) {
   ik2(AR.up, AR.lo, AR.tip, R, R.clone().addScaledVector(right, 0.7).addScaledVector(down, 0.8).addScaledVector(back, 0.4));
   ik2(AL.up, AL.lo, AL.tip, L, L.clone().addScaledVector(right, -0.7).addScaledVector(down, 0.8).addScaledVector(back, 0.4));
 }
+
+/**
+ * Doing something with your hands instead of holding the gun: kneeling at a locker, driving in a claim
+ * flag, a flare held up, working a tablet, reviving someone, hammering, fishing. `pose` (actions.js):
+ * { kneel, lean, R(t, p), L(t, p) } where R and L give each hand's target in the holder's own space
+ * (+Z ahead, +X to the left, metres above the soles), t is seconds into it and p how far along (0 … 1).
+ * Call after animatePerson (with crouch set for a kneeling pose). Returns the two hands' world points.
+ */
+export function poseAction(holder, rig, pose, t, p) {
+  const { B } = rig;
+  holder.updateMatrixWorld(true);
+  const right = V().set(-1, 0, 0).transformDirection(holder.matrixWorld), fwd = V().set(0, 0, 1).transformDirection(holder.matrixWorld);
+  const down = V().set(0, -1, 0);
+  const at = (x, y, z) => holder.localToWorld(V().set(x, y, z));
+  if (pose.kneel) {
+    // Down on the right knee: the hips lower, the right shin flat behind, the left foot planted ahead.
+    const hips = B.Hips;
+    hips.getWorldPosition(_a);
+    const want = holder.localToWorld(V().set(0, 0.62, 0.02));
+    _b.copy(_a); _b.y = Math.min(_a.y, want.y);
+    hips.parent.worldToLocal(_b); hips.parent.worldToLocal(_a);
+    hips.position.add(_b.sub(_a));
+    hips.updateMatrixWorld(true);
+    const [L, R] = rig.legs;
+    ik2(R.up, R.lo, R.tip, at(-0.11, 0.1, -0.42), at(-0.12, 0.05, 1.5));     // right knee on the ground
+    ik2(L.up, L.lo, L.tip, at(0.13, 0.08, 0.32), at(0.14, 1.2, 1.6));        // left knee up
+  }
+  if (pose.lean) for (const [bone, share] of [[B.Spine, 0.35], [B.Spine1, 0.35], [B.Spine2, 0.3]]) { _q.setFromAxisAngle(right, -pose.lean * share); turnWorld(bone, _q); }
+  if (pose.look) { _q.setFromAxisAngle(right, -pose.look); turnWorld(B.Neck, _q); }
+  const [AR, AL] = rig.arms;
+  const r = pose.R(t, p), l = pose.L(t, p);
+  const rw = at(...r), lw = at(...l);
+  ik2(AR.up, AR.lo, AR.tip, rw, rw.clone().addScaledVector(right, 0.7).addScaledVector(down, pose.elbowUp ? -0.6 : 0.8).addScaledVector(fwd, -0.3));
+  ik2(AL.up, AL.lo, AL.tip, lw, lw.clone().addScaledVector(right, -0.7).addScaledVector(down, pose.elbowUp ? -0.2 : 0.8).addScaledVector(fwd, -0.3));
+  return [AR.wrist.getWorldPosition(V()), AL.wrist.getWorldPosition(V())];
+}
