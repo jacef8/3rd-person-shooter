@@ -232,6 +232,30 @@ function initWorld(m) {
   }
 }
 
+// The back door of an RV, bus, box truck or houseboat someone lives in: a panel flush with the back,
+// in the vehicle's own paint, with a window and a handle (the lockable door the game breaks and hacks).
+const DOOR_DAMAGED = new THREE.Color(0x2a1a14);
+const HOME_PAINT = { rv: 0xece6d6, bus: 0xf2b829, truck: 0xe8e8ea, houseboat: 0xc4d2dc };
+function vehicleDoor(def, d) {
+  const g = new THREE.Group(), alongX = !!def.alongX;
+  const w = 1.4, hgt = Math.min(2.1, d.h - 0.15);
+  const paint = new THREE.Color(HOME_PAINT[def.vtype] || 0xcccccc);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, 0.06), new THREE.MeshStandardMaterial({ color: paint, roughness: 0.6, metalness: 0.15 }));
+  const win = new THREE.Mesh(new THREE.BoxGeometry(w * 0.6, hgt * 0.26, 0.02), new THREE.MeshStandardMaterial({ color: 0x24323d, roughness: 0.15, metalness: 0.4 }));
+  win.position.set(0, hgt * 0.22, 0.04);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.05, 0.05), new THREE.MeshStandardMaterial({ color: 0xc8c8c8, metalness: 0.8, roughness: 0.3 }));
+  handle.position.set(w * 0.32, -hgt * 0.05, 0.05);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.1, hgt + 0.1, 0.04), new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.8 }));
+  frame.position.z = -0.03;
+  g.add(frame, panel, win, handle);
+  // Flush against the vehicle's back (the near face of the lock's box), facing out.
+  const y = d.y0 + 0.55 + hgt / 2;
+  if (alongX) { g.position.set(d.minX + 0.03, y, (d.minZ + d.maxZ) / 2); g.rotation.y = Math.PI / 2; }
+  else { g.position.set((d.minX + d.maxX) / 2, y, d.minZ + 0.03); }
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  g.userData = { panel, paint };
+  return g;
+}
 function syncHouses(list) {
   const seen = new Set();
   for (const h of list) {
@@ -241,9 +265,13 @@ function syncHouses(list) {
     const def = state.map.houses[h.id];
     if (!v) {
       const d = def.door;
-      const door = new THREE.Mesh(new THREE.BoxGeometry(d.maxX - d.minX, d.h, d.maxZ - d.minZ), doorMat.clone());
-      door.position.set((d.minX + d.maxX) / 2, d.y0 + d.h / 2, (d.minZ + d.maxZ) / 2);
-      door.castShadow = true;
+      let door;
+      if (def.kind === 'vehicle') door = vehicleDoor(def, d);
+      else {
+        door = new THREE.Mesh(new THREE.BoxGeometry(d.maxX - d.minX, d.h, d.maxZ - d.minZ), doorMat.clone());
+        door.position.set((d.minX + d.maxX) / 2, d.y0 + d.h / 2, (d.minZ + d.maxZ) / 2);
+        door.castShadow = true;
+      }
       const label = makeLabel('', 0.012);
       label.position.set(def.x, ground(def.x, def.z) + (def.kind === 'vehicle' ? 4.6 : def.kind === 'room' ? 6 : 5.2), def.z);
       scene.add(door, label);
@@ -251,13 +279,14 @@ function syncHouses(list) {
     }
     const f = h.max ? h.hp / h.max : 0;
     v.door.visible = h.hp > 0 && !h.open;
-    v.door.material.color.setRGB(0.35 + 0.5 * (1 - f), 0.37 * f + 0.05, 0.4 * f + 0.05 + h.upg.door * 0.08);
+    if (v.door.userData.paint) v.door.userData.panel.material.color.copy(v.door.userData.paint).lerp(DOOR_DAMAGED, 0.85 * (1 - f));   // a vehicle's own back door, scorched as it's beaten in
+    else v.door.material.color.setRGB(0.35 + 0.5 * (1 - f), 0.37 * f + 0.05, 0.4 * f + 0.05 + h.upg.door * 0.08);
     const own = h.id === state.houseId;
     const status = h.hp <= 0 ? 'BREACHED' : h.open ? 'open' : `${Math.round(f * 100)}%`;
     const kn = homeKindName(def);
     setLabel(v.label, h.owner ? `${own ? 'YOUR ' + kn.toUpperCase() : `${h.owner}'s ${kn.toLowerCase()}`} · Lv${h.hl} · ${status}` : `Unclaimed ${kn.toLowerCase()} · plant a claim marker`, own ? '#7dff9a' : !h.owner ? '#c9c9c9' : h.hp <= 0 ? '#ff6b6b' : '#ffd29a');
   }
-  for (const [id, v] of houseVis) if (!seen.has(id)) { scene.remove(v.door, v.label); v.door.geometry.dispose(); houseVis.delete(id); state.houseState.delete(id); }
+  for (const [id, v] of houseVis) if (!seen.has(id)) { scene.remove(v.door, v.label); v.door.traverse((o) => o.geometry?.dispose()); houseVis.delete(id); state.houseState.delete(id); }
   state.doorSolids = list.filter((h) => h.hp > 0 && !h.open).map((h) => ({ ...state.map.houses[h.id].door, type: 'door' }));
 }
 
