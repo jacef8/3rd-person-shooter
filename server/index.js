@@ -52,7 +52,7 @@ const WORLD_NAME = process.env.WORLD_NAME || 'Bristol';
 const TICK_HZ = 20;
 const SNAPSHOT_EVERY = 2;              // 10 Hz
 const INTEREST = 320;                  // metres: what each client is told about
-const AMBIENT_BOTS = Number(process.env.BOTS ?? 5);   // roaming rogues kept around each active player
+const AMBIENT_BOTS = Number(process.env.BOTS ?? 12);   // roaming rogues kept around each active player (in squads)
 const BOT_ACTIVE_RANGE = 450;
 // Testing kit (on while the game is in development; set DEV_KIT=0 to turn it off): everyone gets one
 // of every gun and armor, flares, charges, tools, top level (every scope, part, paint and grenade
@@ -2616,8 +2616,12 @@ function throwFrag(p, msg) {
   p.parts -= FRAG.costParts;
   p.fragReadyAt = now + FRAG.cooldownMs;
   breakCamo(p, 2000); p.protectedUntil = 0;
-  fragBlasts.push({ id: uid('fg'), x, z, at: now + FRAG.fuseMs, owner: p.token, ownerName: p.name });
-  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'nadeThrow', kind: 'frag', by: p.id, x, z, from: [p.x, gy(p) + 1.5, p.z], at: now + Math.min(900, FRAG.fuseMs), boomAt: now + FRAG.fuseMs });
+  // Cooked: the fuse has been burning since the pin came out. Held too long, it goes off in your hand.
+  const cook = Math.max(0, Math.min(FRAG.fuseMs, Number(msg.cook) || 0)), left = FRAG.fuseMs - cook;
+  if (left <= (FRAG.cookMinMs || 150)) { x = p.x; z = p.z; }
+  const flight = left <= (FRAG.cookMinMs || 150) ? 0 : Math.min(left, Math.max(250, Math.min(1200, d * 32)));
+  fragBlasts.push({ id: uid('fg'), x, z, at: now + left, owner: p.token, ownerName: p.name });
+  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'nadeThrow', kind: 'frag', by: p.id, x, z, from: [p.x, gy(p) + 1.5, p.z], at: now + flight, boomAt: now + left });
   dirty(p);
 }
 /** Anyone throwing a sensor: everyone nearby sees it fly. */
@@ -3359,13 +3363,25 @@ function manageAmbientBots() {
     let near = 0;
     for (const b of bots.values()) if (b.kind === 'ambient' && dist2(p, b) < 300 * 300) near++;
     if (near >= AMBIENT_BOTS) continue;
-    for (let tries = 0; tries < 25; tries++) {
-      const sp = map.lootSpawns[Math.floor(Math.random() * map.lootSpawns.length)];
-      const d = Math.hypot(sp.x - p.x, sp.z - p.z);
-      if (d < 110 || d > 280) continue;
-      if (alive.some((o) => Math.hypot(o.x - sp.x, o.z - sp.z) < 90)) continue;
-      spawnBot(sp.x + 2, sp.z + 2);
-      break;
+    // A squad of two to four turns up out of sight, 90-260 m off: by a building worth looting, or
+    // just out in the country. About half are on patrol toward where you are now, so the fight comes
+    // to you; the rest hold their ground.
+    let at = null;
+    for (let tries = 0; tries < 30 && !at; tries++) {
+      let x, z;
+      if (tries < 15) { const sp = map.lootSpawns[Math.floor(Math.random() * map.lootSpawns.length)]; x = sp.x + 2; z = sp.z + 2; }
+      else { const a = Math.random() * Math.PI * 2, r = 90 + Math.random() * 170; x = p.x + Math.cos(a) * r; z = p.z + Math.sin(a) * r; }
+      const d = Math.hypot(x - p.x, z - p.z);
+      if (d < 90 || d > 260 || terrain.height(x, z) < 0.3 || inCamp(x, z)) continue;
+      if (alive.some((o) => Math.hypot(o.x - x, o.z - z) < 80)) continue;
+      at = { x, z };
+    }
+    if (!at) continue;
+    const size = Math.min(AMBIENT_BOTS - near, 2 + Math.floor(Math.random() * 3));
+    const hunt = Math.random() < 0.5 ? { x: p.x + (Math.random() - 0.5) * 60, z: p.z + (Math.random() - 0.5) * 60 } : null;
+    for (let k = 0; k < size; k++) {
+      const b = spawnBot(at.x + (Math.random() - 0.5) * 8, at.z + (Math.random() - 0.5) * 8);
+      if (hunt) b.patrol = { x: hunt.x + (Math.random() - 0.5) * 8, z: hunt.z + (Math.random() - 0.5) * 8 };
     }
   }
 }
@@ -3444,6 +3460,12 @@ function updateBots(dt, now) {
       b.crouch = false;
       if (d > 2) { b.yaw = Math.atan2(dx, dz); mx = dx / d; mz = dz / d; speed = BOT_AI.runSpeed; }
       else b.aggro.until = Math.min(b.aggro.until, now + 3000);   // nobody here: look about a moment, then give up
+    } else if (b.patrol) {
+      // On patrol: walk to the spot, rifle up; once there it's their new ground.
+      const dx = b.patrol.x - b.x, dz = b.patrol.z - b.z, d = Math.hypot(dx, dz);
+      if (d < 3) { b.homeX = b.patrol.x; b.homeZ = b.patrol.z; b.patrol = null; }
+      else { b.yaw = Math.atan2(dx, dz); mx = dx / d; mz = dz / d; speed = BOT_AI.walkSpeed; }
+      b.crouch = false;
     } else {
       const leash = b.kind === 'ambient' ? 30 : b.kind === 'guard' ? HZ.guardLeash : 12;
       if (!b.wander || Math.hypot(b.wander.x - b.x, b.wander.z - b.z) < 1 || Math.random() < 0.003) {

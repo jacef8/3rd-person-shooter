@@ -863,3 +863,8 @@ body.touchui #inventory { height: 96vh; }
 }
 #youCol > h2:first-child, #packCol > h2:first-child { display: none; }
 @media (max-height: 520px) { .itile { min-height: 80px; } }
+#reconnect { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; padding: 8px 16px; border-radius: 999px; background: rgba(10, 12, 16, 0.85); color: #ffc53d; font: 700 15px/1.2 var(--font-text); pointer-events: none; }
+#reconnect[hidden] { display: none; }
+#nadecook { position: fixed; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); z-index: 6; padding: 4px 12px; border-radius: 999px; background: rgba(10, 12, 16, 0.75); color: #ffd23a; font: 800 18px/1.2 var(--font-text); font-variant-numeric: tabular-nums; pointer-events: none; }
+#nadecook.hot { color: #ff4a3a; }
+#nadecook[hidden] { display: none; }

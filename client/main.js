@@ -1626,10 +1626,18 @@ function connect(name, world = 1, ticket = null) {
   state.worldId = world;
   ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, token: localStorage.getItem('dz_token'), ticket }));
   ws.onclose = (e) => {
+    if (state.ws !== ws) return;
     joinStatus(null);
-    toast(e.reason || 'Disconnected from the world');
-    // Back to the lobby (a fresh page load keeps things simple after a session).
-    setTimeout(() => location.replace('/'), 1500);
+    // Signed in somewhere else, or never got in: back to the lobby. Otherwise the server restarted
+    // (an update) or the signal dropped: keep the world on screen and get back in by ourselves.
+    if (e.code === 4000 || !state.map || (state.reconnects || 0) > 40) {
+      toast(e.reason || 'Disconnected from the world');
+      setTimeout(() => location.replace('/'), 1500);
+      return;
+    }
+    state.reconnects = (state.reconnects || 0) + 1;
+    $('reconnect').hidden = false;
+    setTimeout(() => connect(name, world), Math.min(4000, 700 * state.reconnects));
   };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
@@ -1677,6 +1685,7 @@ function handle(m) {
       openMapScreen('taxi');
       return;
     case 'welcome':
+      if (state.reconnects) { state.reconnects = 0; $('reconnect').hidden = true; toast('Back in'); }
       state.worldId = m.world; loadWaypoint();
       localStorage.setItem('dz_token', m.token);
       state.myName = lobby.account?.name || $('name').value.trim() || 'Agent';
@@ -3234,7 +3243,7 @@ function doAction(a) {
     case 'padA': if (state.promptText) send({ t: 'interact' }); else jump(); break;   // controller A: use if there's something to use, else jump
     case 'interact': send({ t: 'interact' }); break;
     case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
-    case 'sensor': { const p = aimPoint(), g = state.grenade || 'frag'; send({ t: g, x: p.x, z: p.z }); break; }
+    case 'sensor': toggleNadeAim(); break;
     case 'switchGrenade':
       state.grenade = { frag: 'sensor', sensor: 'stun', stun: 'frag' }[state.grenade || 'frag'];
       toast(`Grenade: ${{ frag: 'Frag grenade', sensor: 'Sensor grenade', stun: 'Stun grenade' }[state.grenade]}`);
@@ -3268,7 +3277,7 @@ $('name').value = localStorage.getItem('dz_name') || '';
     hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<span class="more"><br />'
       + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm) · <b>L3</b> sprint<br />'
       + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
-      + 'The two small buttons: <b>⧉</b> (left) bag, hold to accept an invite · <b>☰</b> (right) map, hold for the crew panel</span>';
+      + 'The two small buttons: <b>⧉</b> (left) bag (Crew & settings are in it), hold to accept an invite · <b>☰</b> (right) map · <b>Ⓑ</b> always goes back</span>';
   }
   if (MOBILE) document.body.classList.add('mobile');
 }
@@ -3403,7 +3412,89 @@ function autoFireNow(me) {
   const ws = weaponStats(me.inv[me.active]);
   return !!(ws && state.aimFoe && state.aimTargetId && state.aimDist <= ws.range);
 }
+// ------------------------------------------------------------------ grenades: aim, cook, throw
+// NADE gets one out: its arc and where it'll land are drawn as you aim (look up to throw further,
+// down for shorter). FIRE pulls the pin: a frag's fuse burns from then, so hold to cook it and let go
+// to throw; hold it too long and it goes off in your hand. NADE again puts it away.
+const NADE_RANGE = { frag: COMBAT_RULES.frag.throwRange, sensor: 30, stun: 30 };
+const NADE_RING = { frag: COMBAT_RULES.frag.playerRadius, sensor: 22, stun: 9 };
+const NADE_COL = { frag: 0xffd23a, sensor: 0xff9b21, stun: 0xe8f2ff };
+const nadeFx = (() => {
+  // The path as a string of bright beads (a 1-pixel line is lost on a phone), and a ring where it lands.
+  const N = 90;
+  const line = new THREE.InstancedMesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffd23a, depthTest: false, transparent: true, opacity: 0.95 }), N);
+  line.count = 0; line.frustumCulled = false;
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 48), new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthTest: false }));
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.4, 20), new THREE.MeshBasicMaterial({ color: 0xffd23a, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthTest: false }));
+  ring.rotation.x = dot.rotation.x = -Math.PI / 2;
+  line.renderOrder = ring.renderOrder = dot.renderOrder = 6;
+  for (const o of [line, ring, dot]) { o.visible = false; scene.add(o); }
+  return { line, ring, dot, N };
+})();
+function toggleNadeAim() {
+  const me = state.me;
+  if (state.nadeAim) return putNadeAway();
+  if (!me || me.dead || me.downed || me.boat || state.air) return;
+  state.nadeAim = { kind: state.grenade || 'frag', cookAt: 0 };
+  state.firedThisPress = true;   // a trigger already held doesn't pull the pin by itself
+  if (!localStorage.getItem('dz_tip_nade')) { localStorage.setItem('dz_tip_nade', '1'); toast('Grenade out: aim with the camera (up = further) · hold FIRE to cook, let go to throw · NADE again to put it away'); }
+}
+function putNadeAway() {
+  state.nadeAim = null;
+  for (const o of Object.values(nadeFx)) o.visible = false;
+  $('nadecook').hidden = true;
+}
+/** Where a throw at the current aim goes: the path (points) and where it comes down. */
+function nadeArc(kind) {
+  const [sx, sy, sz] = muzzlePoint();
+  const pitch = Math.max(-0.45, Math.min(1.15, (touch.freeLook ? touch.freeLook.pitch : state.pitch) + 0.3));
+  const v = Math.sqrt(9.8 * NADE_RANGE[kind]), fx = Math.sin(state.yaw), fz = Math.cos(state.yaw);
+  const p = new THREE.Vector3(sx, sy, sz), vel = new THREE.Vector3(fx * v * Math.cos(pitch), v * Math.sin(pitch), fz * v * Math.cos(pitch));
+  const pts = [p.clone()], dt = 0.03;
+  for (let t = 0; t < 5; t += dt) {
+    const n = p.clone().addScaledVector(vel, dt);
+    vel.y -= 9.8 * dt;
+    const step = n.clone().sub(p), len = step.length();
+    const hit = rayAgainstBoxes(p.x, p.y, p.z, step.x / len, step.y / len, step.z / len, solidsNear(p.x, p.z, len + 2), len);
+    if (hit.t < len) { p.addScaledVector(step, hit.t / len); pts.push(p.clone()); break; }
+    const g = ground(n.x, n.z);
+    if (n.y <= g) { const k = (p.y - ground(p.x, p.z)) / Math.max(1e-3, (p.y - ground(p.x, p.z)) - (n.y - g)); p.lerp(n, Math.max(0, Math.min(1, k))); pts.push(p.clone()); break; }
+    p.copy(n); pts.push(p.clone());
+  }
+  return { pts, land: p };
+}
+function updateNadeAim(now) {
+  const a = state.nadeAim, me = state.me;
+  if (!me || me.dead || me.downed || me.boat || state.air || state.invOpen) return putNadeAway();
+  if (!a.cookAt && a.kind !== (state.grenade || 'frag')) a.kind = state.grenade || 'frag';
+  const arc = nadeArc(a.kind), col = NADE_COL[a.kind];
+  const { line, ring, dot } = nadeFx;
+  const bead = new THREE.Matrix4();
+  let nb = 0;
+  for (let i = 2; i < arc.pts.length && nb < nadeFx.N; i += 2) { const q = arc.pts[i]; line.setMatrixAt(nb++, bead.makeTranslation(q.x, q.y, q.z)); }
+  line.count = nb; line.instanceMatrix.needsUpdate = true; line.material.color.setHex(col);
+  const gy = ground(arc.land.x, arc.land.z) + 0.08, r = NADE_RING[a.kind];
+  ring.position.set(arc.land.x, Math.max(gy, arc.land.y) + 0.02, arc.land.z); ring.scale.setScalar(r); ring.material.color.setHex(col);
+  dot.position.copy(ring.position); dot.material.color.setHex(col);
+  line.visible = ring.visible = dot.visible = true;
+  // FIRE: the pin comes out on the press; a frag cooks while it's held; letting go throws.
+  const held = state.mouseDown && !state.firedThisPress;
+  if (!state.mouseDown) state.firedThisPress = false;
+  if (held && !a.cookAt) { a.cookAt = now; if (a.kind === 'frag') sfx.empty(); }
+  const cookEl = $('nadecook');
+  if (a.cookAt && a.kind === 'frag') {
+    const fuse = COMBAT_RULES.frag.fuseMs, cooked = now - a.cookAt, left = fuse - cooked;
+    cookEl.hidden = false; cookEl.textContent = `💣 ${Math.max(0, left / 1000).toFixed(1)}`; cookEl.classList.toggle('hot', left < 1200);
+    if (left <= 0) { send({ t: 'frag', x: state.x, z: state.z, cook: fuse }); toast('💥 Held it too long!'); putNadeAway(); state.firedThisPress = true; return; }
+  } else cookEl.hidden = true;
+  if (a.cookAt && !state.mouseDown) {
+    send({ t: a.kind, x: arc.land.x, z: arc.land.z, cook: a.kind === 'frag' ? now - a.cookAt : 0 });
+    putNadeAway();
+  }
+}
+
 function tryFire(now) {
+  if (state.nadeAim) return;
   const me = state.me;
   if (!me || me.dead || state.invOpen) return;
   const w = me.inv[me.active];
@@ -3845,7 +3936,7 @@ const PAD_ACTIONS = {
   [BTN.R3]: 'camo', [BTN.UP]: 'heal', [BTN.DOWN]: 'ping', [BTN.LEFT]: 'rally', [BTN.RIGHT]: 'build',
   [BTN.VIEW]: 'inventory', [BTN.MENU]: 'map',
 };
-const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: 'hold ☰', M: '☰', X: '▶', LMB: 'RT', Tab: '⧉' };
+const GLYPHS = { E: 'A', R: 'X', Q: 'Y', G: 'LB', F: 'RB', V: 'R3', T: '◀', B: '▼', H: '▲', P: '⧉ → Crew', M: '☰', X: '▶', LMB: 'RT', Tab: '⧉' };
 const pad = { prev: [], moveX: 0, moveY: 0, sprint: false, navAt: 0, settings: { lookSpeed: 2.6, invertY: false } };
 try { Object.assign(pad.settings, JSON.parse(localStorage.getItem('dz_pad') || '{}')); } catch { /* keep the defaults */ }
 /** Look speed and up/down direction for the controller's right stick (in the crew panel). */
@@ -4161,7 +4252,10 @@ function pollPad(dt, now) {
         setTimeout(() => { const p = topPanel(); if (!p) return; const l = focusables(p); if (l.length && !l.includes(document.activeElement)) { if (pad.mark?.panel === p.id) regainFocus(p); else padFocus(l[Math.min(idx, l.length - 1)]); } }, 150);
       } else if (!el || !panel.contains(el)) moveFocus(panel, 0, 1);
     }
-    if (just(BTN.B)) padBack();
+    // A press that lands in a window belongs to the window: its release (or hold) mustn't reach the game
+    // as a crouch, prone or map once the window has closed.
+    if (just(BTN.B)) { pad.bEat = true; padBack(); }
+    if (just(BTN.MENU)) pad.menuEat = true;
     if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
     if (viewTap && !['login', 'mapscreen', 'osk', 'tradepanel'].includes(panel.id)) doAction('inventory');
     if (just(BTN.MENU) && panel.id === 'mapscreen') doAction('map');
@@ -4194,15 +4288,14 @@ function pollPad(dt, now) {
     for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B].includes(Number(i)) && just(Number(i))) doAction(action);
     // Ⓑ: tap to crouch, hold to go prone (while downed, Ⓑ does nothing).
     const bb = b(BTN.B);
-    if (bb && !pad.prev[BTN.B]) { pad.bAt = now; pad.bHeld = false; }
-    if (bb && !pad.bHeld && now - pad.bAt > 400) { pad.bHeld = true; doAction('prone'); }
-    if (!bb && pad.prev[BTN.B] && !pad.bHeld) doAction(now - pad.bAt > 400 ? 'prone' : 'crouch');   // judged by how long it was down, even on a slow frame
+    if (bb && !pad.prev[BTN.B] && !pad.bEat) { pad.bAt = now; pad.bHeld = false; }
+    if (bb && !pad.bEat && !pad.bHeld && now - pad.bAt > 400) { pad.bHeld = true; doAction('prone'); }
+    if (!bb && pad.prev[BTN.B] && !pad.bHeld && !pad.bEat) doAction(now - pad.bAt > 400 ? 'prone' : 'crouch');   // judged by how long it was down, even on a slow frame
+    if (!bb) pad.bEat = false;   // a B that closed a window is spent once it's let go
     if (viewTap) doAction('inventory');
-    // ☰: tap for the map, hold for the crew panel.
-    const menu = b(BTN.MENU);
-    if (menu && !pad.prev[BTN.MENU]) { pad.menuAt = performance.now(); pad.menuHeld = false; }
-    if (menu && !pad.menuHeld && performance.now() - pad.menuAt > 450) { pad.menuHeld = true; doAction('squadPanel'); }
-    if (!menu && pad.prev[BTN.MENU] && !pad.menuHeld) doAction(performance.now() - pad.menuAt > 450 ? 'squadPanel' : 'map');
+    // ☰: the map (press it again, or Ⓑ, to close it). Crew and settings are in the bag.
+    if (just(BTN.MENU) && !pad.menuEat) doAction('map');
+    if (!b(BTN.MENU)) pad.menuEat = false;
     // LB: tap throws your grenade, hold to switch between sensor and stun.
     const lb = !!g.buttons[BTN.LB]?.pressed;
     if (lb && !pad.prev[BTN.LB]) { pad.lbAt = performance.now(); pad.lbSwitched = false; }
@@ -4687,6 +4780,7 @@ function frame(now) {
       state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
     } else { v[0] = 0; v[1] = 0; }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
+    else if (state.nadeAim) updateNadeAim(now);
     else if ((state.mouseDown || autoFireNow(me)) && !me.downed && !stunnedNow) tryFire(now); else state.firedThisPress = false;
   }
   if (now - state.lastSend > 50 && alive) {
@@ -4839,7 +4933,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { openGunsmith, state, send, boatVis, structVis };
+window.__dz = { nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis };
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
@@ -4872,7 +4966,8 @@ const TOUCH_BTNS = [
   // AIM toggles the sights; CROUCH and PRONE toggle. Push the stick to its edge to sprint, or on up
   // into the lock to keep running. Guns switch by tapping them at the bottom.
   ['FIRE', 'fire', 'big fire', 'fire'], ['FIRE', 'fire', 'mid fire lfire', 'lfire'], ['AIM', 'aim', 'mid aim', 'aim'], ['USE', 'interact', 'mid use', 'use'],
-  ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'], ['PRONE', 'prone', 'sm r7', 'prone'], ['NADE', 'sensor', 'sm r4', 'nade'],
+  ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'],   // tap: crouch · hold: prone (one button for both)
+  ['NADE', 'sensor', 'sm r4', 'nade'],
   ['JUMP', 'jump', 'mid jump', 'jump'], ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
   // Hold the eye and drag to look around without turning (you keep running the way you were going).
   ['LOOK', 'look', 'sm look', 'look'],

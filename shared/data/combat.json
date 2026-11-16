@@ -22,7 +22,7 @@
       "name": "Rogue",
       "hp": 140,
       "damageMul": 0.55,
-      "sightRange": 32
+      "sightRange": 45
     },
     "hvt": {
       "name": "Rogue Lieutenant",
@@ -76,10 +76,11 @@
     "devKit": 6
   },
   "frag": {
-    "_about": "The frag grenade: NADE's default. Costs parts, thrown in an arc, bursts after a short fuse. Hurts everyone close (you too) and dents structures.",
+    "_about": "The frag grenade: NADE's default. Costs parts. NADE gets it out and shows its arc; FIRE pulls the pin, and the fuse (fuseMs) burns from then: hold to cook it, let go to throw. Cook it too long and it goes off in your hand. Hurts everyone close (you too) and dents structures.",
     "costParts": 8,
     "cooldownMs": 4000,
-    "fuseMs": 2500,
+    "fuseMs": 3200,
+    "cookMinMs": 150,
     "throwRange": 35,
     "radius": 2.5,
     "damage": 250,
