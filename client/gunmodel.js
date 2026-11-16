@@ -1,7 +1,47 @@
 // Procedural weapon models built from gunsmith parts. The same builder is used for the gun in each
 // character's hands and for the rotating (and explodable) preview in the gunsmith.
 import * as THREE from 'three';
+import { GLTFLoader } from '/addons/loaders/GLTFLoader.js';
 import { PAINTS, DEFAULT_PARTS } from '/shared/items.js';
+
+// Real gun models (Quaternius "Ultimate Guns", CC0; client/models/guns/CREDITS.md). Each archetype has
+// a base gun; the gunsmith's optics, muzzle devices and underbarrel parts go on it at its own rail,
+// bore and handguard. Measured off each model (fractions of its length from the back and of its
+// height from the bottom): where the hand grips it, the handguard, the bore, the top rail, the
+// magazine. len: real length in metres. Until they've loaded, the old built-from-boxes guns show.
+const REAL = {
+  carbine: { file: 'carbine', len: 0.84, grip: [0.317, 0.45], fore: [0.65, 0.69], bore: 0.76, rail: 0.855, optic: 0.40, mag: [0.475, 0.25] },
+  smg:     { file: 'smg', len: 0.62, grip: [0.425, 0.44], fore: [0.78, 0.66], bore: 0.78, rail: 0.93, optic: 0.63, mag: [0.65, 0.23] },
+  dmr:     { file: 'dmr', len: 1.02, grip: [0.30, 0.47], fore: [0.667, 0.72], bore: 0.83, rail: 0.96, optic: 0.45, mag: [0.5, 0.38] },
+  shotgun: { file: 'shotgun', len: 1.0, grip: [0.31, 0.44], fore: [0.70, 0.55], bore: 0.84, rail: 0.91, optic: 0.425, mag: [0.5, 0.6] },
+  lmg:     { file: 'lmg', len: 0.98, grip: [0.067, 0.32], fore: [0.517, 0.6], bore: 0.70, rail: 0.82, optic: 0.25, mag: [0.27, 0.19] },
+  sidearm: { file: 'sidearm', len: 0.19, grip: [0.18, 0.38], fore: [0.24, 0.3], bore: 0.94, rail: 0.99, optic: 0.5, mag: [0.18, 0.2] },
+};
+const PARTS3D = ['scope1', 'scope2', 'scope3', 'silencer', 'silencerShort', 'grip'];
+const realScenes = {};
+let realReady = false;
+const loader = new GLTFLoader();
+/** Fetch the real gun models (small, ~0.6 MB together). Resolves once they're in. */
+export const gunModelsReady = Promise.all([...new Set(Object.values(REAL).map((r) => r.file)), ...PARTS3D].map((n) =>
+  loader.loadAsync(`/models/guns/${n}.glb`).then((g) => { realScenes[n] = g.scene; })))
+  .then(() => { realReady = true; }).catch((e) => console.warn('gun models', e));
+/** A copy of a loaded model turned to lie along +Z (its muzzle / front at +Z), `len` metres long, with
+ *  its bounding box from (−w/2, 0, 0) to (w/2, h, len) before `at` moves it. Returns [object, height]. */
+function fitAlongZ(name, len) {
+  const src = realScenes[name].clone();
+  const holder = new THREE.Group();
+  src.rotation.y = -Math.PI / 2;   // the pack's guns point along +X
+  holder.add(src);
+  holder.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(holder), size = b.getSize(new THREE.Vector3());
+  const k = len / size.z;
+  src.scale.setScalar(k);
+  holder.updateMatrixWorld(true);
+  const b2 = new THREE.Box3().setFromObject(holder);
+  src.position.set(-(b2.min.x + b2.max.x) / 2, -b2.min.y, -b2.min.z);
+  holder.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.material = o.material.clone(); } });
+  return [holder, size.y * k];
+}
 
 const SIZE = {
   //          receiver len, barrel len, height
@@ -92,6 +132,7 @@ export function buildGunModel(gun) {
     Object.assign(g.userData, { muzzle: new THREE.Vector3(0, 0, 0.9), back: new THREE.Vector3(0, 0, -0.38), eject: null, mag: null, archetype: a, grip: new THREE.Vector3(0, -0.15, 0.05), fore: new THREE.Vector3(0, -0.07, 0.38) });
     return g;
   }
+  if (realReady && REAL[a]) return buildRealGun(g, gun, a, parts);
   const [L, B, H] = SIZE[a] || SIZE.carbine;
   const paint = skinMaterial(gun.paint);
   const add = (mesh, explode = [0, 0, 0], slot = 'body') => {
@@ -238,6 +279,108 @@ export function buildGunModel(gun) {
   return g;
 }
 
+/** A gun from its real model, with the gunsmith's parts on it. Same frame and anchors as the built
+ *  ones: +Z forward, the pistol grip near the origin. */
+function buildRealGun(g, gun, a, parts) {
+  const R = REAL[a];
+  const [body, H] = fitAlongZ(R.file, R.len);
+  const L = R.len;
+  // Put the hand's place on the grip where the old guns had it, so the hands and the aim line up.
+  const gripAt = new THREE.Vector3(0, R.grip[1] * H, R.grip[0] * L);
+  const shift = new THREE.Vector3(0, -0.115, -0.03).sub(gripAt);
+  body.position.copy(shift);
+  const P = (fz, fy, dx = 0) => new THREE.Vector3(dx, fy * H, fz * L).add(shift);   // a point on the model
+  // Paint: the main body colour takes the skin (plain black keeps the model's own colours).
+  if (gun.paint && gun.paint !== 'factory') {
+    const skin = skinMaterial(gun.paint);
+    body.traverse((o) => { if (o.isMesh && /^(Main|Black)$/.test(o.material.name)) o.material = skin; });
+  }
+  const add = (mesh, explode = [0, 0, 0], slot = 'body') => {
+    mesh.traverse((c) => { if (c.isMesh) c.castShadow = true; });
+    mesh.userData.explode = new THREE.Vector3(...explode);
+    mesh.userData.slot = slot;
+    mesh.userData.home = mesh.position.clone();
+    g.add(mesh);
+    return mesh;
+  };
+  add(body);
+  const railY = R.rail * H + shift.y, boreY = R.bore * H + shift.y, opticZ = R.optic * L + shift.z, tipZ = L + shift.z;
+  const foreZ = R.fore[0] * L + shift.z, foreY = R.fore[1] * H + shift.y;
+  // Optics: the real scopes for the magnified ones, the built sights for the rest (iron = the gun's own).
+  const realScope = { acog: ['scope3', 0.17], lpvo: ['scope1', 0.24], marksman: ['scope2', 0.27], spotter: ['scope2', 0.25], sniper: ['scope1', 0.3], long12: ['scope2', 0.36] }[parts.optic];
+  if (realScope) {
+    const [sc, sh] = fitAlongZ(realScope[0], realScope[1]);
+    sc.position.set(0, railY - sh * 0.12, opticZ - realScope[1] / 2);
+    add(sc, [0, 0.16, 0], 'optic');
+  } else if (parts.optic && parts.optic !== 'iron') {
+    const top = railY;
+    const at = (grp, y, z) => { grp.position.set(0, top + y, z); return grp; };
+    const optic = {
+      tritium: () => { const grp = new THREE.Group(); const dot = box(0.012, 0.008, 0.004, new THREE.MeshBasicMaterial({ color: 0x7dff7a })); grp.add(dot); return at(grp, 0.01, tipZ - 0.06); },
+      reflex: () => { const k = a === 'sidearm' ? 0.6 : 1, grp = new THREE.Group(); const base = box(0.035 * k, 0.018 * k, 0.045 * k, metal()); const lens = box(0.032 * k, 0.026 * k, 0.005, glass()); lens.position.y = 0.02 * k; grp.add(base, lens); return at(grp, 0.009 * k, opticZ); },
+      holo: () => { const grp = new THREE.Group(); const b = box(0.045, 0.045, 0.085, metal()); const lens = box(0.038, 0.032, 0.004, glass()); lens.position.set(0, 0.004, 0.044); grp.add(b, lens); return at(grp, 0.022, opticZ); },
+      prism: () => at(scope(0.09, 0.022, 0.025), 0.035, opticZ),
+      fieldOptic: () => { const grp = new THREE.Group(); const b = box(0.045, 0.045, 0.075, metal()); const lens = box(0.038, 0.032, 0.004, glass()); lens.position.set(0, 0.004, 0.039); grp.add(b, lens); return at(grp, 0.022, opticZ); },
+      thermal: () => { const grp = new THREE.Group(); const b = box(0.055, 0.055, 0.15, metal(0x24282c)); const lens = cyl(0.024, 0.006, glass(0xff8a2a, 0x7a2a00)); lens.position.z = 0.078; grp.add(b, lens); return at(grp, 0.03, opticZ); },
+    }[parts.optic];
+    if (optic) add(optic(), [0, 0.16, 0], 'optic');
+  }
+  // Muzzle devices on the bore.
+  const MUZ = { suppressor: ['silencer', 0.2], intSup: ['silencerShort', 0.12] }[parts.muzzle];
+  let mlen = 0;
+  if (MUZ) {
+    const [m] = fitAlongZ(MUZ[0], MUZ[1]);
+    const mh = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3()).y;
+    m.position.set(0, boreY - mh / 2, tipZ - 0.005);
+    add(m, [0, 0, 0.18], 'muzzle');
+    mlen = MUZ[1];
+  } else if (parts.muzzle && parts.muzzle !== 'bareMuzzle') {
+    const build = { compensator: () => cyl(0.02, 0.05, metal()), brake: () => box(0.045, 0.034, 0.06, metal()), choke: () => cyl(0.028, 0.045, metal(), 0.022) }[parts.muzzle];
+    if (build) { const m = build(); mlen = 0.05; m.position.set(0, boreY, tipZ + 0.025); add(m, [0, 0, 0.18], 'muzzle'); }
+  }
+  // Underbarrel, under the handguard.
+  const underY = foreY - 0.02;
+  if (parts.underbarrel === 'vgrip' || parts.underbarrel === 'fieldGrip') {
+    const [gp, gh] = fitAlongZ('grip', 0.035);
+    gp.scale.multiplyScalar(1); gp.rotation.x = 0; gp.position.set(0, underY - gh, foreZ - 0.017);
+    add(gp, [0, -0.12, 0.04], 'underbarrel');
+  } else if (parts.underbarrel === 'bipod') {
+    // Two folding legs splayed out under the barrel, near the muzzle.
+    const grp = new THREE.Group(), legMat = metal(0x2a2c2f);
+    const clamp = box(0.03, 0.02, 0.03, legMat); grp.add(clamp);
+    for (const sx of [-1, 1]) { const leg = cyl(0.006, 0.17, legMat); leg.rotation.set(Math.PI / 2 - 0.15, 0, sx * 0.3); leg.position.set(sx * 0.026, -0.08, 0.012); grp.add(leg); }
+    grp.position.set(0, boreY - 0.02, tipZ - Math.min(0.25, L * 0.3));
+    add(grp, [0, -0.12, 0.04], 'underbarrel');
+  } else if (parts.underbarrel && parts.underbarrel !== 'noUnder') {
+    const build = {
+      agrip: () => { const m = box(0.03, 0.045, 0.08, metal(0x2c3238)); m.rotation.x = 0.5; return m; },
+      handStop: () => box(0.026, 0.026, 0.03, metal(0x2c3238)),
+      railWeight: () => box(0.035, 0.026, 0.12, metal(0x3a3f45)),
+      thumbRest: () => box(0.018, 0.018, 0.045, metal(0x2c3238)),
+      laser: () => { const grp = new THREE.Group(); const m = box(0.026, 0.026, 0.055, metal()); const dot = box(0.01, 0.01, 0.004, new THREE.MeshBasicMaterial({ color: 0xff2020 })); dot.position.z = 0.029; grp.add(m, dot); grp.position.x = 0.03; return grp; },
+    }[parts.underbarrel];
+    if (build) { const m = build(); m.position.y += underY - 0.015; m.position.z += foreZ; add(m, [0, -0.12, 0.04], 'underbarrel'); }
+  }
+  // Bigger magazines hang off the gun's own.
+  const magAt = P(R.mag[0], R.mag[1]);
+  const magHolder = new THREE.Object3D(); magHolder.position.copy(magAt);
+  if (parts.magazine === 'drum') { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.05, 18), metal()); m.rotation.z = Math.PI / 2; magHolder.add(m); }
+  else if (parts.magazine === 'beltBox') { const b = box(0.08, 0.1, 0.11, new THREE.MeshStandardMaterial({ color: 0x4b5a3a, roughness: 0.8 })); b.position.y = -0.02; magHolder.add(b); }
+  else if (parts.magazine === 'extMag') { const m = box(0.032, 0.07, 0.05, metal()); m.position.y = -0.07; magHolder.add(m); }
+  add(magHolder, [0, -0.16, 0], 'magazine');
+  // One round, hidden inside until the gun is pulled apart.
+  const round = new THREE.Group();
+  const kase = cyl(0.008, 0.035, metal(0xb8963a)); const bullet = cyl(0.008, 0.016, metal(AMMO_TIP[parts.ammo] ?? AMMO_TIP.ball), 0.003); bullet.position.z = 0.025;
+  round.add(kase, bullet); round.position.copy(P(R.mag[0], R.bore - 0.05));
+  add(round, [-0.14, 0.06, 0], 'ammo');
+  Object.assign(g.userData, {
+    muzzle: new THREE.Vector3(0, boreY, tipZ + mlen + 0.02), eject: new THREE.Vector3(-0.04, railY - 0.02, opticZ), mag: magHolder, archetype: a,
+    grip: new THREE.Vector3(0, -0.115, -0.03), fore: a === 'sidearm' ? new THREE.Vector3(0.03, -0.13, 0.0) : P(R.fore[0], R.fore[1]),
+    suppressed: parts.muzzle === 'suppressor' || parts.muzzle === 'intSup', real: true,
+  });
+  return g;
+}
+
 /** Animate parts toward their exploded (t=1) or assembled (t=0) positions. */
 export function setExplode(g, t, highlightSlot = null) {
   for (const c of g.children) {
@@ -252,4 +395,6 @@ export function setExplode(g, t, highlightSlot = null) {
   }
 }
 
-export function gunKey(gun) { return gun ? JSON.stringify([gun.a || gun.archetype, gun.parts, gun.paint]) : ''; }
+export function gunKey(gun) { return gun ? JSON.stringify([gun.a || gun.archetype, gun.parts, gun.paint, realReady]) : ''; }
+/** Whether the real models are in (part of any cache key for a built gun, so they rebuild once they are). */
+export function gunsReal() { return realReady; }

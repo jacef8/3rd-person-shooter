@@ -7,7 +7,7 @@ import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
 } from '/shared/items.js';
-import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
+import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
@@ -877,7 +877,7 @@ function buildBlockBody(g, kind, name, h) {
 
 /** Show the guns a character carries but isn't holding ([{ slot, a, parts, paint }]). */
 function setCharacterStowed(g, list) {
-  const key = JSON.stringify(list || []);
+  const key = JSON.stringify(list || []) + gunsReal();
   if (g.userData.stowedKey === key) return;
   g.userData.stowedKey = key;
   for (const m of [...g.userData.sling, g.userData.holster]) m.clear();
@@ -2927,8 +2927,9 @@ const gsRenderer = new THREE.WebGLRenderer({ canvas: $('gsview'), antialias: tru
 gsRenderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const gsScene = new THREE.Scene();
 const gsCamera = new THREE.PerspectiveCamera(32, 1, 0.01, 20);
-gsScene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.4));
-const gsKey = new THREE.DirectionalLight(0xffffff, 2); gsKey.position.set(1, 2, 2); gsScene.add(gsKey);
+gsScene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.4));
+const gsKey = new THREE.DirectionalLight(0xffffff, 3); gsKey.position.set(1, 2, 2); gsScene.add(gsKey);
+const gsRim = new THREE.DirectionalLight(0xbcd6ff, 2.2); gsRim.position.set(-2, 1, -2); gsScene.add(gsRim);   // a cool edge light so dark guns read against the panel
 const gsTurntable = new THREE.Group(); gsScene.add(gsTurntable);
 
 function ownedWeapons() {
@@ -2992,7 +2993,9 @@ function setPreviewModel(item) {
   gsTurntable.clear();
   gs.model = gun ? buildGunModel(gun) : null;
   if (gs.model) {
-    // Center the assembled gun on the turntable.
+    // Fill the view (a pistol as big as a rifle) and centre the assembled gun on the turntable.
+    const bb0 = new THREE.Box3().setFromObject(gs.model), sz = bb0.getSize(new THREE.Vector3());
+    gs.model.scale.setScalar(1.05 / Math.max(sz.x, sz.y, sz.z, 0.05));
     const bb = new THREE.Box3().setFromObject(gs.model);
     const c = bb.getCenter(new THREE.Vector3());
     gs.model.position.set(-c.x, -c.y, -c.z);
