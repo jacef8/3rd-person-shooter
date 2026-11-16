@@ -9,7 +9,8 @@ import {
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import * as sfx from '/sound.js';
-import { attachPerson, animatePerson, handsOnGun, chestAt, hangFrom, preloadPeople } from '/people.js';
+import { buildRideModel } from '/ridemodels.js';
+import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox } from '/mapview.js';
@@ -561,131 +562,12 @@ function makeBoat(type, color) {
   scene.add(g);
   return g;
 }
-// Shared bits for the ride models (built once, reused by every ride).
-const RIDE_MAT = {
-  tire: new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.95 }),
-  rim: new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.4, metalness: 0.6 }),
-  glass: new THREE.MeshStandardMaterial({ color: 0x24323d, roughness: 0.15, metalness: 0.4 }),
-  dark: new THREE.MeshStandardMaterial({ color: 0x262626, roughness: 0.7 }),
-  chrome: new THREE.MeshStandardMaterial({ color: 0xc8c8c8, roughness: 0.25, metalness: 0.8 }),
-  head: new THREE.MeshStandardMaterial({ color: 0xfff4d6, emissive: 0x806a40, roughness: 0.3 }),
-  tail: new THREE.MeshStandardMaterial({ color: 0xb01818, emissive: 0x400606, roughness: 0.3 }),
-  leather: new THREE.MeshStandardMaterial({ color: 0x4a2f1a, roughness: 0.8 }),
-  deck: new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.8 }),
-};
-/** A low-poly model of each kind of ride, in its paint colour. Wheels spin, horses' legs walk. */
 function makeRide(type, color) {
-  const def = BOATS[type], g = new THREE.Group(), body = new THREE.Group();
-  g.add(body);
-  const paint = new THREE.MeshStandardMaterial({ color: color || def.colors?.[0] || 0x888888, roughness: 0.45, metalness: type === 'horse' ? 0 : 0.35 });
-  const add = (geo, mat, x, y, z, parent = body) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
-  const boxG = (w, h, d) => new THREE.BoxGeometry(w, h, d);
-  const wheels = [], legs = [];
-  /** A wheel at (x, y=r, z): a tyre with a hub, on a pivot that spins. */
-  const wheel = (x, z, r, w = 0.22, thin = false) => {
-    const pivot = new THREE.Group(); pivot.position.set(x, r, z); body.add(pivot);
-    if (thin) { const t = new THREE.Mesh(new THREE.TorusGeometry(r - 0.03, 0.035, 6, 18), RIDE_MAT.tire); t.rotation.y = Math.PI / 2; pivot.add(t);
-      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.08, 6), RIDE_MAT.rim); hub.rotation.z = Math.PI / 2; pivot.add(hub);
-      for (let i = 0; i < 3; i++) { const sp = new THREE.Mesh(boxG(0.01, (r - 0.05) * 2, 0.012), RIDE_MAT.rim); sp.rotation.x = (i * Math.PI) / 3; pivot.add(sp); }
-    } else {
-      const t = new THREE.Mesh(new THREE.CylinderGeometry(r, r, w, 14), RIDE_MAT.tire); t.rotation.z = Math.PI / 2; pivot.add(t);
-      const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.55, r * 0.55, w + 0.02, 10), RIDE_MAT.rim); hub.rotation.z = Math.PI / 2; pivot.add(hub);
-      const mark = new THREE.Mesh(boxG(w + 0.03, r * 0.9, 0.05), RIDE_MAT.dark); pivot.add(mark);   // so you can see it turn
-    }
-    wheels.push({ pivot, r });
-    return pivot;
-  };
-  const L = def.len, W = def.wid;
-  if (type === 'car') {
-    add(boxG(W, 0.55, L), paint, 0, 0.6, 0);
-    const cab = add(boxG(W * 0.86, 0.5, L * 0.48), RIDE_MAT.glass, 0, 1.12, -0.25);
-    add(boxG(W * 0.88, 0.06, L * 0.46), paint, 0, 1.39, -0.25);
-    void cab;
-    for (const s of [-1, 1]) { add(boxG(0.3, 0.12, 0.05), RIDE_MAT.head, s * W * 0.32, 0.72, L / 2 + 0.01); add(boxG(0.3, 0.12, 0.05), RIDE_MAT.tail, s * W * 0.32, 0.72, -L / 2 - 0.01); }
-    add(boxG(W + 0.04, 0.14, 0.12), RIDE_MAT.dark, 0, 0.4, L / 2); add(boxG(W + 0.04, 0.14, 0.12), RIDE_MAT.dark, 0, 0.4, -L / 2);
-    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * (W / 2 - 0.08), e * L * 0.32, 0.33);
-  } else if (type === 'pickup') {
-    add(boxG(W, 0.6, L), paint, 0, 0.85, 0);
-    add(boxG(W * 0.96, 0.62, 1.7), paint, 0, 1.45, 0.75);
-    add(boxG(W * 0.97, 0.42, 0.06), RIDE_MAT.glass, 0, 1.5, 1.61);
-    for (const s of [-1, 1]) add(boxG(0.06, 0.4, 1.4), RIDE_MAT.glass, s * W * 0.485, 1.5, 0.8);
-    for (const s of [-1, 1]) add(boxG(0.08, 0.35, L * 0.42), paint, s * (W / 2 - 0.04), 1.32, -L * 0.27);
-    add(boxG(W, 0.35, 0.08), paint, 0, 1.32, -L / 2 + 0.04);
-    for (const s of [-1, 1]) { add(boxG(0.32, 0.14, 0.05), RIDE_MAT.head, s * W * 0.32, 0.98, L / 2 + 0.01); add(boxG(0.14, 0.3, 0.05), RIDE_MAT.tail, s * W * 0.44, 1.2, -L / 2 - 0.01); }
-    add(boxG(W + 0.06, 0.18, 0.14), RIDE_MAT.chrome, 0, 0.6, L / 2);
-    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * (W / 2 - 0.1), e * L * 0.32, 0.42, 0.28);
-  } else if (type === 'motorcycle' || type === 'dirtbike') {
-    const dirt = type === 'dirtbike', r = dirt ? 0.36 : 0.32;
-    wheel(0, L / 2 - r, r, 0.12); wheel(0, -L / 2 + r, r, 0.14);
-    add(boxG(0.18, 0.22, L * 0.55), RIDE_MAT.dark, 0, r + 0.25, 0);
-    add(boxG(0.32, 0.22, 0.5), paint, 0, r + 0.42, 0.25);   // tank
-    add(boxG(0.28, 0.1, 0.6), RIDE_MAT.dark, 0, r + 0.48, -0.25);   // seat
-    add(boxG(0.7, 0.04, 0.04), RIDE_MAT.chrome, 0, r + 0.72, L / 2 - r - 0.05);   // bars
-    const fork = add(boxG(0.05, 0.6, 0.05), RIDE_MAT.chrome, 0, r + 0.3, L / 2 - r - 0.05); fork.rotation.x = -0.35;
-    if (dirt) { add(boxG(0.22, 0.04, 0.5), paint, 0, r * 2 + 0.05, L / 2 - r); add(boxG(0.22, 0.04, 0.6), paint, 0, r * 2 + 0.1, -L / 2 + r + 0.2); }
-    else { add(boxG(0.1, 0.1, 0.6), RIDE_MAT.chrome, 0.16, r * 0.8, -0.35); add(boxG(0.18, 0.1, 0.05), RIDE_MAT.head, 0, r + 0.62, L / 2 - 0.25); }
-  } else if (type === 'atv') {
-    add(boxG(0.9, 0.3, 1.5), paint, 0, 0.62, 0);
-    add(boxG(1.15, 0.08, 0.45), paint, 0, 0.82, 0.7); add(boxG(1.15, 0.08, 0.45), paint, 0, 0.82, -0.7);   // fenders
-    add(boxG(0.36, 0.14, 0.6), RIDE_MAT.dark, 0, 0.84, -0.1);
-    add(boxG(0.8, 0.04, 0.04), RIDE_MAT.chrome, 0, 1.05, 0.5);
-    add(boxG(0.9, 0.04, 0.4), RIDE_MAT.dark, 0, 0.95, 0.85); add(boxG(0.9, 0.04, 0.4), RIDE_MAT.dark, 0, 0.95, -0.85);   // racks
-    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * 0.5, e * 0.68, 0.3, 0.25);
-  } else if (type === 'golfcart') {
-    add(boxG(W, 0.22, L), paint, 0, 0.36, 0);
-    add(boxG(W * 0.95, 0.5, 0.55), paint, 0, 0.6, 0.85);   // nose
-    add(boxG(W * 0.9, 0.14, 0.55), RIDE_MAT.dark, 0, 0.62, -0.05);   // bench
-    add(boxG(W * 0.9, 0.5, 0.1), RIDE_MAT.dark, 0, 0.92, -0.32);
-    add(boxG(W * 1.02, 0.06, L * 0.82), RIDE_MAT.chrome, 0, 1.75, 0.05);   // roof
-    for (const s of [-1, 1]) for (const e of [0.75, -0.6]) add(boxG(0.04, 1.3, 0.04), RIDE_MAT.chrome, s * W * 0.45, 1.12, e);
-    add(boxG(W * 0.8, 0.5, 0.04), RIDE_MAT.glass, 0, 1.45, 0.76);
-    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * (W / 2 - 0.08), e * L * 0.34, 0.2, 0.16);
-  } else if (type === 'bicycle') {
-    wheel(0, 0.52, 0.34, 0.04, true); wheel(0, -0.52, 0.34, 0.04, true);
-    const bar = (x1, y1, z1, x2, y2, z2) => { const len = Math.hypot(y2 - y1, z2 - z1); const m = add(boxG(0.035, len, 0.035), paint, 0, (y1 + y2) / 2, (z1 + z2) / 2); m.rotation.x = Math.atan2(z2 - z1, y2 - y1); void x1; void x2; return m; };
-    bar(0, 0.34, -0.52, 0, 0.8, -0.12); bar(0, 0.34, 0, 0, 0.8, -0.12); bar(0, 0.8, -0.12, 0, 0.82, 0.38); bar(0, 0.34, 0, 0, 0.82, 0.38); bar(0, 0.34, 0.52, 0, 0.92, 0.42);
-    add(boxG(0.16, 0.05, 0.26), RIDE_MAT.dark, 0, 0.86, -0.16);
-    add(boxG(0.55, 0.03, 0.03), RIDE_MAT.dark, 0, 0.98, 0.42);
-  } else if (type === 'skateboard') {
-    add(boxG(0.22, 0.025, 0.82), paint, 0, 0.1, 0);
-    add(boxG(0.2, 0.004, 0.78), RIDE_MAT.dark, 0, 0.114, 0);
-    for (const e of [-1, 1]) { add(boxG(0.18, 0.03, 0.05), RIDE_MAT.chrome, 0, 0.07, e * 0.27); for (const s of [-1, 1]) wheel(s * 0.09, e * 0.27, 0.035, 0.03); }
-  } else if (type === 'tractor') {
-    wheel(-0.85, -0.85, 0.78, 0.42); wheel(0.85, -0.85, 0.78, 0.42); wheel(-0.72, 1.15, 0.42, 0.24); wheel(0.72, 1.15, 0.42, 0.24);
-    add(boxG(0.75, 0.75, 2.0), paint, 0, 1.05, 0.55);   // engine hood
-    add(boxG(0.95, 0.5, 0.9), paint, 0, 0.95, -0.7);
-    add(boxG(0.5, 0.12, 0.45), RIDE_MAT.dark, 0, 1.3, -0.65);   // seat
-    add(boxG(0.5, 0.45, 0.08), RIDE_MAT.dark, 0, 1.55, -0.88);
-    add(new THREE.CylinderGeometry(0.05, 0.05, 0.9, 6), RIDE_MAT.dark, 0.25, 1.85, 1.0);   // exhaust
-    for (const s of [-1, 1]) for (const e of [-1.05, -0.25]) add(boxG(0.05, 1.3, 0.05), RIDE_MAT.dark, s * 0.6, 2.0, e);   // rollover frame
-    add(boxG(1.3, 0.06, 1.0), paint, 0, 2.62, -0.65);   // canopy
-    for (const s of [-1, 1]) add(boxG(0.5, 0.08, 1.0), paint, s * 0.85, 1.6, -0.85);   // fenders
-    add(boxG(0.5, 0.06, 0.04), RIDE_MAT.head, 0, 1.2, 1.56);
-  } else if (type === 'horse') {
-    const coat = paint, mane = new THREE.MeshStandardMaterial({ color: 0x1a120c, roughness: 0.9 });
-    const trunk = add(new THREE.SphereGeometry(0.5, 14, 10), coat, 0, 1.3, 0); trunk.scale.set(0.82, 0.85, 1.75);
-    const neck = add(new THREE.CylinderGeometry(0.17, 0.27, 0.95, 10), coat, 0, 1.75, 0.82); neck.rotation.x = 0.65;
-    const head = add(new THREE.BoxGeometry(0.24, 0.26, 0.6), coat, 0, 2.05, 1.25); head.rotation.x = 0.55;
-    add(boxG(0.06, 0.5, 0.75), mane, 0, 1.92, 0.7).rotation.x = 0.65;
-    for (const s of [-1, 1]) add(boxG(0.05, 0.14, 0.05), coat, s * 0.08, 2.32, 1.08);   // ears
-    const tail = add(new THREE.CylinderGeometry(0.06, 0.1, 0.75, 6), mane, 0, 1.15, -0.95); tail.rotation.x = -0.45;
-    add(boxG(0.66, 0.14, 0.7), RIDE_MAT.leather, 0, 1.73, -0.05);   // saddle
-    for (const s of [-1, 1]) add(boxG(0.06, 0.4, 0.5), RIDE_MAT.leather, s * 0.42, 1.38, -0.35);   // saddlebags
-    for (const [x, z] of [[-0.2, 0.62], [0.2, 0.62], [-0.2, -0.62], [0.2, -0.62]]) {
-      const hip = new THREE.Group(); hip.position.set(x, 1.15, z); body.add(hip);
-      const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.07, 0.6, 7), coat); upper.position.y = -0.3; hip.add(upper);
-      const knee = new THREE.Group(); knee.position.y = -0.6; hip.add(knee);
-      const lower = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.5, 6), coat); lower.position.y = -0.25; knee.add(lower);
-      const hoof = new THREE.Mesh(boxG(0.1, 0.06, 0.12), mane); hoof.position.y = -0.52; knee.add(hoof);
-      legs.push({ hip, knee, front: z > 0, side: x });
-    }
-  }
-  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  const def = BOATS[type], g = buildRideModel(type, color);
   const label = makeLabel('', 0.0042, '#7dff9a');
   label.position.y = def.h + 0.9;
   g.add(label);
-  g.rotation.order = 'YXZ';
-  g.userData = { label, body, wheels, legs, gait: 0, lean: 0 };
+  g.userData.label = label;
   scene.add(g);
   return g;
 }
@@ -729,6 +611,7 @@ function animateBoats(dt, now) {
       // Bikes lean into turns.
       let turn = 0;
       if (def.lean) { const dyaw = Math.atan2(Math.sin(g.rotation.y - (u.lastYaw ?? g.rotation.y)), Math.cos(g.rotation.y - (u.lastYaw ?? g.rotation.y))); turn = dt > 0 ? (dyaw / dt) * Math.min(1, speed / 8) : 0; }
+      u.steer = Math.max(-1, Math.min(1, (u.steer || 0) * 0.85 + (dt > 0 ? -Math.atan2(Math.sin(g.rotation.y - (u.lastYaw ?? g.rotation.y)), Math.cos(g.rotation.y - (u.lastYaw ?? g.rotation.y))) / dt * 0.15 * 0.6 : 0)));
       u.lastYaw = g.rotation.y;
       u.lean += (Math.max(-0.45, Math.min(0.45, turn * 0.35)) - u.lean) * Math.min(1, dt * 6);
       g.rotation.z += ((def.lean ? u.lean : roll) - g.rotation.z) * Math.min(1, dt * 8);
@@ -758,6 +641,9 @@ function boatSeat(me) {
   return v ? seatPos({ type: v.data.type, x: v.mesh.position.x, z: v.mesh.position.z, yaw: v.mesh.rotation.y }, me.boat.seat) : null;
 }
 /** Where a rider's feet go (the character's origin) in boat or ride `id`. */
+/** Where a driver's hands go, from the seat: a wheel ahead of the chest, handlebars wide and lower,
+ *  reins held close. `half`: how far apart the hands are; `turn`: how far a wheel turns them. */
+const RIDE_GRIP = { wheel: { fwd: 0.42, up: 0.42, half: 0.18, turn: 0.6 }, bars: { fwd: 0.5, up: 0.32, half: 0.3, turn: 0.25 }, reins: { fwd: 0.42, up: 0.18, half: 0.1, turn: 0.1 }, none: null };
 function rideFeet(id) {
   const v = boatVis.get(id);
   if (!v || !BOATS[v.data.type].land) return 0.15;
@@ -1100,6 +986,8 @@ function updateCharacterMesh(g, c, dt) {
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
   g.position.y = c.boat ? rideFeet(c.boat) : (c.y ?? ground(g.position.x, g.position.z)) + (c.alt || 0);
+  // On a bike or a horse you lean (and tip on a slope) with it.
+  g.rotation.z = onRide ? rv.mesh.rotation.z * (BOATS[rv.data.type].lean ? 1 : 0.6) : 0;
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
@@ -1134,6 +1022,15 @@ function updateCharacterMesh(g, c, dt) {
       const mag = u.rlEnd && now < u.rlEnd && gunObj.userData.mag ? gunObj.userData.mag.getWorldPosition(new THREE.Vector3()) : null;
       const f = mag ? 1 - (u.rlEnd - now) / u.rlDur : 0;
       handsOnGun(g, u.rig, gunObj, mag && f > 0.12 && f < 0.8 ? mag : null);
+    } else if (fine && onRide && c.seat === 0) {
+      // Driving: both hands on the wheel, the bars or the reins (in the ride's own frame, so they
+      // tilt and lean with it). The wheel turns a little with the steering.
+      const def = BOATS[rv.data.type], grip = RIDE_GRIP[def.grip || 'wheel'], [side, along] = def.seatAt[0];
+      if (grip) {
+        const turn = (rv.mesh.userData.steer || 0) * grip.turn;
+        const at = (sx) => rv.mesh.localToWorld(new THREE.Vector3(side + sx * Math.cos(turn), def.seatH + grip.up + sx * Math.sin(turn) * 0.6, along + grip.fwd));
+        handsOnBars(g, u.rig, at(-grip.half), at(grip.half));
+      }
     }
   } else if (u.hips) {
   gunPose(g, c, now, adt);
@@ -1787,7 +1684,7 @@ function handle(m) {
       break;
     }
     case 'boatFix':
-      if (state.boat) Object.assign(state.boat, { x: m.x, z: m.z, yaw: m.yaw, speed: 0, y: undefined });
+      if (state.boat) Object.assign(state.boat, { x: m.x, z: m.z, yaw: m.yaw, speed: (state.boat.speed || 0) * 0.6, y: undefined });   // put back where the server has it, still rolling
       break;
     case 'dock':
       state.contact = { ...m, dock: true, offers: [], active: [] };
@@ -4841,7 +4738,7 @@ function frame(now) {
   state.camDist = aim ? camDist : Math.min(camDist, (state.camDist ?? camDist) + (camDist - (state.camDist ?? camDist)) * Math.min(1, dt * 8));
   camera.position.copy(pivot).addScaledVector(toCam, state.camDist);
   // A soft lag on the pivot itself, so the view glides behind you instead of being bolted on.
-  if (!aim && state.camLag && camera.position.distanceTo(state.camLag) < 3) camera.position.lerp(state.camLag, Math.max(0, 1 - dt * 22));
+  if (!aim && !afloat && state.camLag && camera.position.distanceTo(state.camLag) < 3) camera.position.lerp(state.camLag, Math.max(0, 1 - dt * 22));   // (not in a ride: at speed the lag reads as judder)
   state.camLag = camera.position.clone();
   const camGround = Math.max(ground(camera.position.x, camera.position.z), 0);
   if (camera.position.y < camGround + 0.4) camera.position.y = camGround + 0.4;

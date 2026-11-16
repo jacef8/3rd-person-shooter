@@ -1472,14 +1472,19 @@ function boatState(p, msg) {
     const dt = Math.min(0.25, (now - (b.lastMove || now - 50)) / 1000);
     b.lastMove = now; b.usedAt = now;
     let dx = msg.boat.x - b.x, dz = msg.boat.z - b.z;
-    const max = def.speed * dt * 1.5 + 0.3, d = Math.hypot(dx, dz);
+    // A running allowance of distance, topped up with time: updates from a phone often arrive two
+    // at once, and judging each on its own gap made a fast car snap back. Up to 0.6 s can be saved.
+    const cap = def.speed * 1.3 * 0.6;
+    b.budget = Math.min(cap, (b.budget ?? cap) + def.speed * 1.3 * dt);
+    const max = b.budget + 0.3, d = Math.hypot(dx, dz);
     if (d > max) { dx *= max / d; dz *= max / d; }
+    b.budget = Math.max(0, b.budget - Math.min(d, max));
     let x = b.x, z = b.z, ok = true;
     if (def.land) {
       const m = moveWithCollision(b.x, b.z, dx, dz, def.wid / 2 * 0.85, solidsNear(b.x, b.z, Math.hypot(dx, dz) + 3), terrain, rideY(b));
       x = m.x; z = m.z;
       b.y = m.y; b.yx = x; b.yz = z;
-      if (Math.hypot(x - b.x - dx, z - b.z - dz) > 0.6) ok = false;
+      if (Math.hypot(x - b.x - dx, z - b.z - dz) > 1.2) ok = false;
       // A hard crash dents it (the client says how hard; never more than it was really going).
       const crash = Math.min(Number(msg.crash) || 0, rt.speed + 3);
       if (crash > RIDE_RULES.crashAt) damageBoat(b, (crash - RIDE_RULES.crashAt) * RIDE_RULES.crashDmg * 10, null);
@@ -1490,7 +1495,7 @@ function boatState(p, msg) {
     }
     rt.speed = dt > 0 ? Math.hypot(x - b.x, z - b.z) / dt : 0;
     b.x = x; b.z = z; b.yaw = msg.boat.yaw;
-    if (!ok || Math.hypot(x - msg.boat.x, z - msg.boat.z) > 1.5) send(p.ws, { t: 'boatFix', x, z, yaw: b.yaw });
+    if (!ok || Math.hypot(x - msg.boat.x, z - msg.boat.z) > (def.land ? 3 : 1.5)) send(p.ws, { t: 'boatFix', x, z, yaw: b.yaw });
     placeOccupants(b);
   }
   p.speed = rt.speed;

@@ -9,6 +9,7 @@ import { mergeGeometries } from '/addons/utils/BufferGeometryUtils.js';
 import { Sky } from '/addons/objects/Sky.js';
 import { coverColor } from './mapview.js';
 import TREE_ATLAS from '/textures/trees.json' with { type: 'json' };
+import { buildWreck, buildHomeVehicle } from '/ridemodels.js';
 
 const CHUNK = 160;
 export const SKY_TOP = 0x5b8fc7, SKY_HORIZON = 0xc6d9e6;
@@ -778,7 +779,7 @@ vBlade = position.y;
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
     const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), plain = newBuf(false), roof = newBuf(false);
-    const trees = [], pines = [], canopies = [], tanks = [], rocks = [];
+    const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
       if (b.type === 'tree') { trees.push(b); continue; }
@@ -786,6 +787,7 @@ vBlade = position.y;
       if (b.type === 'pine') { pines.push(b); continue; }
       if (b.type === 'canopy') { canopies.push(b); continue; }
       if (b.type === 'tank') { tanks.push(b); continue; }
+      if (b.type === 'car' || b.type === 'vehiclebody') { rigs.push(b); continue; }   // drawn as real vehicles, below
       const [c, tex] = paint(b);
       pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'metal' ? metal : plain, b, c, tex ? 4 : 0);
     }
@@ -838,6 +840,15 @@ vBlade = position.y;
     }
     forest(trees, crownMat);
     forest(pines, pineMat);
+    // Abandoned cars by the road, and the RVs, buses, box trucks and houseboats people live in.
+    for (const b of rigs) {
+      const w = b.maxX - b.minX, d = b.maxZ - b.minZ, alongX = w > d, len = Math.max(w, d), wid = Math.min(w, d);
+      const m = b.type === 'car' ? buildWreck(b.id) : buildHomeVehicle(b.vtype, len, wid, Math.max(1.5, b.h - 0.3), new THREE.Color(...(VEHICLE_COLORS[b.vtype] || COLORS.cover)).getHex());
+      m.position.set((b.minX + b.maxX) / 2, b.vtype === 'houseboat' ? -0.4 : (b.y0 ?? terrain.drawn((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2)) + (b.type === 'car' ? 0 : 0.3), (b.minZ + b.maxZ) / 2);
+      // Homes face away from their door (it's at the far end of the box); wrecks lie either way.
+      m.rotation.y = b.type === 'vehiclebody' ? (alongX ? -Math.PI / 2 : Math.PI) : (alongX ? Math.PI / 2 : 0) + (b.id % 2 ? Math.PI : 0);
+      group.add(m);
+    }
     for (const t of tanks) {   // water tower tanks and storage tanks are round
       const m = new THREE.Mesh(tankGeo, tankMat);
       m.position.set((t.minX + t.maxX) / 2, t.y0, (t.minZ + t.maxZ) / 2);

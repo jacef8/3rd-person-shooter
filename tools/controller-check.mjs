@@ -79,9 +79,12 @@ await press(BTN.A);
 await sleep(3000);
 check('in the world', await p.evaluate(() => !!window.__dz.state.me && document.getElementById('mapscreen').hidden));
 
-// Crew panel: name a crew with the on-screen keyboard and found it.
-await press(BTN.MENU, 700);
-await sleep(400);
+// Crew panel (⧉ for the bag, then its "Crew & settings" button): name a crew with the on-screen keyboard and found it.
+await press(BTN.VIEW);
+await sleep(500);
+for (let k = 0; k < 8 && !/Crew/.test(await focused()); k++) await press(BTN.UP);
+await press(BTN.A);
+await sleep(500);
 check('crew panel open with a highlight', await p.evaluate(() => !document.getElementById('squadpanel').hidden) && /\.HL:/.test(await focused()), await focused());
 for (let k = 0; k < 40 && !(await focused()).startsWith('INPUT#crewNameIn'); k++) await press(BTN.DOWN, 60);
 if (!(await focused()).startsWith('INPUT#crewNameIn')) for (let k = 0; k < 40 && !(await focused()).startsWith('INPUT#crewNameIn'); k++) await press(BTN.UP, 60);

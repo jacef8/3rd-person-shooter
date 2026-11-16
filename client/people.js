@@ -274,3 +274,14 @@ export const CURL = { r: 0.9, l: 0.9 };
 function curl(hand, axis, angle) {
   for (const chain of hand) for (const b of chain) { _q.setFromAxisAngle(axis, angle); turnWorld(b, _q); }
 }
+
+/** Hands on a steering wheel, handlebars or reins: right hand to `R`, left to `L` (world points),
+ *  elbows bent down and out, fingers closed. `steer` (-1..1) turns a wheel's grip a little. */
+export function handsOnBars(holder, rig, R, L) {
+  holder.updateMatrixWorld(true);
+  const right = V().set(-1, 0, 0).transformDirection(holder.matrixWorld), down = V().set(0, -1, 0), back = V().set(0, 0, -1).transformDirection(holder.matrixWorld);
+  const [AR, AL] = rig.arms;
+  ik2(AR.up, AR.lo, AR.tip, R, R.clone().addScaledVector(right, 0.7).addScaledVector(down, 0.8).addScaledVector(back, 0.4));
+  ik2(AL.up, AL.lo, AL.tip, L, L.clone().addScaledVector(right, -0.7).addScaledVector(down, 0.8).addScaledVector(back, 0.4));
+  curl(rig.fingers[0], right, CURL.r); curl(rig.fingers[1], right, CURL.l);
+}
