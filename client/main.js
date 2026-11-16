@@ -1429,23 +1429,37 @@ function drawMinimap() {
   }
   g.font = "700 12px 'Atkinson Hyperlegible', Segoe UI, sans-serif";
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  const placed = [];
+  const placed = [];   // chips already drawn: [x, y, w, h]
+  const H = 20, PAD = 5, top = 42;   // (the N marker sits above `top`)
+  /** Half the width the circle has across a chip whose middle is at y (its corners must stay inside). */
+  const halfAt = (y) => { const far = Math.max(Math.abs(y - H / 2 - R), Math.abs(y + H / 2 - R)); return Math.sqrt(Math.max(0, (R - PAD) ** 2 - far * far)); };
+  const hits = (x, y, w) => placed.some(([px, py, pw]) => Math.abs(py - y) < H + 3 && x < px + pw + 4 && px < x + w + 4);
   for (const [name, { r }] of [...named].sort((a, b) => a[1].d - b[1].d).slice(0, 2)) {
-    // On the road, at the point of it nearest the middle of the minimap (kept inside the circle).
+    // On the road, at the point of it nearest the middle of the minimap; then moved up or down (toward
+    // the middle first) until the whole chip fits inside the circle without covering another one.
     const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
     const t = Math.max(0.1, Math.min(0.9, ((state.x - r.x1) * dx + (state.z - r.z1) * dz) / l2));
-    let lx = X(r.x1 + dx * t), ly = Z(r.z1 + dz * t);
-    const off = Math.hypot(lx - R, ly - R);
-    if (off > R - 30) { lx = R + (lx - R) * (R - 30) / off; ly = R + (ly - R) * (R - 30) / off; }
-    ly = Math.max(ly, 44);   // (clear of the N at the top)
-    if (placed.some((q) => Math.abs(q - ly) < 22)) ly += 24;
-    placed.push(ly);
-    const w = Math.min(176, g.measureText(name).width + 12);
-    // Keep the whole chip inside the circle.
-    const room = Math.sqrt(Math.max(0, (R - 4) ** 2 - (ly - R) ** 2)) - w / 2;
-    lx = Math.max(R - room, Math.min(R + room, lx));
-    g.fillStyle = '#161a22'; g.beginPath(); g.roundRect(lx - w / 2, ly - 10, w, 20, 6); g.fill();
-    g.fillStyle = '#ffffff'; g.fillText(name, lx, ly + 1, 166);
+    const lx0 = X(r.x1 + dx * t), ly0 = Math.max(top, Math.min(2 * R - PAD - H / 2, Z(r.z1 + dz * t)));
+    let text = name, w = g.measureText(text).width + 14, spot = null;
+    const tryAt = () => {
+      for (let k = 0; k < 16 && !spot; k++) {
+        const step = Math.ceil(k / 2) * 12 * (k % 2 ? 1 : -1) * Math.sign(R - ly0 || 1);
+        const y = ly0 + step;
+        if (y < top || y > 2 * R - PAD - H / 2) continue;
+        const half = halfAt(y);
+        if (w > 2 * half) continue;
+        const x = Math.max(R - half, Math.min(R + half - w, lx0 - w / 2));
+        if (!hits(x, y, w)) spot = [x, y];
+      }
+    };
+    tryAt();
+    // Still no room (a long name near the edge): shorten it until it fits.
+    while (!spot && text.length > 4) { text = text.slice(0, -2).trimEnd() + '…'; w = g.measureText(text).width + 14; tryAt(); }
+    if (!spot) continue;
+    const [x, y] = spot;
+    placed.push([x, y, w]);
+    g.fillStyle = '#161a22'; g.beginPath(); g.roundRect(x, y - H / 2, w, H, 6); g.fill();
+    g.fillStyle = '#ffffff'; g.fillText(text, x + w / 2, y + 1);
   }
   g.textBaseline = 'alphabetic';
   g.translate(R, R);
