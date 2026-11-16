@@ -758,7 +758,7 @@ const clathe = (key, prof, depth) => {
 const csph = (r) => { const k = `sph${r}`; if (!CHAR_GEO.has(k)) CHAR_GEO.set(k, new THREE.SphereGeometry(r, 14, 10)); return CHAR_GEO.get(k); };
 const TORSO = [[0.0, 0.0], [0.15, 0.0], [0.16, 0.08], [0.15, 0.2], [0.18, 0.36], [0.205, 0.5], [0.19, 0.57], [0.11, 0.62], [0.0, 0.63]];
 const VEST_SHAPE = [[0.0, 0.18], [0.19, 0.18], [0.215, 0.32], [0.225, 0.5], [0.2, 0.56], [0.0, 0.57]];
-const PLAYER_OUTFITS = ['swat', 'adventurer', 'worker', 'casual', 'farmer', 'beach'];
+const PLAYER_OUTFITS = ['swat1', 'swat2', 'james', 'liza', 'remy'];
 /**
  * A person: a rigged model (client/people.js) in a Group whose +Z is forward and y = 0 the soles.
  * The gun is held on a pivot that follows the chest and the aim; slung guns and the holster hang off
@@ -793,12 +793,9 @@ function makeCharacter(kind, name) {
     Object.assign(g.userData, { label, bar, armorBar, bars });
   }
   scene.add(g);
-  const outfit = kind === 'bot' ? pick(['punk', 'swat'], 5) : kind === 'contact' ? pick(['farmer', 'worker', 'casual'], 5) : pick(PLAYER_OUTFITS, 5);
-  // Players' tactical gear in slate grey (the pack's near-black reads as a silhouette out here);
-  // the Rogues keep it black, with a red visor.
-  const tint = kind === 'bot' && outfit === 'swat' ? { Swat: 0x1c1b1f, Swat_Black: 0x0b0b0c, Visor: 0x8a0f0f } : outfit === 'swat' ? { Swat: 0x56606e, Swat_Black: 0x2b2e33 } : {};
+  // Rogues all in black tactical gear; Contacts in street clothes; players any of the others.
+  const outfit = kind === 'bot' ? 'swat3' : kind === 'contact' ? pick(['james', 'liza', 'remy'], 5) : pick(PLAYER_OUTFITS, 5);
   attachPerson(g, outfit, {
-    skin: kind === 'bot' ? 0x6b5848 : pick(SKIN, 3), tint,
     onReady: (rig) => {
       const back = hangFrom(rig, 'Chest', g, [0, 0.95, 0]);
       for (const sl of sling) { sl.position.y -= 0.95; back.add(sl); }
@@ -1165,7 +1162,7 @@ function animateFlyBys(dt) {
   }
 }
 
-preloadPeople(['swat', 'punk']);
+preloadPeople(['swat1', 'swat3']);
 const selfMesh = makeCharacter('self', '');
 selfMesh.visible = false;
 
@@ -4850,6 +4847,13 @@ function frame(now) {
     g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
     // Name tags float at a fixed size: up close they'd fill the screen, so they hide within 7 m.
     if (g.visible && g.userData.label) g.userData.label.visible = camera.position.distanceTo(g.position) > 7;
+    // Standing about, unarmed (breathing, shifting their weight).
+    const u = g.userData;
+    if (g.visible && u.rig) {
+      const now = performance.now(), dt = Math.min(0.1, (now - (u.lastT || now)) / 1000) || 0.016, cd = camera.position.distanceTo(g.position);
+      u.lastT = now;
+      animatePerson(g, u.rig, { speed: 0, fwd: 0, side: 0, crouch: false, seated: false, armed: false, pitch: 0, detail: cd < 60 ? 1 : cd < 130 ? 0.3 : 0.1 }, dt);
+    }
   }
   for (const g of dropVis.values()) {
     // Falling crate until it lands.

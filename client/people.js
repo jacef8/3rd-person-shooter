@@ -1,47 +1,41 @@
-// People: real rigged, skinned characters with blended animations, in place of the old
-// hand-built ones. The models and clips are Quaternius's "Ultimate Modular Men" (CC0; see
-// client/models/people/CREDITS.md and tools/build_characters.mjs). Every outfit shares one
-// skeleton, so the clips are loaded once and drive anyone.
+// People: realistic rigged, skinned characters (Mixamo: three SWAT officers and three civilians)
+// driven by a full set of rifle animations (8-way walk, run and crouch-walk, sprint, aiming idle,
+// crouching idle). Every Mixamo character shares one skeleton, so the clips are loaded once and
+// drive anyone. See client/models/people/CREDITS.md and tools/build_people.mjs.
 //
-// What plays: the legs blend idle, walk, run, run back and strafe left/right by how fast and which
-// way the person is really moving (all kept in step); the upper body holds a gun (or swings the
-// arms when there's none). On top of that, done here in code because the pack has no clips for
-// them: crouching and sitting (the hips drop and the legs bend to keep the feet planted, by IK),
-// looking up and down (the spine follows the aim), and both hands on whatever gun is held (arm IK
-// to the grip and the handguard), so reloads and recoil move the hands too.
+// What plays: one locomotion clip at a time for the way the person is really moving (the nearest of
+// eight directions, the hips turned the last few degrees toward it), cross-faded as that changes,
+// all kept in step on one stride phase; walk, jog or sprint by speed; the crouching set when
+// crouched. Done here in code on top: looking up and down (the spine follows the aim), sitting in a
+// ride (the hips drop and the legs bend to keep the feet planted, by IK), and both hands on whatever
+// gun is held (arm IK to the grip and the handguard), so reloads and recoil move the hands too.
 import * as THREE from 'three';
 import { GLTFLoader } from '/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from '/addons/utils/SkeletonUtils.js';
 
-export const OUTFITS = ['swat', 'worker', 'farmer', 'punk', 'adventurer', 'casual', 'beach'];
+export const OUTFITS = ['swat1', 'swat2', 'swat3', 'james', 'liza', 'remy'];
 const loader = new GLTFLoader();
 const files = new Map();
 const load = (name) => { if (!files.has(name)) files.set(name, loader.loadAsync(`/models/people/${name}.glb`)); return files.get(name); };
 
-// Bone names as three.js has them (glTF names with the dots taken out: "Foot.L" -> "FootL").
-const LOWER = new Set(['Body', 'UpperLegL', 'UpperLegR', 'LowerLegL', 'LowerLegR', 'FootL', 'FootR', 'PTL', 'PTR', 'Root']);
 let CLIPS = null;
-const clipsReady = load('anims').then((g) => {
-  CLIPS = {};
-  for (const c of g.animations) {
-    const bone = (t) => t.name.slice(0, t.name.lastIndexOf('.'));
-    CLIPS[c.name] = {
-      full: c,
-      lower: new THREE.AnimationClip(`${c.name}_lo`, c.duration, c.tracks.filter((t) => LOWER.has(bone(t)))),
-      upper: new THREE.AnimationClip(`${c.name}_up`, c.duration, c.tracks.filter((t) => !LOWER.has(bone(t)))),
-    };
-  }
-});
-/** Start fetching the clips and the usual outfits early (they're small). */
-export function preloadPeople(list = ['swat']) { for (const n of list) load(n).catch(() => {}); return clipsReady; }
+const clipsReady = load('anims').then((g) => { CLIPS = {}; for (const c of g.animations) CLIPS[c.name] = c; });
+/** Start fetching the clips and the usual outfits early. */
+export function preloadPeople(list = ['swat1']) { for (const n of list) load(n).catch(() => {}); return clipsReady; }
 
-const LOCO = ['Walk', 'Run', 'Run_Back', 'Run_Left', 'Run_Right'];
-const IDLES = ['Idle_Gun', 'Idle_Neutral'];
-const UPPER = ['Idle_Gun_Pointing', 'Idle_Neutral', ...LOCO];
+const DIRS = ['f', 'fl', 'l', 'bl', 'b', 'br', 'r', 'fr'];   // counter-clockwise from ahead, 45° apart
+const GAITS = ['walk', 'run', 'cwalk'];
+const IDLES = ['aim', 'hold', 'idle', 'crouch'];
+// Metres covered in one cycle of each gait's clip: the clip plays as fast as the person moves.
+const STRIDE = { walk: 2.0, run: 2.8, sprint: 3.8, cwalk: 2.0 };
+// The old bone names the rest of the game uses (slung guns hang off "Chest", the holster off "UpperLegR").
+const ALIAS = { Root: 'Hips', Body: 'Hips', Abdomen: 'Spine', Chest: 'Spine2', Neck: 'Neck', Head: 'Head',
+  UpperLegL: 'LeftUpLeg', UpperLegR: 'RightUpLeg', LowerLegL: 'LeftLeg', LowerLegR: 'RightLeg', FootL: 'LeftFoot', FootR: 'RightFoot',
+  UpperArmL: 'LeftArm', UpperArmR: 'RightArm', LowerArmL: 'LeftForeArm', LowerArmR: 'RightForeArm', WristL: 'LeftHand', WristR: 'RightHand' };
 
 /**
- * Put a person in `holder` (a Group whose +Z is forward, feet at y = 0). `opts`: { skin, tint:
- * { materialName: hex }, onReady(rig), onFail() }. Resolves to the rig.
+ * Put a person in `holder` (a Group whose +Z is forward, feet at y = 0). `opts`: { onReady(rig),
+ * onFail() }. Resolves to the rig.
  */
 export function attachPerson(holder, outfit, opts = {}) {
   return Promise.all([load(outfit), clipsReady]).then(([gltf]) => {
@@ -50,12 +44,12 @@ export function attachPerson(holder, outfit, opts = {}) {
     model.traverse((o) => {
       if (!o.isMesh) return;
       const m = o.material.clone();
-      m.metalness = 0; m.roughness = 0.82;   // no environment map out here: metal reads as black
-      const want = opts.tint?.[m.name] ?? (m.name === 'Skin' ? opts.skin : undefined);
-      if (want !== undefined) m.color.setHex(want);
-      m.emissive.copy(m.color).multiplyScalar(0.18);   // a little lift, so dark gear isn't a silhouette with the sun behind it
+      m.metalness = 0; m.roughness = Math.max(m.roughness, 0.7);   // no environment map out here: shiny reads as black
+      // A little lift (from the texture itself), so dark gear isn't a silhouette with the sun behind it.
+      if (m.map) { m.emissiveMap = m.map; m.emissive.setScalar(0.16); }
       o.material = m;
       o.castShadow = true;
+      o.frustumCulled = true;
     });
     holder.add(model);
     const rig = setupRig(holder, model);
@@ -66,48 +60,44 @@ export function attachPerson(holder, outfit, opts = {}) {
 
 // Scratch objects (no garbage in the frame loop).
 const V = () => new THREE.Vector3();
-const _a = V(), _b = V(), _c = V(), _t = V(), _d = V(), _p = V(), _x = V(), _q = new THREE.Quaternion(), _pq = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4();
+const _a = V(), _b = V(), _c = V(), _t = V(), _d = V(), _p = V(), _x = V(), _up = V().set(0, 1, 0), _q = new THREE.Quaternion(), _pq = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4();
 
 function setupRig(holder, model) {
   const B = {};
-  model.traverse((o) => { if (o.isBone) B[o.name] = o; });
+  model.traverse((o) => { if (o.isBone) B[o.name.replace(/^mixamorig:?/, '')] = o; });
+  for (const [old, now] of Object.entries(ALIAS)) if (B[now]) B[old] = B[now];
   // The bones this file moves by hand go back to their rest pose every frame before the clips play
   // (a clip that doesn't key a bone would otherwise leave last frame's change on it to pile up).
   const rest = [];
-  const FINGERS = ['Index', 'Middle', 'Ring', 'Pinky'];
-  const fingers = ['R', 'L'].map((s) => FINGERS.map((f) => [1, 2, 3].map((k) => B[`${f}${k}${s}`]).filter(Boolean)));
-  for (const n of ['Root', 'Body', 'FootL', 'FootR', 'PTL', 'PTR', 'Abdomen', 'Chest', 'Neck', 'UpperLegL', 'UpperLegR', 'LowerLegL', 'LowerLegR', 'UpperArmL', 'UpperArmR', 'LowerArmL', 'LowerArmR', 'WristL', 'WristR'])
+  for (const n of ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg', 'LeftFoot', 'RightFoot', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm', 'LeftHand', 'RightHand'])
     if (B[n]) rest.push([B[n], B[n].position.clone(), B[n].quaternion.clone()]);
-  for (const hand of fingers) for (const chain of hand) for (const b of chain) rest.push([b, b.position.clone(), b.quaternion.clone()]);
   const mixer = new THREE.AnimationMixer(model);
-  const act = (clip) => { const a = mixer.clipAction(clip); a.play(); a.timeScale = 0; a.setEffectiveWeight(0); return a; };
-  const lo = {}, up = {};
-  for (const n of [...LOCO, ...IDLES]) lo[n] = act(CLIPS[n].lower);
-  for (const n of UPPER) up[n] = act(CLIPS[n].upper);
-  // Size: the pack's people are ~1.8 m already; scale to 1.78 m with the soles at y = 0.
-  lo.Idle_Gun.setEffectiveWeight(1); up.Idle_Gun_Pointing.setEffectiveWeight(1);
+  const acts = {};
+  const act = (name) => { const c = CLIPS[name]; if (!c) return; const a = mixer.clipAction(c); a.play(); a.timeScale = 0; a.setEffectiveWeight(0); acts[name] = a; };
+  for (const g of GAITS) for (const d of DIRS) act(`${g}_${d}`);
+  for (const n of [...IDLES, 'sprint']) act(n);
+  // Size: 1.78 m standing, the soles at y = 0.
+  acts.aim.setEffectiveWeight(1);
   mixer.update(0);
   holder.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model, true);
   const h = box.max.y - box.min.y;
-  if (h > 0.5 && h < 5) { model.scale.multiplyScalar(1.78 / h); }
+  if (h > 0.5 && h < 5) model.scale.multiplyScalar(1.78 / h);
   holder.updateMatrixWorld(true);
   const box2 = new THREE.Box3().setFromObject(model, true);
   model.position.y -= box2.min.y - holder.getWorldPosition(_a).y;
   holder.updateMatrixWorld(true);
-  // Leg and arm chain lengths, and where the foot / wrist sits in its lower bone (for the IK).
+  // Leg and arm chains, and where the foot / hand sits in its lower bone (for the IK).
   const tip = (lower, end) => lower.worldToLocal(end.getWorldPosition(V()));
-  const legs = ['L', 'R'].map((s) => ({ up: B[`UpperLeg${s}`], lo: B[`LowerLeg${s}`], foot: B[`Foot${s}`], tip: tip(B[`LowerLeg${s}`], B[`Foot${s}`]) }));
-  const arms = ['R', 'L'].map((s) => ({ up: B[`UpperArm${s}`], lo: B[`LowerArm${s}`], wrist: B[`Wrist${s}`], tip: B[`Wrist${s}`].position.clone() }));
-  // How the right hand sits holding a gun that points straight ahead (from the pointing clip),
-  // relative to the body; the left hand is its mirror image.
-  const rootQ = holder.getWorldQuaternion(V4());
-  const handR = rootQ.clone().invert().multiply(B.WristR.getWorldQuaternion(V4()));
-  const handL = new THREE.Quaternion(handR.x, -handR.y, -handR.z, handR.w);
+  const legs = ['Left', 'Right'].map((s) => ({ up: B[`${s}UpLeg`], lo: B[`${s}Leg`], foot: B[`${s}Foot`], tip: tip(B[`${s}Leg`], B[`${s}Foot`]) }));
+  const arms = ['Right', 'Left'].map((s) => ({ up: B[`${s}Arm`], lo: B[`${s}ForeArm`], wrist: B[`${s}Hand`], tip: B[`${s}Hand`].position.clone() }));
+  // How each hand sits on a rifle pointing straight ahead (from the aiming clip), relative to the body.
+  const rootQ = holder.getWorldQuaternion(new THREE.Quaternion()).invert();
+  const hands = arms.map((a) => rootQ.clone().multiply(a.wrist.getWorldQuaternion(new THREE.Quaternion())));
+  acts.aim.setEffectiveWeight(0);
   for (const m of model.children) m.traverse((o) => { if (o.isSkinnedMesh) { o.computeBoundingSphere(); o.boundingSphere.radius *= 1.8; } });
-  return { model, mixer, B, lo, up, legs, arms, rest, fingers, hands: [handR, handL], t: Math.random() * 10, phase: 0, ck: 0, sk: 0, ak: 0, w: {}, skip: 0 };
+  return { model, mixer, B, acts, legs, arms, rest, hands, t: Math.random() * 10, phase: 0, ck: 0, sk: 0, ak: 0, w: {}, skip: 0, cur: 'aim' };
 }
-function V4() { return new THREE.Quaternion(); }
 
 /** Hang `obj` from a bone so it keeps the place it has now in the holder (anchors for slung guns). */
 export function hangFrom(rig, boneName, holder, charPos) {
@@ -157,7 +147,7 @@ const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a
  * crouch, seated, armed, pitch, detail (0 far … 1 near) }. Returns whether the fine work (IK) is on.
  */
 export function animatePerson(holder, rig, st, dt) {
-  const { lo, up, B } = rig;
+  const { acts, B } = rig;
   // Far away: animate less often.
   rig.skip += dt;
   if (st.detail < 0.35 && rig.skip < 0.05) return st.detail >= 0.2;
@@ -167,121 +157,102 @@ export function animatePerson(holder, rig, st, dt) {
   rig.ck += ((st.crouch ? 1 : 0) - rig.ck) * ease;
   rig.sk += ((st.seated ? 1 : 0) - rig.sk) * Math.min(1, dt * 14);
   rig.ak += ((st.armed ? 1 : 0) - rig.ak) * ease;
-  // Legs: which way and how fast. Everything moving shares one stride phase so feet stay in step.
   const s = st.seated ? 0 : st.speed;
-  const moveK = smooth(0.25, 1.1, s), runK = smooth(2.0, 2.4, s);   // walk or run, not a mix of the two
-  // One direction clip at a time (forward, back, strafe left or right: mixing two at once tangles the
-  // legs, their steps don't line up); the hips turn toward where you're really going, the chest keeps
-  // facing the aim. A little hysteresis so the clip doesn't flicker on the 60° lines.
-  const ang = Math.atan2(st.side, st.fwd), D = Math.PI / 180;
-  if (moveK > 0.05) {
-    const lim = (sec) => (sec === 'f' ? 60 : sec === 'b' ? 120 : 0) * D;
-    const deg = Math.abs(ang), cur = rig.sector || 'f', h = 8 * D;
-    let sec = deg < 60 * D ? 'f' : deg > 120 * D ? 'b' : ang > 0 ? 'l' : 'r';
-    if (cur === 'f' && deg < lim('f') + h) sec = 'f';
-    else if (cur === 'b' && deg > lim('b') - h) sec = 'b';
-    else if ((cur === 'l' || cur === 'r') && deg > 60 * D - h && deg < 120 * D + h && Math.sign(ang) === (cur === 'l' ? 1 : -1)) sec = cur;
-    rig.sector = sec;
+  const moving = s > (rig.cur.includes('_') || rig.cur === 'sprint' ? 0.25 : 0.45);   // a little hysteresis on starting and stopping
+  // Which of the eight directions (a little hysteresis so it doesn't flicker on the lines between).
+  const ang = Math.atan2(st.side, st.fwd), D = Math.PI / 4;
+  if (moving) {
+    let k = ((Math.round(ang / D) % 8) + 8) % 8;
+    const prev = rig.dir ?? k, off = Math.atan2(Math.sin(ang - prev * D), Math.cos(ang - prev * D));
+    if (Math.abs(off) < D / 2 + 0.14) k = prev;
+    rig.dir = k;
   }
-  const sec = rig.sector || 'f';
-  const aim = { f: 0, l: Math.PI / 2, r: -Math.PI / 2, b: Math.PI }[sec];
-  let hipT = Math.atan2(Math.sin(ang - aim), Math.cos(ang - aim)) * moveK;
-  hipT = Math.max(-1.0, Math.min(1.0, hipT));
+  const dir = rig.dir ?? 0;
+  // The hips turn the rest of the way toward where you're really going; the chest keeps facing the aim.
+  const hipT = moving ? Math.max(-0.5, Math.min(0.5, Math.atan2(Math.sin(ang - dir * D), Math.cos(ang - dir * D)))) : 0;
   rig.hy = (rig.hy || 0) + (hipT - (rig.hy || 0)) * Math.min(1, dt * 8);
-  const want = { Walk: 0, Run: 0, Run_Back: 0, Run_Left: 0, Run_Right: 0 };
-  if (sec === 'f') { want.Walk = moveK * (1 - runK); want.Run = moveK * runK; }
-  else want[{ b: 'Run_Back', l: 'Run_Left', r: 'Run_Right' }[sec]] = moveK;
-  rig.phase = (rig.phase + dt * (s < 1.6 ? s / 1.5 : s / (2.4 + 0.25 * s))) % 1;
-  const idleW = 1 - moveK;
-  const w = rig.w;
-  for (const n of LOCO) { w[n] = (w[n] ?? 0) + (want[n] - (w[n] ?? 0)) * Math.min(1, dt * 14); lo[n].setEffectiveWeight(w[n]); lo[n].time = rig.phase * lo[n].getClip().duration; }
-  lo.Idle_Gun.setEffectiveWeight(idleW * rig.ak); lo.Idle_Neutral.setEffectiveWeight(idleW * (1 - rig.ak));
-  for (const n of IDLES) lo[n].time = rig.t % lo[n].getClip().duration;
-  // Upper body: holding a gun, or arms swinging with the legs.
-  up.Idle_Gun_Pointing.setEffectiveWeight(rig.ak); up.Idle_Gun_Pointing.time = rig.t % up.Idle_Gun_Pointing.getClip().duration;
-  up.Idle_Neutral.setEffectiveWeight(idleW * (1 - rig.ak)); up.Idle_Neutral.time = lo.Idle_Neutral.time;
-  for (const n of LOCO) { up[n].setEffectiveWeight(w[n] * (1 - rig.ak)); up[n].time = lo[n].time; }
+  // Which clip: crouch-walk, walk, jog or sprint by speed; standing still, aiming or just holding.
+  const crouch = st.crouch && !st.seated;
+  let gait = crouch ? 'cwalk' : s < (rig.gait === 'run' ? 3.3 : 3.8) ? 'walk' : 'run';
+  const want = !moving ? (crouch ? 'crouch' : !st.armed ? 'idle' : 'aim')
+    : gait === 'run' && DIRS[dir] === 'f' && s > (rig.cur === 'sprint' ? 6.8 : 7.3) ? 'sprint' : `${gait}_${DIRS[dir]}`;
+  if (want === 'sprint') gait = 'sprint';
+  rig.gait = gait; rig.cur = want;
+  // One stride phase for every locomotion clip, so changing direction or speed keeps the feet in step.
+  if (moving) rig.phase = (rig.phase + dt * s / STRIDE[gait]) % 1;
+  const w = rig.w, fade = Math.min(1, dt * 9);
+  for (const [n, a] of Object.entries(acts)) {
+    const target = n === want ? 1 : 0;
+    const wn = w[n] = (w[n] ?? 0) + (target - (w[n] ?? 0)) * fade;
+    a.setEffectiveWeight(wn < 0.002 ? 0 : wn);
+    if (wn < 0.002) continue;
+    const dur = a.getClip().duration;
+    a.time = n.includes('_') || n === 'sprint' ? rig.phase * dur : rig.t % dur;
+  }
   for (const [bone, p, q] of rig.rest) { bone.position.copy(p); bone.quaternion.copy(q); }
   rig.mixer.update(0);
   holder.updateMatrixWorld(true);
   if (st.detail < 0.2) return false;   // a long way off: the clips are enough
 
   // Hips toward the way you're going: the whole lower body (feet included) turns, the chest turns back.
-  if (Math.abs(rig.hy) > 0.003 && !st.seated) {
-    const up = V().set(0, 1, 0);
-    _q.setFromAxisAngle(up, rig.hy); turnWorld(B.Root, _q);
-    _q.setFromAxisAngle(up, -rig.hy * 0.85); turnWorld(B.Abdomen, _q);
+  if (Math.abs(rig.hy) > 0.003) {
+    _q.setFromAxisAngle(_up, rig.hy); turnWorld(B.Hips, _q);
+    _q.setFromAxisAngle(_up, -rig.hy * 0.9); turnWorld(B.Spine, _q);
   }
-  // In code: the hips drop to crouch or sit, the feet stay put (or go forward to sit), the legs bend to suit.
   const right = _x.set(-1, 0, 0).transformDirection(holder.matrixWorld).clone();
   const fwd = V().set(0, 0, 1).transformDirection(holder.matrixWorld);
-  const drop = 0.36 * rig.ck + 0.42 * rig.sk;
-  if (drop > 0.002) {
-    const body = B.Body;
-    body.getWorldPosition(_a);
-    _b.copy(_a).addScaledVector(fwd, -0.06 * rig.ck); _b.y -= drop;
-    body.parent.worldToLocal(_b); body.parent.worldToLocal(_a);
-    body.position.add(_b.sub(_a));
-    body.updateMatrixWorld(true);
-    if (rig.sk > 0.01) for (const lg of rig.legs) {
-      lg.foot.getWorldPosition(_a); _b.copy(_a).addScaledVector(fwd, 0.42 * rig.sk); _b.y += 0.05 * rig.sk;
-      lg.foot.parent.worldToLocal(_b); lg.foot.parent.worldToLocal(_a); lg.foot.position.add(_b.sub(_a)); lg.foot.updateMatrixWorld(true);
+  // Sitting in a ride: the hips drop, the feet go forward, the legs bend to suit.
+  if (rig.sk > 0.01) {
+    const drop = 0.42 * rig.sk;
+    const hips = B.Hips;
+    hips.getWorldPosition(_a);
+    _b.copy(_a); _b.y -= drop;
+    hips.parent.worldToLocal(_b); hips.parent.worldToLocal(_a);
+    hips.position.add(_b.sub(_a));
+    hips.updateMatrixWorld(true);
+    for (const lg of rig.legs) {
+      const foot = lg.foot.getWorldPosition(V()).addScaledVector(fwd, 0.42 * rig.sk); foot.y += 0.05 * rig.sk + drop;
+      const knee = lg.lo.getWorldPosition(V()).addScaledVector(fwd, 1.6); knee.y += 0.6;
+      ik2(lg.up, lg.lo, lg.tip, foot, knee);
     }
   }
-  // Every frame the shins are brought to the feet. The pack's feet are their own bones; blending the
-  // run, strafe and walk clips (or just playing them) lets a foot drift off the end of its shin, which
-  // looks like a broken ankle. The knee keeps the bend the clip gave it (further forward when crouched).
-  const bendFwd = 0.4 + 1.6 * Math.max(rig.ck, rig.sk);
-  for (const lg of rig.legs) {
-    const knee = lg.lo.getWorldPosition(V()).addScaledVector(fwd, bendFwd);
-    if (rig.ck > 0.01 || rig.sk > 0.01) knee.y += 0.6 * Math.max(rig.ck, rig.sk);
-    ik2(lg.up, lg.lo, lg.tip, lg.foot.getWorldPosition(V()), knee);
-  }
-  // The spine follows the aim (and leans in a little when crouched).
+  // The spine follows the aim.
   const pitch = Math.max(-1.1, Math.min(1.1, st.pitch || 0)) * rig.ak;
-  const lean = 0.18 * rig.ck;
-  for (const [bone, share] of [[B.Abdomen, 0.2], [B.Chest, 0.35], [B.Neck, 0.3]]) { _q.setFromAxisAngle(right, -pitch * share + lean * (bone === B.Neck ? -1 : 0.5)); turnWorld(bone, _q); }
+  if (Math.abs(pitch) > 0.002) for (const [bone, share] of [[B.Spine, 0.25], [B.Spine1, 0.3], [B.Spine2, 0.3], [B.Neck, 0.15]]) { _q.setFromAxisAngle(right, pitch * share); turnWorld(bone, _q); }   // (about the right-hand side: + tips the chest up)
   return true;
 }
 
 /** Where the chest is, in the holder's own space (the gun hangs off it). */
 export function chestAt(holder, rig, out) {
-  rig.B.Chest.getWorldPosition(out);
+  rig.B.Spine2.getWorldPosition(out);
   return holder.worldToLocal(out);
 }
 
 /** Both hands onto the held gun: right on the grip, left on the handguard (or on `leftTo`, say the
- *  magazine during a reload). */
+ *  magazine during a reload). The clips already close the fingers round a rifle. */
 export function handsOnGun(holder, rig, gun, leftTo = null) {
   if (!gun || rig.ak < 0.5 || !gun.userData.grip) return;
   gun.updateWorldMatrix(true, false);
   const right = V().set(-1, 0, 0).transformDirection(holder.matrixWorld), fwd = V().set(0, 0, 1).transformDirection(holder.matrixWorld);
-  const gq = gun.getWorldQuaternion(V4());
+  const gq = gun.getWorldQuaternion(new THREE.Quaternion());
   const back = V().set(0, 0, -1).transformDirection(gun.matrixWorld), gdown = V().set(0, -1, 0).transformDirection(gun.matrixWorld);
-  const grip = gun.localToWorld(gun.userData.grip.clone()).addScaledVector(back, 0.05).addScaledVector(gdown, 0.02);
-  const fore = leftTo ? leftTo.clone() : gun.localToWorld((gun.userData.fore || gun.userData.grip).clone()).addScaledVector(gdown, 0.03);
+  const grip = gun.localToWorld(gun.userData.grip.clone()).addScaledVector(back, 0.05).addScaledVector(gdown, 0.03);
+  const fore = leftTo ? leftTo.clone() : gun.localToWorld((gun.userData.fore || gun.userData.grip).clone()).addScaledVector(gdown, 0.04);
   const down = V().set(0, -1, 0);
   const [R, L] = rig.arms;
   ik2(R.up, R.lo, R.tip, grip, grip.clone().addScaledVector(right, 0.6).addScaledVector(down, 0.8).addScaledVector(fwd, -0.3));
   setWorldQuat(R.wrist, gq.clone().multiply(rig.hands[0]));
   ik2(L.up, L.lo, L.tip, fore, fore.clone().addScaledVector(right, -0.7).addScaledVector(down, 0.9));
   setWorldQuat(L.wrist, gq.clone().multiply(rig.hands[1]));
-  // Fingers closed round the grip and the handguard.
-  const gx = V().set(1, 0, 0).transformDirection(gun.matrixWorld);
-  curl(rig.fingers[0], gx, CURL.r); curl(rig.fingers[1], gx, CURL.l);
 }
-export const CURL = { r: 0.9, l: 0.9 };
-function curl(hand, axis, angle) {
-  for (const chain of hand) for (const b of chain) { _q.setFromAxisAngle(axis, angle); turnWorld(b, _q); }
-}
+export const CURL = { r: 0, l: 0 };
 
 /** Hands on a steering wheel, handlebars or reins: right hand to `R`, left to `L` (world points),
- *  elbows bent down and out, fingers closed. `steer` (-1..1) turns a wheel's grip a little. */
+ *  elbows bent down and out. */
 export function handsOnBars(holder, rig, R, L) {
   holder.updateMatrixWorld(true);
   const right = V().set(-1, 0, 0).transformDirection(holder.matrixWorld), down = V().set(0, -1, 0), back = V().set(0, 0, -1).transformDirection(holder.matrixWorld);
   const [AR, AL] = rig.arms;
   ik2(AR.up, AR.lo, AR.tip, R, R.clone().addScaledVector(right, 0.7).addScaledVector(down, 0.8).addScaledVector(back, 0.4));
   ik2(AL.up, AL.lo, AL.tip, L, L.clone().addScaledVector(right, -0.7).addScaledVector(down, 0.8).addScaledVector(back, 0.4));
-  curl(rig.fingers[0], right, CURL.r); curl(rig.fingers[1], right, CURL.l);
 }
