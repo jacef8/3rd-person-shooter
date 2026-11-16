@@ -9,7 +9,8 @@ import zlib from 'node:zlib';
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.pck': 'application/octet-stream', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.md': 'text/plain; charset=utf-8', '.apk': 'application/vnd.android.package-archive', '.woff2': 'font/woff2', '.glb': 'model/gltf-binary' };
 const TEXT = new Set(['.html', '.js', '.css', '.json', '.svg', '.webmanifest', '.md']);
 const zipped = new Map();   // file -> { mtimeMs, gz }
-const GZ = { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' };
+// Always check for a newer copy of the game's code (phones otherwise keep yesterday's for a while).
+const GZ = { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding', 'Cache-Control': 'no-cache' };
 
 /** Serve `url` from the first [prefix, directory] root it falls under. False if it's under none. */
 export function serveStatic(req, res, url, roots) {
@@ -40,12 +41,12 @@ function send(req, res, file) {
     }
     fs.readFile(file, (e2, data) => {
       if (e2) return notFound();
-      if (!gzipOk || !TEXT.has(ext) || data.length < 1024) { res.writeHead(200, { 'Content-Type': type }); return res.end(data); }
+      if (!gzipOk || !TEXT.has(ext) || data.length < 1024) { res.writeHead(200, { 'Content-Type': type, ...(TEXT.has(ext) ? { 'Cache-Control': 'no-cache' } : {}) }); return res.end(data); }
       const hit = zipped.get(file);
       const done = (gz) => { res.writeHead(200, { 'Content-Type': type, ...GZ }); res.end(gz); };
       if (hit && hit.mtimeMs === st.mtimeMs) return done(hit.gz);
       zlib.gzip(data, { level: 6 }, (e3, gz) => {
-        if (e3) { res.writeHead(200, { 'Content-Type': type }); return res.end(data); }
+        if (e3) { res.writeHead(200, { 'Content-Type': type, ...(TEXT.has(ext) ? { 'Cache-Control': 'no-cache' } : {}) }); return res.end(data); }
         zipped.set(file, { mtimeMs: st.mtimeMs, gz });
         done(gz);
       });
