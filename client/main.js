@@ -929,7 +929,7 @@ function shotFx(g, archetype, sup = 0) {
     }
     muzzleLight.position.copy(mz); muzzleLight.intensity = 5 * size;
   }
-  g.userData.kick = 1;
+  g.userData.kick = 1; g.userData.firedAt = performance.now();
   if (a === 'launcher' || !gun.userData.eject) return;
   const shotgun = a === 'shotgun';
   const m = new THREE.Mesh(shotgun ? SHELL_GEO.hull : a === 'sidearm' ? SHELL_GEO.pistol : SHELL_GEO.rifle, shotgun ? SHELL.hull : SHELL.brass);
@@ -1055,12 +1055,12 @@ function updateCharacterMesh(g, c, dt) {
     u.vx = (u.vx || 0) + ((tooFar ? 0 : dxm / adt) - (u.vx || 0)) * vk; u.vz = (u.vz || 0) + ((tooFar ? 0 : dzm / adt) - (u.vz || 0)) * vk;
     const yaw = g.rotation.y, still = c.boat || c.downed || c.prone || c.air;
     const fwd = u.vx * Math.sin(yaw) + u.vz * Math.cos(yaw), side = u.vx * Math.cos(yaw) - u.vz * Math.sin(yaw);
-    const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming);
+    const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming) || now - (u.firedAt || 0) < 900;   // shooting brings the gun up to the shoulder, as aiming does
     const armed = !!gunObj && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
     u.gun.visible = armed;
     const cd = camera.position.distanceTo(g.position), detail = cd < 60 ? 1 : cd < 130 ? 0.3 : 0.1;
     const pitch = c.pitch || 0;
-    const fine = animatePerson(g, u.rig, { speed: still ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched, seated, armed, pitch, detail }, adt);
+    const fine = animatePerson(g, u.rig, { speed: still ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched, seated, armed, aiming: aimNow, pitch, detail }, adt);
     // The gun rides on the chest, turned with the aim; up to the eye when aiming down the sights.
     u.aimK = (u.aimK || 0) + ((aimNow ? 1 : 0) - (u.aimK || 0)) * Math.min(1, adt * 12);
     if (fine) chestAt(g, u.rig, u.aimPivot.position);

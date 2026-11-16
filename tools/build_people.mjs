@@ -19,7 +19,7 @@ import sharp from 'sharp';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 
-const [charDir, clipDir] = process.argv.slice(2);
+const [charDir, clipDir, mode] = process.argv.slice(2);   // mode 'clips': rebuild only anims.glb
 if (!charDir || !clipDir) { console.error('usage: node tools/build_people.mjs <characters dir> <clips dir>'); process.exit(1); }
 const out = new URL('../client/models/people/', import.meta.url).pathname;
 fs.mkdirSync(out, { recursive: true });
@@ -29,7 +29,7 @@ const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
 const PEOPLE = { swat1: 'swat-1', swat2: 'swat-2', swat3: 'swat-3', james: 'james', liza: 'liza', remy: 'remy' };
 const TRIS = 22000;   // about what a phone can draw a couple of dozen of
 await MeshoptSimplifier.ready;
-for (const [name, file] of Object.entries(PEOPLE)) {
+for (const [name, file] of Object.entries(mode === 'clips' ? {} : PEOPLE)) {
   const doc = await io.read(path.join(charDir, `${file}.glb`));
   for (const a of doc.getRoot().listAnimations()) dropAnim(a);
   // Hair and eyelashes are cut-outs: keep their alpha (PNG); everything else goes to JPEG.
@@ -65,30 +65,86 @@ for (const [k, d] of Object.entries(DIRS)) {
   CLIPS[`cwalk_${k}`] = `Crouch Walk ${d === 'Right' ? 'RIght' : d} Rifle`;
 }
 const fbx = new FBXLoader();
+THREE.TextureLoader.prototype.load = () => new THREE.Texture();   // (the T-pose file carries a mesh; its textures aren't needed)
+const readFbx = (file) => { const raw = fs.readFileSync(file); return fbx.parse(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), ''); };
 const anims = new Document();
 const buf = anims.createBuffer();
 const scene = anims.createScene('clips');
 const nodes = new Map();
 const node = (bone) => { if (!nodes.has(bone)) { const n = anims.createNode(bone); scene.addChild(n); nodes.set(bone, n); } return nodes.get(bone); };
-// The characters' armature is turned +90° about X (Blender's Z-up), so the hips' clip keys are turned back.
-const toZUp = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2), q = new THREE.Quaternion();
+
+// Retargeting. The clips were made on another copy of the Mixamo rig whose bones rest at slightly
+// different angles (up to ~30° on the feet and forearms), so their raw local rotations bend our
+// people's knees and twist their arms. Instead, for every frame: how far each bone has turned in the
+// world from the clip rig's T-pose is applied to our rig's T-pose, and turned back into a local
+// rotation. The hips' height is scaled to our rig.
+const bare = (n) => n.replace(/^mixamorig:?/, '');
+// Our rig (every character shares it): rebuilt as three.js objects from a character file, at rest (T-pose).
+const tdoc = await io.read(path.join(charDir, 'swat-1.glb'));
+const tgt = {}, tgtObj = new Map();
+const build = (n, parent) => {
+  const o = new THREE.Object3D();
+  o.position.fromArray(n.getTranslation()); o.quaternion.fromArray(n.getRotation()); o.scale.fromArray(n.getScale());
+  parent.add(o); tgtObj.set(n, o);
+  if (n.getName().startsWith('mixamorig')) tgt[bare(n.getName())] = { o, node: n.getName().replace(':', '') };
+  for (const c of n.listChildren()) build(c, o);
+};
+const tRoot = new THREE.Object3D();
+for (const n of tdoc.getRoot().listScenes()[0].listChildren()) build(n, tRoot);
+tRoot.updateMatrixWorld(true);
+const order = [];   // parents before children
+(function walk(o) { for (const c of o.children) { const b = Object.entries(tgt).find(([, v]) => v.o === c); if (b) order.push(b[0]); walk(c); } })(tRoot);
+const WtT = {}, PtT = new THREE.Vector3();
+for (const b of order) WtT[b] = tgt[b].o.getWorldQuaternion(new THREE.Quaternion());
+tgt.Hips.o.getWorldPosition(PtT);
+const hipsParentInv = tgt.Hips.o.parent.matrixWorld.clone().invert(), hipsParentQ = tgt.Hips.o.parent.getWorldQuaternion(new THREE.Quaternion());
+// The clip rig in its T-pose.
+const poseOf = (obj, clip, t) => {
+  const mixer = new THREE.AnimationMixer(obj); mixer.clipAction(clip).play(); mixer.setTime(t); obj.updateMatrixWorld(true);
+  const bones = {}; obj.traverse((o) => { if (o.isBone) bones[bare(o.name)] = o; });
+  return bones;
+};
+const tposeObj = readFbx(path.join(clipDir, 'TPose.fbx'));
+const sT = poseOf(tposeObj, tposeObj.animations[0], 0);
+const WsT = {}; for (const b of order) if (sT[b]) WsT[b] = sT[b].getWorldQuaternion(new THREE.Quaternion());
+const PsT = sT.Hips.getWorldPosition(new THREE.Vector3());
+const hipK = PtT.y / PsT.y;   // our hips' height over the clip rig's
+console.log('retarget: hips', PsT.y.toFixed(1), '->', PtT.y.toFixed(3), 'bones', Object.keys(WsT).length);
+
+const FPS = 30;
+const _w = new THREE.Quaternion(), _d = new THREE.Quaternion(), _p = new THREE.Vector3();
 for (const [name, file] of Object.entries(CLIPS)) {
-  const raw = fs.readFileSync(path.join(clipDir, `${file}.fbx`));
-  const clip = fbx.parse(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength), '').animations[0];
-  const anim = anims.createAnimation(name);
-  for (const t of clip.tracks) {
-    const dot = t.name.lastIndexOf('.'), bone = t.name.slice(0, dot), prop = t.name.slice(dot + 1);
-    const hips = bone === 'mixamorigHips';
-    // Only the hips move; every other bone keeps its own length (characters differ in build).
-    if (prop === 'scale' || (prop === 'position' && !hips)) continue;
-    const v = Float32Array.from(t.values);
-    if (hips && prop === 'quaternion') for (let i = 0; i < v.length; i += 4) { q.fromArray(v, i).premultiply(toZUp); q.toArray(v, i); }
-    if (hips && prop === 'position') for (let i = 0; i < v.length; i += 3) { const y = v[i + 1], z = v[i + 2]; v[i + 1] = z; v[i + 2] = -y; }
-    const input = anims.createAccessor().setType('SCALAR').setArray(Float32Array.from(t.times)).setBuffer(buf);
-    const output = anims.createAccessor().setType(prop === 'quaternion' ? 'VEC4' : 'VEC3').setArray(v).setBuffer(buf);
-    const sampler = anims.createAnimationSampler().setInput(input).setOutput(output).setInterpolation('LINEAR');
-    anim.addSampler(sampler).addChannel(anims.createAnimationChannel().setTargetNode(node(bone)).setTargetPath(prop === 'quaternion' ? 'rotation' : 'translation').setSampler(sampler));
+  const obj = readFbx(path.join(clipDir, `${file}.fbx`)), clip = obj.animations[0];
+  const mixer = new THREE.AnimationMixer(obj); mixer.clipAction(clip).play();
+  const bones = {}; obj.traverse((o) => { if (o.isBone) bones[bare(o.name)] = o; });
+  const n = Math.max(2, Math.round(clip.duration * FPS) + 1), times = new Float32Array(n);
+  const rot = {}; for (const b of order) if (WsT[b] && bones[b]) rot[b] = new Float32Array(n * 4);
+  const pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const t = Math.min(clip.duration, i / FPS); times[i] = t;
+    mixer.setTime(t); obj.updateMatrixWorld(true);
+    const Wt = {};
+    for (const b of order) {
+      if (!rot[b]) continue;
+      bones[b].getWorldQuaternion(_w);
+      _d.copy(_w).multiply(_d.copy(WsT[b]).invert());            // how far it's turned from the T-pose…
+      _d.copy(_w).multiply(WsT[b].clone().invert());
+      Wt[b] = _d.clone().multiply(WtT[b]);                       // …applied to ours
+      const parent = tgt[b].o.parent, pb = Object.keys(tgt).find((k) => tgt[k].o === parent);
+      const pq = pb && Wt[pb] ? Wt[pb] : (pb ? WtT[pb] : hipsParentQ);
+      pq.clone().invert().multiply(Wt[b]).toArray(rot[b], i * 4);
+    }
+    bones.Hips.getWorldPosition(_p);
+    _p.sub(PsT).multiplyScalar(hipK).add(PtT).applyMatrix4(hipsParentInv).toArray(pos, i * 3);
   }
+  const anim = anims.createAnimation(name);
+  const input = anims.createAccessor().setType('SCALAR').setArray(times).setBuffer(buf);
+  const chan = (bone, pathName, arr, type) => {
+    const sampler = anims.createAnimationSampler().setInput(input).setOutput(anims.createAccessor().setType(type).setArray(arr).setBuffer(buf)).setInterpolation('LINEAR');
+    anim.addSampler(sampler).addChannel(anims.createAnimationChannel().setTargetNode(node(bone)).setTargetPath(pathName).setSampler(sampler));
+  };
+  for (const [b, arr] of Object.entries(rot)) chan(tgt[b].node, 'rotation', arr, 'VEC4');
+  chan(tgt.Hips.node, 'translation', pos, 'VEC3');
 }
 await anims.transform(resample({ tolerance: 1e-4 }), prune({ keepLeaves: true }));
 await io.write(path.join(out, 'anims.glb'), anims);

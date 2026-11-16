@@ -174,7 +174,7 @@ export function animatePerson(holder, rig, st, dt) {
   // Which clip: crouch-walk, walk, jog or sprint by speed; standing still, aiming or just holding.
   const crouch = st.crouch && !st.seated;
   let gait = crouch ? 'cwalk' : s < (rig.gait === 'run' ? 3.3 : 3.8) ? 'walk' : 'run';
-  const want = !moving ? (crouch ? 'crouch' : !st.armed ? 'idle' : 'aim')
+  const want = !moving ? (crouch ? 'crouch' : !st.armed ? 'idle' : st.aiming ? 'aim' : 'hold')   // standing tall unless aiming or shooting
     : gait === 'run' && DIRS[dir] === 'f' && s > (rig.cur === 'sprint' ? 6.8 : 7.3) ? 'sprint' : `${gait}_${DIRS[dir]}`;
   if (want === 'sprint') gait = 'sprint';
   rig.gait = gait; rig.cur = want;
