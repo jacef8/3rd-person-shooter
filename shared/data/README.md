@@ -17,6 +17,7 @@ over.
 | `building.json` | Tools, crafting recipes, buildable pieces and their stages, building and raiding rules |
 | `activities.json` | Contracts, supply drops, terminals, loot tables by zone, hack times, helicopter extraction |
 | `combat.json` | Backpack size, door HP, headshots, damage falloff, medkits, AI Rogues |
+| `rides.json` | Cars, pickups, motorcycles, dirt bikes, four-wheelers, golf carts, bicycles, skateboards, tractors and horses: speeds on and off road, seats, trunk room, how many are out, where they turn up, hotwiring and the lock after you get out |
 | `map-bristol.json` | The real Bristol, FL area: towns, landmarks, rivers, lakes, highways, terrain regions |
 
 ## Conventions

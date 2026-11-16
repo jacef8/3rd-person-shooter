@@ -19,7 +19,7 @@ import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
 import HELI from '/shared/data/activities.json' with { type: 'json' };
 import { SKY, airRates, nextMode, stepAir } from '/shared/skydive.js';
-import { BOATS, BOAT_RULES, stepBoat, seatPos } from '/shared/boats.js';
+import { BOATS, BOAT_RULES, RIDE_RULES, stepBoat, seatPos, riderFeet } from '/shared/boats.js';
 import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
 import HOMESTEAD from '/shared/data/homestead.json' with { type: 'json' };
@@ -526,9 +526,10 @@ function makeAnimal(kind) {
   return g;
 }
 
-// ------------------------------------------------------------------ boats
+// ------------------------------------------------------------------ boats and rides
 const boatVis = new Map();   // id -> { mesh, data }
-function makeBoat(type) {
+function makeBoat(type, color) {
+  if (BOATS[type].land) return makeRide(type, color);
   const def = BOATS[type], g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color: type === 'airboat' ? 0x46705c : 0x6b6f5a, roughness: 0.6, metalness: 0.3 });
   const floor = new THREE.Mesh(new THREE.BoxGeometry(def.wid, 0.12, def.len), mat); floor.position.y = 0.05;
@@ -559,45 +560,223 @@ function makeBoat(type) {
   scene.add(g);
   return g;
 }
+// Shared bits for the ride models (built once, reused by every ride).
+const RIDE_MAT = {
+  tire: new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.95 }),
+  rim: new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.4, metalness: 0.6 }),
+  glass: new THREE.MeshStandardMaterial({ color: 0x24323d, roughness: 0.15, metalness: 0.4 }),
+  dark: new THREE.MeshStandardMaterial({ color: 0x262626, roughness: 0.7 }),
+  chrome: new THREE.MeshStandardMaterial({ color: 0xc8c8c8, roughness: 0.25, metalness: 0.8 }),
+  head: new THREE.MeshStandardMaterial({ color: 0xfff4d6, emissive: 0x806a40, roughness: 0.3 }),
+  tail: new THREE.MeshStandardMaterial({ color: 0xb01818, emissive: 0x400606, roughness: 0.3 }),
+  leather: new THREE.MeshStandardMaterial({ color: 0x4a2f1a, roughness: 0.8 }),
+  deck: new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.8 }),
+};
+/** A low-poly model of each kind of ride, in its paint colour. Wheels spin, horses' legs walk. */
+function makeRide(type, color) {
+  const def = BOATS[type], g = new THREE.Group(), body = new THREE.Group();
+  g.add(body);
+  const paint = new THREE.MeshStandardMaterial({ color: color || def.colors?.[0] || 0x888888, roughness: 0.45, metalness: type === 'horse' ? 0 : 0.35 });
+  const add = (geo, mat, x, y, z, parent = body) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
+  const boxG = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+  const wheels = [], legs = [];
+  /** A wheel at (x, y=r, z): a tyre with a hub, on a pivot that spins. */
+  const wheel = (x, z, r, w = 0.22, thin = false) => {
+    const pivot = new THREE.Group(); pivot.position.set(x, r, z); body.add(pivot);
+    if (thin) { const t = new THREE.Mesh(new THREE.TorusGeometry(r - 0.03, 0.035, 6, 18), RIDE_MAT.tire); t.rotation.y = Math.PI / 2; pivot.add(t);
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.08, 6), RIDE_MAT.rim); hub.rotation.z = Math.PI / 2; pivot.add(hub);
+      for (let i = 0; i < 3; i++) { const sp = new THREE.Mesh(boxG(0.01, (r - 0.05) * 2, 0.012), RIDE_MAT.rim); sp.rotation.x = (i * Math.PI) / 3; pivot.add(sp); }
+    } else {
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(r, r, w, 14), RIDE_MAT.tire); t.rotation.z = Math.PI / 2; pivot.add(t);
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.55, r * 0.55, w + 0.02, 10), RIDE_MAT.rim); hub.rotation.z = Math.PI / 2; pivot.add(hub);
+      const mark = new THREE.Mesh(boxG(w + 0.03, r * 0.9, 0.05), RIDE_MAT.dark); pivot.add(mark);   // so you can see it turn
+    }
+    wheels.push({ pivot, r });
+    return pivot;
+  };
+  const L = def.len, W = def.wid;
+  if (type === 'car') {
+    add(boxG(W, 0.55, L), paint, 0, 0.6, 0);
+    const cab = add(boxG(W * 0.86, 0.5, L * 0.48), RIDE_MAT.glass, 0, 1.12, -0.25);
+    add(boxG(W * 0.88, 0.06, L * 0.46), paint, 0, 1.39, -0.25);
+    void cab;
+    for (const s of [-1, 1]) { add(boxG(0.3, 0.12, 0.05), RIDE_MAT.head, s * W * 0.32, 0.72, L / 2 + 0.01); add(boxG(0.3, 0.12, 0.05), RIDE_MAT.tail, s * W * 0.32, 0.72, -L / 2 - 0.01); }
+    add(boxG(W + 0.04, 0.14, 0.12), RIDE_MAT.dark, 0, 0.4, L / 2); add(boxG(W + 0.04, 0.14, 0.12), RIDE_MAT.dark, 0, 0.4, -L / 2);
+    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * (W / 2 - 0.08), e * L * 0.32, 0.33);
+  } else if (type === 'pickup') {
+    add(boxG(W, 0.6, L), paint, 0, 0.85, 0);
+    add(boxG(W * 0.96, 0.62, 1.7), paint, 0, 1.45, 0.75);
+    add(boxG(W * 0.97, 0.42, 0.06), RIDE_MAT.glass, 0, 1.5, 1.61);
+    for (const s of [-1, 1]) add(boxG(0.06, 0.4, 1.4), RIDE_MAT.glass, s * W * 0.485, 1.5, 0.8);
+    for (const s of [-1, 1]) add(boxG(0.08, 0.35, L * 0.42), paint, s * (W / 2 - 0.04), 1.32, -L * 0.27);
+    add(boxG(W, 0.35, 0.08), paint, 0, 1.32, -L / 2 + 0.04);
+    for (const s of [-1, 1]) { add(boxG(0.32, 0.14, 0.05), RIDE_MAT.head, s * W * 0.32, 0.98, L / 2 + 0.01); add(boxG(0.14, 0.3, 0.05), RIDE_MAT.tail, s * W * 0.44, 1.2, -L / 2 - 0.01); }
+    add(boxG(W + 0.06, 0.18, 0.14), RIDE_MAT.chrome, 0, 0.6, L / 2);
+    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * (W / 2 - 0.1), e * L * 0.32, 0.42, 0.28);
+  } else if (type === 'motorcycle' || type === 'dirtbike') {
+    const dirt = type === 'dirtbike', r = dirt ? 0.36 : 0.32;
+    wheel(0, L / 2 - r, r, 0.12); wheel(0, -L / 2 + r, r, 0.14);
+    add(boxG(0.18, 0.22, L * 0.55), RIDE_MAT.dark, 0, r + 0.25, 0);
+    add(boxG(0.32, 0.22, 0.5), paint, 0, r + 0.42, 0.25);   // tank
+    add(boxG(0.28, 0.1, 0.6), RIDE_MAT.dark, 0, r + 0.48, -0.25);   // seat
+    add(boxG(0.7, 0.04, 0.04), RIDE_MAT.chrome, 0, r + 0.72, L / 2 - r - 0.05);   // bars
+    const fork = add(boxG(0.05, 0.6, 0.05), RIDE_MAT.chrome, 0, r + 0.3, L / 2 - r - 0.05); fork.rotation.x = -0.35;
+    if (dirt) { add(boxG(0.22, 0.04, 0.5), paint, 0, r * 2 + 0.05, L / 2 - r); add(boxG(0.22, 0.04, 0.6), paint, 0, r * 2 + 0.1, -L / 2 + r + 0.2); }
+    else { add(boxG(0.1, 0.1, 0.6), RIDE_MAT.chrome, 0.16, r * 0.8, -0.35); add(boxG(0.18, 0.1, 0.05), RIDE_MAT.head, 0, r + 0.62, L / 2 - 0.25); }
+  } else if (type === 'atv') {
+    add(boxG(0.9, 0.3, 1.5), paint, 0, 0.62, 0);
+    add(boxG(1.15, 0.08, 0.45), paint, 0, 0.82, 0.7); add(boxG(1.15, 0.08, 0.45), paint, 0, 0.82, -0.7);   // fenders
+    add(boxG(0.36, 0.14, 0.6), RIDE_MAT.dark, 0, 0.84, -0.1);
+    add(boxG(0.8, 0.04, 0.04), RIDE_MAT.chrome, 0, 1.05, 0.5);
+    add(boxG(0.9, 0.04, 0.4), RIDE_MAT.dark, 0, 0.95, 0.85); add(boxG(0.9, 0.04, 0.4), RIDE_MAT.dark, 0, 0.95, -0.85);   // racks
+    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * 0.5, e * 0.68, 0.3, 0.25);
+  } else if (type === 'golfcart') {
+    add(boxG(W, 0.22, L), paint, 0, 0.36, 0);
+    add(boxG(W * 0.95, 0.5, 0.55), paint, 0, 0.6, 0.85);   // nose
+    add(boxG(W * 0.9, 0.14, 0.55), RIDE_MAT.dark, 0, 0.62, -0.05);   // bench
+    add(boxG(W * 0.9, 0.5, 0.1), RIDE_MAT.dark, 0, 0.92, -0.32);
+    add(boxG(W * 1.02, 0.06, L * 0.82), RIDE_MAT.chrome, 0, 1.75, 0.05);   // roof
+    for (const s of [-1, 1]) for (const e of [0.75, -0.6]) add(boxG(0.04, 1.3, 0.04), RIDE_MAT.chrome, s * W * 0.45, 1.12, e);
+    add(boxG(W * 0.8, 0.5, 0.04), RIDE_MAT.glass, 0, 1.45, 0.76);
+    for (const s of [-1, 1]) for (const e of [-1, 1]) wheel(s * (W / 2 - 0.08), e * L * 0.34, 0.2, 0.16);
+  } else if (type === 'bicycle') {
+    wheel(0, 0.52, 0.34, 0.04, true); wheel(0, -0.52, 0.34, 0.04, true);
+    const bar = (x1, y1, z1, x2, y2, z2) => { const len = Math.hypot(y2 - y1, z2 - z1); const m = add(boxG(0.035, len, 0.035), paint, 0, (y1 + y2) / 2, (z1 + z2) / 2); m.rotation.x = Math.atan2(z2 - z1, y2 - y1); void x1; void x2; return m; };
+    bar(0, 0.34, -0.52, 0, 0.8, -0.12); bar(0, 0.34, 0, 0, 0.8, -0.12); bar(0, 0.8, -0.12, 0, 0.82, 0.38); bar(0, 0.34, 0, 0, 0.82, 0.38); bar(0, 0.34, 0.52, 0, 0.92, 0.42);
+    add(boxG(0.16, 0.05, 0.26), RIDE_MAT.dark, 0, 0.86, -0.16);
+    add(boxG(0.55, 0.03, 0.03), RIDE_MAT.dark, 0, 0.98, 0.42);
+  } else if (type === 'skateboard') {
+    add(boxG(0.22, 0.025, 0.82), paint, 0, 0.1, 0);
+    add(boxG(0.2, 0.004, 0.78), RIDE_MAT.dark, 0, 0.114, 0);
+    for (const e of [-1, 1]) { add(boxG(0.18, 0.03, 0.05), RIDE_MAT.chrome, 0, 0.07, e * 0.27); for (const s of [-1, 1]) wheel(s * 0.09, e * 0.27, 0.035, 0.03); }
+  } else if (type === 'tractor') {
+    wheel(-0.85, -0.85, 0.78, 0.42); wheel(0.85, -0.85, 0.78, 0.42); wheel(-0.72, 1.15, 0.42, 0.24); wheel(0.72, 1.15, 0.42, 0.24);
+    add(boxG(0.75, 0.75, 2.0), paint, 0, 1.05, 0.55);   // engine hood
+    add(boxG(0.95, 0.5, 0.9), paint, 0, 0.95, -0.7);
+    add(boxG(0.5, 0.12, 0.45), RIDE_MAT.dark, 0, 1.3, -0.65);   // seat
+    add(boxG(0.5, 0.45, 0.08), RIDE_MAT.dark, 0, 1.55, -0.88);
+    add(new THREE.CylinderGeometry(0.05, 0.05, 0.9, 6), RIDE_MAT.dark, 0.25, 1.85, 1.0);   // exhaust
+    for (const s of [-1, 1]) for (const e of [-1.05, -0.25]) add(boxG(0.05, 1.3, 0.05), RIDE_MAT.dark, s * 0.6, 2.0, e);   // rollover frame
+    add(boxG(1.3, 0.06, 1.0), paint, 0, 2.62, -0.65);   // canopy
+    for (const s of [-1, 1]) add(boxG(0.5, 0.08, 1.0), paint, s * 0.85, 1.6, -0.85);   // fenders
+    add(boxG(0.5, 0.06, 0.04), RIDE_MAT.head, 0, 1.2, 1.56);
+  } else if (type === 'horse') {
+    const coat = paint, mane = new THREE.MeshStandardMaterial({ color: 0x1a120c, roughness: 0.9 });
+    const trunk = add(new THREE.SphereGeometry(0.5, 14, 10), coat, 0, 1.3, 0); trunk.scale.set(0.82, 0.85, 1.75);
+    const neck = add(new THREE.CylinderGeometry(0.17, 0.27, 0.95, 10), coat, 0, 1.75, 0.82); neck.rotation.x = 0.65;
+    const head = add(new THREE.BoxGeometry(0.24, 0.26, 0.6), coat, 0, 2.05, 1.25); head.rotation.x = 0.55;
+    add(boxG(0.06, 0.5, 0.75), mane, 0, 1.92, 0.7).rotation.x = 0.65;
+    for (const s of [-1, 1]) add(boxG(0.05, 0.14, 0.05), coat, s * 0.08, 2.32, 1.08);   // ears
+    const tail = add(new THREE.CylinderGeometry(0.06, 0.1, 0.75, 6), mane, 0, 1.15, -0.95); tail.rotation.x = -0.45;
+    add(boxG(0.66, 0.14, 0.7), RIDE_MAT.leather, 0, 1.73, -0.05);   // saddle
+    for (const s of [-1, 1]) add(boxG(0.06, 0.4, 0.5), RIDE_MAT.leather, s * 0.42, 1.38, -0.35);   // saddlebags
+    for (const [x, z] of [[-0.2, 0.62], [0.2, 0.62], [-0.2, -0.62], [0.2, -0.62]]) {
+      const hip = new THREE.Group(); hip.position.set(x, 1.15, z); body.add(hip);
+      const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.07, 0.6, 7), coat); upper.position.y = -0.3; hip.add(upper);
+      const knee = new THREE.Group(); knee.position.y = -0.6; hip.add(knee);
+      const lower = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.5, 6), coat); lower.position.y = -0.25; knee.add(lower);
+      const hoof = new THREE.Mesh(boxG(0.1, 0.06, 0.12), mane); hoof.position.y = -0.52; knee.add(hoof);
+      legs.push({ hip, knee, front: z > 0, side: x });
+    }
+  }
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  const label = makeLabel('', 0.0042, '#7dff9a');
+  label.position.y = def.h + 0.9;
+  g.add(label);
+  g.rotation.order = 'YXZ';
+  g.userData = { label, body, wheels, legs, gait: 0, lean: 0 };
+  scene.add(g);
+  return g;
+}
 function syncBoats(list) {
   const seen = new Set();
   for (const b of list) {
     seen.add(b.id);
     let v = boatVis.get(b.id);
-    if (!v) { v = { mesh: makeBoat(b.type) }; v.mesh.position.set(b.x, 0, b.z); v.mesh.rotation.y = b.yaw; boatVis.set(b.id, v); }
+    if (!v) { v = { mesh: makeBoat(b.type, b.c) }; v.mesh.position.set(b.x, b.y ?? 0, b.z); v.mesh.rotation.y = b.yaw; boatVis.set(b.id, v); }
     v.data = b;
-    const name = BOATS[b.type].name.toLowerCase();
-    setLabel(v.mesh.userData.label, `${b.mine ? '◆ ' : ''}${b.owner ? `${b.owner}'s ${name}` : `Abandoned ${name}`}  ${b.hp}/${b.max}`, b.mine ? '#7dff9a' : '#ffd27a');
+    const def = BOATS[b.type], name = def.name.toLowerCase();
+    // Rides only say whose they are when they're yours (the prompt tells you the rest up close).
+    if (def.land) setLabel(v.mesh.userData.label, b.mine ? `◆ ${b.w ? '' : 'Your '}${b.w ? def.name : name}` : '', '#7dff9a');
+    else setLabel(v.mesh.userData.label, `${b.mine ? '◆ ' : ''}${b.owner ? `${b.owner}'s ${name}` : `Abandoned ${name}`}  ${b.hp}/${b.max}`, b.mine ? '#7dff9a' : '#ffd27a');
   }
   for (const [id, v] of boatVis) if (!seen.has(id)) { scene.remove(v.mesh); boatVis.delete(id); }
 }
+const rideEnv = () => ({ solids: (x, z, r) => solidsNear(x, z, r), roadsNear: state.map.roadsNear });
 function animateBoats(dt, now) {
   for (const [id, v] of boatVis) {
     const local = state.boat && state.boat.id === id ? state.boat : null;
-    const t = local || v.data, g = v.mesh, k = Math.min(1, dt * 10);
+    const t = local || v.data, g = v.mesh, k = Math.min(1, dt * 10), def = BOATS[v.data.type];
+    const px = g.position.x, pz = g.position.z;
     if (local) { g.position.x = t.x; g.position.z = t.z; g.rotation.y = t.yaw; } else {
       g.position.x += (t.x - g.position.x) * k; g.position.z += (t.z - g.position.z) * k;
       let dy = t.yaw - g.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.rotation.y += dy * k;
     }
+    const u = g.userData;
+    if (def.land) {
+      // Sit on the ground (or a bridge deck), tipped to the slope; wheels turn with the distance covered.
+      const gy = local && local.y !== undefined ? local.y : v.data.y ?? ground(g.position.x, g.position.z);
+      g.position.y += (gy - g.position.y) * (Math.abs(gy - g.position.y) > 3 ? 1 : Math.min(1, dt * 14));
+      const onGround = Math.abs(gy - ground(g.position.x, g.position.z)) < 0.4;
+      const fx = Math.sin(g.rotation.y), fz = Math.cos(g.rotation.y), hl = def.len * 0.4, hw = Math.max(0.3, def.wid * 0.4);
+      const pitch = onGround ? Math.atan2(ground(g.position.x - fx * hl, g.position.z - fz * hl) - ground(g.position.x + fx * hl, g.position.z + fz * hl), hl * 2) : 0;
+      const roll = onGround && !def.lean ? Math.atan2(ground(g.position.x + fz * hw, g.position.z - fx * hw) - ground(g.position.x - fz * hw, g.position.z + fx * hw), hw * 2) : 0;
+      g.rotation.x += (pitch - g.rotation.x) * Math.min(1, dt * 8);
+      const moved = Math.hypot(g.position.x - px, g.position.z - pz), fwd = (g.position.x - px) * fx + (g.position.z - pz) * fz >= 0 ? 1 : -1;
+      const speed = dt > 0 ? moved / dt : 0;
+      for (const w of u.wheels) w.pivot.rotation.x += (moved * fwd) / w.r;
+      // Bikes lean into turns.
+      let turn = 0;
+      if (def.lean) { const dyaw = Math.atan2(Math.sin(g.rotation.y - (u.lastYaw ?? g.rotation.y)), Math.cos(g.rotation.y - (u.lastYaw ?? g.rotation.y))); turn = dt > 0 ? (dyaw / dt) * Math.min(1, speed / 8) : 0; }
+      u.lastYaw = g.rotation.y;
+      u.lean += (Math.max(-0.45, Math.min(0.45, turn * 0.35)) - u.lean) * Math.min(1, dt * 6);
+      g.rotation.z += ((def.lean ? u.lean : roll) - g.rotation.z) * Math.min(1, dt * 8);
+      // A horse walks, trots, gallops: legs swing with its speed.
+      if (u.legs.length) {
+        u.gait += dt * (2 + Math.min(14, speed) * 0.9) * (speed > 0.3 ? 1 : 0);
+        const amp = Math.min(0.75, speed / 10 + (speed > 0.3 ? 0.2 : 0));
+        for (const l of u.legs) {
+          const ph = u.gait + (l.front ? 0 : Math.PI) + (l.side > 0 ? Math.PI / 2 : 0);
+          l.hip.rotation.x = Math.sin(ph) * amp;
+          l.knee.rotation.x = Math.max(0, -Math.cos(ph)) * amp * (l.front ? -1.2 : 1.2);
+        }
+        u.body.position.y = speed > 0.3 ? Math.abs(Math.sin(u.gait)) * Math.min(0.08, speed * 0.008) : 0;
+      }
+      u.label.visible = !!v.data.mine && state.me?.boat?.id !== id && camera.position.distanceTo(g.position) > 6;
+      continue;
+    }
     g.position.y = Math.sin(now / 700 + g.position.x) * 0.04;
-    if (g.userData.prop) g.userData.prop.rotation.z += dt * ((local ? Math.abs(local.speed) > 0.5 : v.data.fast) ? 40 : 2);
-    g.userData.label.visible = state.me?.boat?.id !== id && camera.position.distanceTo(g.position) > 5;
+    if (u.prop) u.prop.rotation.z += dt * ((local ? Math.abs(local.speed) > 0.5 : v.data.fast) ? 40 : 2);
+    u.label.visible = state.me?.boat?.id !== id && camera.position.distanceTo(g.position) > 5;
   }
 }
-/** Where you'd be sitting: your own boat is predicted locally, anyone else's follows the server. */
+/** Where you'd be sitting: your own ride is predicted locally, anyone else's follows the server. */
 function boatSeat(me) {
   if (state.boat && me.boat.seat === 0) return seatPos(state.boat, 0);
   const v = boatVis.get(me.boat.id);
   return v ? seatPos({ type: v.data.type, x: v.mesh.position.x, z: v.mesh.position.z, yaw: v.mesh.rotation.y }, me.boat.seat) : null;
 }
-const canStepOut = () => { for (let r = 2; r <= BOAT_RULES.exitRange; r += 2) for (let a = 0; a < 16; a++) if (ground(state.x + Math.cos(a * Math.PI / 8) * r, state.z + Math.sin(a * Math.PI / 8) * r) > -0.6) return true; return false; };
-function boatHud() {
+/** Where a rider's feet go (the character's origin) in boat or ride `id`. */
+function rideFeet(id) {
+  const v = boatVis.get(id);
+  if (!v || !BOATS[v.data.type].land) return 0.15;
+  return riderFeet(v.data.type, v.mesh.position.y);
+}
+const myRide = () => { const id = state.me?.boat?.id; const v = id && boatVis.get(id); return v ? BOATS[v.data.type] : null; };
+const canStepOut = () => { if (myRide()?.land) return true; for (let r = 2; r <= BOAT_RULES.exitRange; r += 2) for (let a = 0; a < 16; a++) if (ground(state.x + Math.cos(a * Math.PI / 8) * r, state.z + Math.sin(a * Math.PI / 8) * r) > -0.6) return true; return false; };
+function boatHud(pkey = '') {
   const me = state.me;
   if (!me?.boat) return '';
   const v = boatVis.get(me.boat.id);
   if (!v) return '';
-  const mph = Math.round(Math.abs((state.boat && me.boat.seat === 0 ? state.boat.speed : 0) || 0) * 2.237);
-  return `🚤 ${BOATS[v.data.type].name}${me.boat.seat === 0 ? ` · ${mph} mph` : ' · passenger'} · hull ${v.data.hp}/${v.data.max} <small>${me.boat.seat === 0 ? (state.inputMode === 'pad' ? 'Left stick: throttle and steer · ' : 'W/S throttle · A/D steer · ') : ''}${glyph('Tab')} hold · steer to the bank and ${glyph('E')} to get out</small>`;
+  const def = BOATS[v.data.type], driving = me.boat.seat === 0;
+  const mph = Math.round(Math.abs((state.boat && driving ? state.boat.speed : 0) || 0) * 2.237);
+  const steer = driving ? (state.inputMode === 'pad' ? 'Left stick: gas, brake and steer · ' : state.inputMode === 'touch' ? '' : 'W/S gas and brake · A/D steer · ') : '';
+  if (def.land) {
+    const hp = v.data.hp < v.data.max ? ` · ${def.animal ? 'health' : 'damage'} ${Math.round((v.data.hp / v.data.max) * 100)}%` : '';
+    return `${def.icon} ${def.name}${driving ? ` · <b>${mph} mph</b>` : ' · passenger'}${hp} <small>${steer}${def.hold && driving ? `${glyph('Tab')} ${def.animal ? 'saddlebags' : 'trunk'} · ` : ''}</small>${pkey || `<kbd>${glyph('E')}</kbd>`}get off`;
+  }
+  return `🚤 ${def.name}${driving ? ` · ${mph} mph` : ' · passenger'} · hull ${v.data.hp}/${v.data.max} <small>${steer}${glyph('Tab')} hold · steer to the bank and ${glyph('E')} to get out</small>`;
 }
 
 // ------------------------------------------------------------------ characters
@@ -871,11 +1050,17 @@ function gunPose(g, c, now, adt) {
   joint.position.set(u.gunHome.x + 0.16 * env, u.gunHome.y + 0.04 * env, u.gunHome.z - 0.05 * u.kick - 0.08 * env);
 }
 function updateCharacterMesh(g, c, dt) {
+  // On a ride: sit right on your seat, facing the way it points (no lag behind a fast car).
+  const rv = c.boat && boatVis.get(c.boat), onRide = rv && BOATS[rv.data.type].land;
+  if (onRide && c.seat != null) {
+    const q = seatPos({ type: rv.data.type, x: rv.mesh.position.x, z: rv.mesh.position.z, yaw: rv.mesh.rotation.y }, c.seat);
+    c = { ...c, x: q.x, z: q.z, yaw: c.aiming || c.aim ? c.yaw : rv.mesh.rotation.y, smooth: 1 };
+  }
   // Interpolate toward the latest snapshot (already smoothed for other players: follow it exactly).
   const k = c.smooth ? 1 : Math.min(1, dt * 12);
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
-  g.position.y = c.boat ? 0.15 : (c.y ?? ground(g.position.x, g.position.z)) + (c.alt || 0);
+  g.position.y = c.boat ? rideFeet(c.boat) : (c.y ?? ground(g.position.x, g.position.z)) + (c.alt || 0);
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
@@ -889,7 +1074,7 @@ function updateCharacterMesh(g, c, dt) {
   const moving = Math.min(1, u.speed / 3) * (c.boat || c.downed ? 0 : 1);
   u.phase += adt * (4 + u.speed * 1.6) * (moving > 0.05 ? 1 : 0);
   const kp = Math.min(1, adt * 12), ease = (o, key, v) => { o[key] += (v - o[key]) * kp; };
-  const seated = !!c.boat, crouched = !!c.crouch && !seated;
+  const seated = !!c.boat && !(onRide && BOATS[rv.data.type].stand), crouched = !!c.crouch && !seated;
   ease(u.hips.position, 'y', seated ? 0.5 : crouched ? 0.62 : 0.95 + Math.abs(Math.sin(u.phase)) * 0.03 * moving);
   ease(u.upper.rotation, 'x', crouched ? 0.28 : seated ? 0.05 : 0.08 * moving);
   u.legs.forEach((l, i) => {
@@ -1181,7 +1366,11 @@ function drawMinimap() {
     edge(hz.x, hz.z, '#ff5a1f', 10);
   }
   for (const d of state.map.docks) if (Math.abs(d.x - state.x) < view * 1.5 && Math.abs(d.z - state.z) < view * 1.5) dot(d.x, d.z, '#7fd6ff', 5);
-  for (const [, v] of boatVis) dot(v.mesh.position.x, v.mesh.position.z, v.data.mine ? '#7dff9a' : '#ffd27a', 5);
+  for (const [, v] of boatVis) {
+    const land = BOATS[v.data.type].land;
+    if (land && !v.data.mine && (v.data.owner || Math.hypot(v.data.x - state.x, v.data.z - state.z) > view * 0.7)) continue;   // free rides close by only
+    dot(v.mesh.position.x, v.mesh.position.z, v.data.mine ? '#7dff9a' : land ? '#d8d2b0' : '#ffd27a', land && !v.data.mine ? 3 : 5);
+  }
   if (state.enemyStash && state.enemyStash.untilPerf > performance.now()) edge(state.enemyStash.x, state.enemyStash.z, '#ff8a2a', 8);
   for (const [id, e] of state.exposed) { if (e.until < performance.now()) continue; const c = state.players.get(id)?.data; if (c && !c.dead && !c.sq) edge(c.x, c.z, '#ff4d4d', 6); }
   const hp0 = homePos();
@@ -1520,7 +1709,7 @@ function handle(m) {
       break;
     }
     case 'boatFix':
-      if (state.boat) Object.assign(state.boat, { x: m.x, z: m.z, yaw: m.yaw, speed: 0 });
+      if (state.boat) Object.assign(state.boat, { x: m.x, z: m.z, yaw: m.yaw, speed: 0, y: undefined });
       break;
     case 'dock':
       state.contact = { ...m, dock: true, offers: [], active: [] };
@@ -2565,7 +2754,7 @@ function drawMapCanvas() {
   for (const a of state.alerts) if (a.hot && a.until > performance.now()) markers.push({ x: a.x, z: a.z, kind: 'diamond', color: '#ff5a1f', size: 7, label: 'Hot loot' });
   for (const d of map.docks) markers.push({ x: d.x, z: d.z, color: '#7fd6ff', size: 4, label: d.campId != null ? '' : `⚓ ${d.name}` });
   for (const c of map.camps) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: '#9fe39f', size: 6, label: `🏕 ${c.name}` });
-  for (const [, v] of boatVis) if (v.data.mine) markers.push({ x: v.mesh.position.x, z: v.mesh.position.z, color: '#7dff9a', size: 5, label: `🚤 ${BOATS[v.data.type].name}` });
+  for (const [, v] of boatVis) if (v.data.mine && state.me?.boat?.id !== v.data.id) markers.push({ x: v.mesh.position.x, z: v.mesh.position.z, color: '#7dff9a', size: 5, label: `${BOATS[v.data.type].icon || '🚤'} ${BOATS[v.data.type].name}` });
   for (const e of state.worldEvents || []) {
     markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#c77dff', size: 9, label: `📣 ${e.name}` });
     if (e.radius) markers.push({ x: e.x, z: e.z, kind: 'ring', radius: e.radius, color: '#c77dff' });
@@ -3031,7 +3220,7 @@ function lookDir() {
 
 /** Where you stand: up on a bridge deck (tracked as you walk) or the ground. */
 function myY() { return state.y !== undefined && state.yx === state.x && state.yz === state.z ? state.y : ground(state.x, state.z); }
-function eyeHeight() { return state.me?.boat ? 0.25 + STAND_EYE : myY() + (state.air ? state.air.alt : 0) + (state.hop ? state.hop.alt : 0) + (state.eyeNow ?? STAND_EYE); }
+function eyeHeight() { return state.me?.boat ? rideFeet(state.me.boat.id) + (myRide()?.land && !myRide().stand ? STAND_EYE - 0.45 : myRide()?.land ? STAND_EYE : 0.1 + STAND_EYE) : myY() + (state.air ? state.air.alt : 0) + (state.hop ? state.hop.alt : 0) + (state.eyeNow ?? STAND_EYE); }
 /** Ease the eye (and the body) toward the stance you picked: about a quarter second to crouch, most
  *  of a second to go prone or get up from it, and you can't move while you're dropping or rising. */
 const PRONE_SHIFT_MS = 700;
@@ -3116,11 +3305,22 @@ function raidTag(o) {
   return '';
 }
 function nearestInteractable() {
-  if (state.me?.boat) return canStepOut() ? '🚤 Get out onto the bank' : null;
+  if (state.me?.boat) return myRide()?.land ? `${myRide().icon} Get off the ${myRide().name.toLowerCase()}` : canStepOut() ? '🚤 Get out onto the bank' : null;
   let best = null, bestD = INTERACT_RANGE;
   const consider = (d, text) => { if (d < bestD) { bestD = d; best = text; } };
   // Boats and landing posts (boats are boarded from a little further off: they sit in the water).
   for (const [, v] of boatVis) {
+    const def = BOATS[v.data.type];
+    if (def.land) {
+      const b = v.data, d = Math.hypot(b.x - state.x, b.z - state.z) - def.len / 2;
+      if (d >= 2.2) continue;
+      const name = def.name.toLowerCase(), crewed = b.seats.some(Boolean), verb = def.animal ? 'Ride' : def.stand || def.pedal ? 'Hop on' : 'Drive', hw = RIDE_RULES.hotwireMs / 1000;
+      const text = b.mine ? (b.seats.every(Boolean) ? `Your ${name} is full` : b.seats[0] ? `${def.icon} Ride along on the ${name}` : `${def.icon} ${verb} the ${name}`)
+        : !b.owner ? (b.nk ? `🔧 Hotwire the ${name} (no keys, ${hw}s)` : `${def.icon} ${verb} the ${name}`)
+        : crewed ? `${b.owner}'s ${name} (taken)` : `🔧 ${def.animal ? 'Take' : 'Hotwire'} ${b.owner}'s ${name} (${hw}s, they'll be warned)`;
+      if (d < bestD) { bestD = Math.max(0, d); best = text; }
+      continue;
+    }
     const b = v.data, d = Math.hypot(b.x - state.x, b.z - state.z) - 1.5;
     if (d >= BOAT_RULES.boardRange) continue;
     const name = BOATS[b.type].name.toLowerCase(), full = b.seats.every(Boolean), crewed = b.seats.some(Boolean);
@@ -4240,8 +4440,12 @@ function frame(now) {
     const free = !state.invOpen && !state.contactOpen && !state.mapOpen && !state.panelOpen;
     if (me.boat.seat === 0) {
       const v = boatVis.get(me.boat.id);
-      if (!state.boat && v) state.boat = { id: me.boat.id, type: v.data.type, x: v.data.x, z: v.data.z, yaw: v.data.yaw, speed: 0 };
-      if (state.boat) Object.assign(state.boat, stepBoat(state.map.terrain, state.boat, free ? { throttle: f + pad.moveY + touch.moveY, steer: r + pad.moveX + touch.moveX } : {}, dt));
+      if (!state.boat && v) state.boat = { id: me.boat.id, type: v.data.type, x: v.data.x, z: v.data.z, y: v.data.y, yaw: v.data.yaw, speed: 0 };
+      if (state.boat) {
+        const n = stepBoat(state.map.terrain, state.boat, free ? { throttle: f + pad.moveY + touch.moveY, steer: r + pad.moveX + touch.moveX } : {}, dt, rideEnv());
+        if (n.hit) { state.boat.crash = Math.max(state.boat.crash || 0, n.hit); sfx.hurt?.(); }
+        Object.assign(state.boat, n);
+      }
     }
     const seat = boatSeat(me);
     if (seat) { state.x = seat.x; state.z = seat.z; }
@@ -4322,7 +4526,8 @@ function frame(now) {
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch || (state.prone && !proneSettled()), prone: proneSettled(), aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined });
+    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch || (state.prone && !proneSettled()), prone: proneSettled(), aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined, crash: state.boat?.crash ? +state.boat.crash.toFixed(1) : undefined });
+    if (state.boat) state.boat.crash = 0;
   }
 
   // Recoil recovers smoothly.
@@ -4341,7 +4546,7 @@ function frame(now) {
   // Self mesh.
   if (state.reloadAt && (performance.now() - state.reloadAt > 6000 || !state.me || state.me.dead)) state.reloadAt = 0;
   const myRl = state.reloadAt ? Math.max(0, (weaponStats(state.me.inv[state.me.active])?.reloadMs || 2000) - (performance.now() - state.reloadAt)) : 0;
-  updateCharacterMesh(selfMesh, { rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: !!state.me?.boat, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
@@ -4363,7 +4568,8 @@ function frame(now) {
   const right = new THREE.Vector3(-Math.cos(state.yaw), 0, Math.sin(state.yaw));
   const aim = state.aiming && alive;
   const afloat = !!me?.boat;
-  const dist = aim ? 0.05 : afloat ? 6.5 : state.air ? 7.5 : 4.2, shoulder = aim ? 0 : afloat ? 0.3 : 0.85;
+  const ride = afloat && myRide(), rideCam = ride?.land ? Math.max(3.6, Math.min(7.5, ride.len * 1.2 + 1.8)) : 6.5;
+  const dist = aim ? 0.05 : afloat ? rideCam : state.air ? 7.5 : 4.2, shoulder = aim ? 0 : afloat ? 0.3 : 0.85;
   const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.02 : afloat ? 0.9 : 0.45), state.z).addScaledVector(right, shoulder);
   selfMesh.visible = alive && !aim;   // looking down the sights: your own back isn't in the way
   const want = pivot.clone().addScaledVector(d, -dist);
@@ -4453,7 +4659,7 @@ function frame(now) {
   state.promptText = prompt;
   // On a phone the prompt names the button to tap (the same word and hand as the USE button, lit up).
   const pkey = state.touchUI && state.inputMode !== 'pad' ? `<kbd class="tk">${ticon('use')}${useVerb(prompt)}</kbd>` : `<kbd>${glyph('E')}</kbd>`;
-  $('prompt').innerHTML = state.air && alive ? airHud() : prompt ? `${pkey}${prompt}` : boatHud();
+  $('prompt').innerHTML = state.air && alive ? airHud() : prompt && !(alive && myRide()?.land) ? `${pkey}${prompt}` : boatHud(pkey);
   drawMinimap();
   updateWhere(now);
   if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }

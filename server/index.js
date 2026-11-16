@@ -13,15 +13,15 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { biomeName, DEEP_WATER, parseElevation, parseLandcover } from '../shared/terrain.js';
+import { biomeName, DEEP_WATER, parseElevation, parseLandcover, COVER } from '../shared/terrain.js';
 import zlib from 'node:zlib';
 import { serveStatic } from './static.js';
 import webpush from 'web-push';
-import { BOATS, floats, seatPos } from '../shared/boats.js';
+import { BOATS, RIDES, RIDE_RULES, floats, seatPos, isLand, riderFeet } from '../shared/boats.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
-  JUMP_V, JUMP_G,
+  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox,
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
@@ -97,7 +97,7 @@ const nth = (list, i) => { const k = typeof i === 'string' && /^\d+$/.test(i) ? 
 /** Where a character stands: a boat deck, a bridge deck (its tracked height, while it's still where it was
  *  measured), or the ground; plus how high it is on a jump. */
 const standing = (c) => (c.y !== undefined && c.yx === c.x && c.yz === c.z ? c.y : terrain.height(c.x, c.z));
-const gy = (c) => (c.boat ? 0.25 : standing(c) + (c.air ? c.air.alt : 0) + (c.hop ? c.hop.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
+const gy = (c) => (c.boat ? boatFeet(c) : standing(c) + (c.air ? c.air.alt : 0) + (c.hop ? c.hop.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
 const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
@@ -1354,19 +1354,36 @@ function npcView(p, b) {
 const RV = RIVER_DATA;
 const boatRt = new Map();   // boat id -> { speed, seats: [playerId | null] } (runtime only)
 function rtOf(b) { let r = boatRt.get(b.id); if (!r) { r = { speed: 0, seats: Array(BOATS[b.type].seats).fill(null) }; boatRt.set(b.id, r); } return r; }
-const boatById = (id) => db.boats.find((b) => b.id === id);
+const boatIdx = new Map();
+const boatById = (id) => { let b = boatIdx.get(id); if (b && !b.gone) return b; b = db.boats.find((x) => x.id === id); if (b) boatIdx.set(id, b); return b; };
 const canUseBoat = (p, b) => !!b.owner && tokenInSquadWith(p, b.owner);
-const boatName = (b) => `${b.ownerName ? `${b.ownerName}'s ` : ''}${BOATS[b.type].name.toLowerCase()}`;
+const rideWord = (b) => BOATS[b.type].name.toLowerCase();
+const boatName = (b) => `${b.ownerName ? `${b.ownerName}'s ` : ''}${rideWord(b)}`;
 const boatOccupants = (b) => rtOf(b).seats.map((id) => id && players.get(id)).filter(Boolean);
+/** How far off the ground a ride stands (bridge decks included). */
+const rideY = (b) => (b.y !== undefined && b.yx === b.x && b.yz === b.z ? b.y : terrain.height(b.x, b.z));
+/** Where a rider's feet are: on a boat's deck, or a ride's seat. */
+function boatFeet(c) {
+  const b = boatById(c.boat);
+  return b && isLand(b.type) ? riderFeet(b.type, rideY(b)) : 0.25;
+}
+/** How far rides are seen: further than most things, so you can spot one to run to. */
+const RIDE_SEEN = 420;
 function inCamp(x, z) {
   for (const c of map.camps) if (Math.hypot(x - c.x, z - c.z) <= c.radius) return c;
   for (const sh of map.shops || []) if (Math.hypot(x - sh.x, z - sh.z) <= PAWN.safeRadius) return sh;   // no fighting at Lamar's
   return null;
 }
-function newBoat(type, x, z, yaw, owner) {
-  const b = { id: `boat${crypto.randomBytes(4).toString('hex')}`, type, owner: owner?.token || null, ownerName: owner?.name || null, x, z, yaw, hp: BOATS[type].hp, items: [] };
+function newBoat(type, x, z, yaw, owner, extra = {}) {
+  const b = { id: `boat${crypto.randomBytes(4).toString('hex')}`, type, owner: owner?.token || null, ownerName: owner?.name || null, x, z, yaw, hp: BOATS[type].hp, items: [], ...extra };
   db.boats.push(b);
+  boatIdx.set(b.id, b);
   return b;
+}
+function removeBoat(b) {
+  b.gone = true;
+  db.boats = db.boats.filter((x) => x !== b);
+  boatRt.delete(b.id); boatIdx.delete(b.id);
 }
 const nearestDock = (x, z) => map.docks.reduce((a, d) => (!a || Math.hypot(d.x - x, d.z - z) < Math.hypot(a.x - x, a.z - z) ? d : a), null);
 /** Somewhere dry to step out onto, near (x, z). */
@@ -1379,23 +1396,45 @@ function landingSpot(x, z, maxR = RV.rules.exitRange) {
   }
   return null;
 }
+/** Beside a ride: the driver's side first, then the other, the back, the front; on a bridge, the same deck. */
+function besideRide(b) {
+  const def = BOATS[b.type], fx = Math.sin(b.yaw), fz = Math.cos(b.yaw), y = rideY(b);
+  const out = def.wid / 2 + 0.7, end = def.len / 2 + 0.7;
+  for (const k of [1, 1.6, 2.4]) for (const [s, a] of [[out, 0], [-out, 0], [0, -end], [0, end], [out, -end], [-out, -end]]) {
+    const px = b.x + fx * a * k + fz * s * k, pz = b.z + fz * a * k - fx * s * k;
+    const py = terrain.standY ? terrain.standY(px, pz, y) : terrain.height(px, pz);
+    if (py < DEEP_WATER + 0.3 || Math.abs(py - y) > 1.2) continue;
+    const fixed = resolveCircle(px, pz, PLAYER_RADIUS, solidsNear(px, pz, 3), py);
+    if (Math.hypot(fixed.x - px, fixed.z - pz) < 0.3) return { x: px, z: pz, y: py };
+  }
+  const s = landingSpot(b.x, b.z, 40);
+  return s ? { ...s, y: terrain.height(s.x, s.z) } : null;
+}
 function placeOccupants(b) { rtOf(b).seats.forEach((id, i) => { const o = id && players.get(id); if (o) { const q = seatPos(b, i); o.x = q.x; o.z = q.z; } }); }
 function boardBoat(p, b) {
-  const rt = rtOf(b);
+  const rt = rtOf(b), def = BOATS[b.type];
   const seat = rt.seats[0] == null ? 0 : rt.seats.findIndex((x) => x == null);
-  if (seat < 0) return toast(p, 'The boat is full');
+  if (seat < 0) return toast(p, `The ${rideWord(b)} is full`);
   cancelHack(p, 'Cancelled');
-  rt.seats[seat] = p.id; p.boat = b.id; p.seat = seat; p.crouch = false;
+  rt.seats[seat] = p.id; p.boat = b.id; p.seat = seat; p.crouch = false; p.prone = false;
+  b.freeAt = null; b.usedAt = Date.now();
   const q = seatPos(b, seat);
   p.x = q.x; p.z = q.z;
   p.tp = (p.tp || 0) + 1;
   send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true, tp: p.tp });
-  toast(p, seat === 0 ? `At the helm of the ${BOATS[b.type].name.toLowerCase()}. E to get out at the bank, BAG for the hold.` : `Riding in ${boatName(b)}. E to get out at the bank.`);
+  if (def.land) toast(p, seat === 0 ? `${def.icon} ${def.animal ? 'Riding' : def.stand || def.pedal ? 'On' : 'Driving'} the ${rideWord(b)}. ${def.hold ? 'BAG for the ' + (def.animal ? 'saddlebags' : 'trunk') + '. ' : ''}E to get off.` : `${def.icon} Riding with ${boatName(b)}. E to get off.`);
+  else toast(p, seat === 0 ? `At the helm of the ${rideWord(b)}. E to get out at the bank, BAG for the hold.` : `Riding in ${boatName(b)}. E to get out at the bank.`);
   dirty(p);
 }
 function unseat(p) {
   const b = p.boat && boatById(p.boat);
-  if (b) { const rt = rtOf(b); if (rt.seats[p.seat] === p.id) rt.seats[p.seat] = null; if (p.seat === 0) rt.speed = 0; }
+  if (b) {
+    const rt = rtOf(b);
+    if (rt.seats[p.seat] === p.id) rt.seats[p.seat] = null;
+    if (p.seat === 0) rt.speed = 0;
+    // A ride you found stays yours a while after you get out, then it's anyone's again.
+    if (b.world && !rt.seats.some(Boolean)) { b.freeAt = Date.now() + RIDE_RULES.lockMs; b.usedAt = Date.now(); }
+  }
   p.boat = null; p.seat = null;
   if (p.openContainer?.kind === 'boat') { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
   dirty(p);
@@ -1403,6 +1442,14 @@ function unseat(p) {
 function leaveBoat(p, force = false) {
   const b = boatById(p.boat);
   if (!b) { unseat(p); return true; }
+  if (isLand(b.type)) {
+    const spot = besideRide(b) || (() => { const d = nearestDock(b.x, b.z); return { x: d.x, z: d.z, y: terrain.height(d.x, d.z) }; })();
+    unseat(p);
+    p.x = spot.x; p.z = spot.z; p.y = spot.y; p.yx = p.x; p.yz = p.z;
+    p.tp = (p.tp || 0) + 1;
+    send(p.ws, { t: 'correct', x: p.x, z: p.z, y: spot.y, force: true, tp: p.tp });
+    return true;
+  }
   let spot = landingSpot(b.x, b.z);
   if (!spot && force) { spot = landingSpot(b.x, b.z, 90); if (!spot) { const d = nearestDock(b.x, b.z); spot = { x: d.x, z: d.z }; } }
   if (!spot) { toast(p, 'Steer in to the bank to get out'); return false; }
@@ -1412,37 +1459,51 @@ function leaveBoat(p, force = false) {
   for (const d of map.docks) if (mooredAt(b, d)) deliverRiverFreight(p, d);
   return true;
 }
-/** Driver input: the client predicts the boat; the server keeps it on the water and in speed. */
+/** Driver input: the client predicts the boat or ride; the server keeps it on the water (or out of
+ *  walls and off the deep water) and within its top speed. */
 function boatState(p, msg) {
   const b = boatById(p.boat);
   if (!b) return unseat(p);
   p.yaw = Number(msg.yaw) || 0;
   p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
   p.aiming = !!msg.aim; p.crouch = false;
-  const rt = rtOf(b), now = Date.now();
+  const rt = rtOf(b), now = Date.now(), def = BOATS[b.type];
   if (p.seat === 0 && msg.boat && [msg.boat.x, msg.boat.z, msg.boat.yaw].every(Number.isFinite)) {
     const dt = Math.min(0.25, (now - (b.lastMove || now - 50)) / 1000);
-    b.lastMove = now;
+    b.lastMove = now; b.usedAt = now;
     let dx = msg.boat.x - b.x, dz = msg.boat.z - b.z;
-    const max = BOATS[b.type].speed * dt * 1.5 + 0.3, d = Math.hypot(dx, dz);
+    const max = def.speed * dt * 1.5 + 0.3, d = Math.hypot(dx, dz);
     if (d > max) { dx *= max / d; dz *= max / d; }
-    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.5));
     let x = b.x, z = b.z, ok = true;
-    for (let i = 0; i < steps; i++) { const nx = x + dx / steps, nz = z + dz / steps; if (!floats(terrain, nx, nz)) { ok = false; break; } x = nx; z = nz; }
+    if (def.land) {
+      const m = moveWithCollision(b.x, b.z, dx, dz, def.wid / 2 * 0.85, solidsNear(b.x, b.z, Math.hypot(dx, dz) + 3), terrain, rideY(b));
+      x = m.x; z = m.z;
+      b.y = m.y; b.yx = x; b.yz = z;
+      if (Math.hypot(x - b.x - dx, z - b.z - dz) > 0.6) ok = false;
+      // A hard crash dents it (the client says how hard; never more than it was really going).
+      const crash = Math.min(Number(msg.crash) || 0, rt.speed + 3);
+      if (crash > RIDE_RULES.crashAt) damageBoat(b, (crash - RIDE_RULES.crashAt) * RIDE_RULES.crashDmg * 10, null);
+      if (b.gone) return;
+    } else {
+      const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.5));
+      for (let i = 0; i < steps; i++) { const nx = x + dx / steps, nz = z + dz / steps; if (!floats(terrain, nx, nz)) { ok = false; break; } x = nx; z = nz; }
+    }
     rt.speed = dt > 0 ? Math.hypot(x - b.x, z - b.z) / dt : 0;
     b.x = x; b.z = z; b.yaw = msg.boat.yaw;
-    if (!ok || Math.hypot(x - msg.boat.x, z - msg.boat.z) > 1) send(p.ws, { t: 'boatFix', x, z, yaw: b.yaw });
+    if (!ok || Math.hypot(x - msg.boat.x, z - msg.boat.z) > 1.5) send(p.ws, { t: 'boatFix', x, z, yaw: b.yaw });
     placeOccupants(b);
   }
   p.speed = rt.speed;
   if (rt.speed > 0.5) p.lastActive = now;
 }
-/** Boats and landing posts within reach, as an interactable: { d, run }. */
+/** Boats, rides and landing posts within reach, as an interactable: { d, run }. */
 function riverInteractable(p) {
   let best = null;
   for (const b of db.boats) {
-    const d = Math.hypot(b.x - p.x, b.z - p.z) - 1.5;
-    if (d < RV.rules.boardRange && (!best || d < best.d)) best = { d, run: () => boatInteract(p, b) };
+    if (Math.abs(b.x - p.x) > 12 || Math.abs(b.z - p.z) > 12) continue;
+    const def = BOATS[b.type];
+    const d = def.land ? Math.hypot(b.x - p.x, b.z - p.z) - def.len / 2 : Math.hypot(b.x - p.x, b.z - p.z) - 1.5;
+    if (d < (def.land ? 2.2 : RV.rules.boardRange) && (!best || d < best.d)) best = { d, run: () => boatInteract(p, b) };
   }
   for (const dk of map.docks) {
     const d = Math.hypot(dk.x - p.x, dk.z - p.z) - 0.4;
@@ -1452,47 +1513,166 @@ function riverInteractable(p) {
 }
 function boatInteract(p, b) {
   if (canUseBoat(p, b)) return boardBoat(p, b);
-  if (rtOf(b).seats.some(Boolean)) return toast(p, `${boatName(b)} is crewed. Not yours to board.`);
-  if (!b.owner) { b.owner = p.token; b.ownerName = p.name; return boardBoat(p, b); }
-  warnTeam(b.owner, `⚠ ${p.name} is hotwiring your ${BOATS[b.type].name.toLowerCase()}`, b.x, b.z, 'Boat theft');
-  return startHack(p, 'hotwire', b.id);
+  if (rtOf(b).seats.some(Boolean)) return toast(p, `${boatName(b)} is taken. Not yours to get in.`);
+  const def = BOATS[b.type];
+  if (!b.owner) {
+    // Found one: no keys in it means hotwiring it first.
+    if (def.land && b.keys === false) { toast(p, `No keys. Hotwiring the ${rideWord(b)}…`); return startHack(p, 'hotwire', b.id, { ms: RIDE_RULES.hotwireMs }); }
+    b.owner = p.token; b.ownerName = p.name;
+    return boardBoat(p, b);
+  }
+  warnTeam(b.owner, `⚠ ${p.name} is ${def.animal ? 'taking' : 'hotwiring'} your ${rideWord(b)}`, b.x, b.z, def.land ? 'Ride theft' : 'Boat theft');
+  return startHack(p, 'hotwire', b.id, def.land ? { ms: RIDE_RULES.hotwireMs } : {});
 }
 function finishHotwire(p, id) {
-  const b = boatById(id);
-  if (!b || Math.hypot(b.x - p.x, b.z - p.z) > RV.rules.boardRange + 2) return toast(p, 'The boat drifted off');
+  const b = boatById(id), def = b && BOATS[b.type];
+  if (!b || Math.hypot(b.x - p.x, b.z - p.z) > (def.land ? def.len / 2 + 4 : RV.rules.boardRange + 2)) return toast(p, def?.land ? 'It got away' : 'The boat drifted off');
   if (rtOf(b).seats.some(Boolean)) return toast(p, 'Someone got in first');
   const was = b.owner;
-  warnTeam(was, `⚠ ${p.name} stole your ${BOATS[b.type].name.toLowerCase()}`, b.x, b.z, 'Boat stolen');
-  b.owner = p.token; b.ownerName = p.name;
-  award(p, 60, 'Hotwired a boat');
-  send(p.ws, { t: 'hack', done: true, text: 'Engine running' });
+  if (was) warnTeam(was, `⚠ ${p.name} stole your ${rideWord(b)}`, b.x, b.z, def.land ? 'Ride stolen' : 'Boat stolen');
+  b.owner = p.token; b.ownerName = p.name; b.keys = true;   // wires hanging out: it starts from now on
+  if (was) award(p, def.land ? 25 : 60, def.land ? 'Stole a ride' : 'Hotwired a boat');
+  send(p.ws, { t: 'hack', done: true, text: def.animal ? 'Saddled up' : 'Engine running' });
   boardBoat(p, b);
 }
 function openHold(p) {
   const b = p.boat ? boatById(p.boat) : db.boats.find((x) => canUseBoat(p, x) && Math.hypot(x.x - p.x, x.z - p.z) < RV.rules.boardRange + 1);
   if (!b || !canUseBoat(p, b)) return toast(p, 'No boat of yours here');
+  if (!BOATS[b.type].hold) return toast(p, `Nowhere to carry anything on a ${rideWord(b)}`);
   p.openContainer = { kind: 'boat', id: b.id };
   send(p.ws, containerView(p, 'boat', b.id));
 }
 function damageBoat(b, dmg, by) {
+  if (b.gone) return;
   b.hp -= dmg;
-  if (b.owner && !(by && tokenInSquadWith(by, b.owner)) && (!b.alertedAt || Date.now() - b.alertedAt > 20_000)) {
+  const word = rideWord(b), land = isLand(b.type);
+  if (b.owner && by && !tokenInSquadWith(by, b.owner) && (!b.alertedAt || Date.now() - b.alertedAt > 20_000) && !b.world) {
     b.alertedAt = Date.now();
-    warnTeam(b.owner, `⚠ ${by?.name || 'Someone'} is shooting your ${BOATS[b.type].name.toLowerCase()}`, b.x, b.z, 'Boat under fire');
+    warnTeam(b.owner, `⚠ ${by.name} is shooting your ${word}`, b.x, b.z, land ? 'Ride under fire' : 'Boat under fire');
   }
   if (b.hp <= 0) sinkBoat(b, by);
 }
 function sinkBoat(b, by) {
-  const spot = landingSpot(b.x, b.z, 90) || (() => { const d = nearestDock(b.x, b.z); return { x: d.x, z: d.z }; })();
-  for (const o of boatOccupants(b)) { unseat(o); placeAt(o, spot.x, spot.z); toast(o, 'The boat went down. You swam for the bank.'); }
-  // Bulk freight goes down with her; everything else washes up on the bank.
-  const items = b.items.filter((i) => !i.bulk);
-  if (items.length || RESOURCES.some((r) => b[r])) dropBag(spot.x, spot.z, items, Object.fromEntries(RESOURCES.map((r) => [r, b[r] || 0])), `Wreck of ${boatName(b)}`);
-  db.boats = db.boats.filter((x) => x !== b);
-  boatRt.delete(b.id);
-  if (b.owner) warnTeam(b.owner, `⚠ Your ${BOATS[b.type].name.toLowerCase()} was sunk${by ? ` by ${by.name}` : ''}`, b.x, b.z, 'Boat sunk');
-  feed(by ? `${by.name} sank ${boatName(b)}` : `${boatName(b)} sank`);
-  if (by && !by.isBot && b.owner !== by.token) award(by, 150, 'Sank a boat', true);
+  const def = BOATS[b.type], land = !!def.land;
+  if (land) {
+    // Wrecked: everyone aboard is thrown clear (a little hurt), the trunk spills, cars go up in flames.
+    const spot = besideRide(b) || { x: b.x + 3, z: b.z, y: terrain.height(b.x + 3, b.z) };
+    for (const o of boatOccupants(b)) {
+      unseat(o);
+      placeAt(o, spot.x, spot.z);
+      if (!o.dead) applyDamage(o, def.animal || def.pedal || def.stand ? 10 : 25, by, false);
+      toast(o, def.animal ? `Your ${def.name.toLowerCase()} went down. You were thrown clear.` : `The ${def.name.toLowerCase()} is wrecked. You got out.`);
+    }
+    if (!def.animal && !def.pedal && !def.stand) {
+      const msg = JSON.stringify({ t: 'boom', x: b.x, y: rideY(b) + 0.8, z: b.z, r: 5 });
+      for (const p of players.values()) if (p.ws.readyState === 1 && Math.abs(p.x - b.x) < INTEREST && Math.abs(p.z - b.z) < INTEREST) p.ws.send(msg);
+    }
+  } else {
+    const spot = landingSpot(b.x, b.z, 90) || (() => { const d = nearestDock(b.x, b.z); return { x: d.x, z: d.z }; })();
+    for (const o of boatOccupants(b)) { unseat(o); placeAt(o, spot.x, spot.z); toast(o, 'The boat went down. You swam for the bank.'); }
+    b.spill = spot;
+  }
+  // Bulk freight goes down with her; everything else washes up on the bank (or spills in the road).
+  const items = b.items.filter((i) => !i.bulk), at = land ? { x: b.x, z: b.z } : b.spill;
+  if (items.length || RESOURCES.some((r) => b[r])) dropBag(at.x, at.z, items, Object.fromEntries(RESOURCES.map((r) => [r, b[r] || 0])), `Wreck of ${boatName(b)}`);
+  removeBoat(b);
+  if (b.owner && !b.world) warnTeam(b.owner, `⚠ Your ${rideWord(b)} ${land ? (def.animal ? 'went down' : 'was wrecked') : 'was sunk'}${by ? ` by ${by.name}` : ''}`, b.x, b.z, land ? 'Ride wrecked' : 'Boat sunk');
+  if (!land) feed(by ? `${by.name} sank ${boatName(b)}` : `${boatName(b)} sank`);
+  else if (by && b.ownerName && b.ownerName !== by.name) feed(`${by.name} wrecked ${boatName(b)}`);
+  if (by && !by.isBot && b.owner && b.owner !== by.token && !tokenInSquadWith(by, b.owner)) award(by, land ? 50 : 150, land ? 'Wrecked a ride' : 'Sank a boat', true);
+}
+
+// ---- rides lying about the county: kept topped up, towed off when abandoned
+const RIDE_TYPES = Object.keys(RIDES);
+/** Clear ground for something `len` long at (x, z), facing `yaw`: dry, not too steep, nothing in the way, nothing parked there. */
+function rideFits(type, x, z) {
+  const def = RIDES[type], R = RIDE_RULES, edge = map.half - 20;
+  if (Math.abs(x) > edge || Math.abs(z) > edge) return false;
+  const h = terrain.height(x, z);
+  if (h < R.shallow || inCamp(x, z)) return false;
+  if (Math.abs(terrain.height(x + 2, z) - terrain.height(x - 2, z)) > 1.2 || Math.abs(terrain.height(x, z + 2) - terrain.height(x, z - 2)) > 1.2) return false;
+  const r = Math.max(def.len, def.wid) / 2 + 0.3;
+  for (const s of solidsNear(x, z, r + 2)) if (!s.gone && blocksAt(s, h) && circleOverlapsBox(x, z, r, s)) return false;
+  for (const b of db.boats) if (Math.abs(b.x - x) < R.spacing && Math.abs(b.z - z) < R.spacing) return false;
+  return true;
+}
+const coverAt = (x, z) => (terrain.cover ? terrain.cover(x, z) : 0);
+/** Find somewhere a ride of this type would be left: cars on a road's shoulder, bikes and carts by
+ *  a house, tractors and horses out in the fields, four-wheelers and dirt bikes in the woods. */
+function rideSpot(type, around = null) {
+  const def = RIDES[type], tries = around ? 40 : 60;
+  const rnd = (r) => (Math.random() * 2 - 1) * r;
+  for (let i = 0; i < tries; i++) {
+    let x, z, yaw = Math.random() * Math.PI * 2;
+    if (def.spawn === 'road' || (around && def.spawn !== 'field' && Math.random() < 0.4)) {
+      const segs = around ? map.roadsNear(around.x, around.z, around.r) : null;
+      const s = segs ? (segs.length ? segs[Math.floor(Math.random() * segs.length)] : null) : map.roads[Math.floor(Math.random() * map.roads.length)];
+      if (!s) continue;
+      const t = Math.random(), lx = s.x2 - s.x1, lz = s.z2 - s.z1, l = Math.hypot(lx, lz) || 1;
+      const side = Math.random() < 0.5 ? -1 : 1, off = s.width / 2 + def.wid / 2 + 0.6;
+      x = s.x1 + lx * t + (lz / l) * off * side; z = s.z1 + lz * t - (lx / l) * off * side;
+      yaw = Math.atan2(lx, lz) + (Math.random() < 0.5 ? 0 : Math.PI);
+    } else if (def.spawn === 'town') {
+      const hs = around ? map.houses.filter((h) => h.kind !== 'vehicle' && Math.abs(h.x - around.x) < around.r && Math.abs(h.z - around.z) < around.r) : map.houses;
+      const h = hs.length ? hs[Math.floor(Math.random() * hs.length)] : null;
+      if (!h) { x = (around?.x ?? 0) + rnd(around?.r ?? map.half); z = (around?.z ?? 0) + rnd(around?.r ?? map.half); }
+      else { const a = Math.random() * Math.PI * 2, d = 7 + Math.random() * 6; x = h.x + Math.cos(a) * d; z = h.z + Math.sin(a) * d; }
+    } else {
+      x = around ? around.x + rnd(around.r) : rnd(map.half - 40); z = around ? around.z + rnd(around.r) : rnd(map.half - 40);
+      const c = coverAt(x, z);
+      if (terrain.cover && !around) {
+        if (def.spawn === 'field' && c !== COVER.grass && c !== COVER.crops && i < tries - 10) continue;
+        if (def.spawn === 'trail' && c !== COVER.woods && c !== COVER.scrub && c !== COVER.grass && i < tries - 10) continue;
+      }
+    }
+    if (rideFits(type, x, z)) return { x, z, yaw };
+  }
+  return null;
+}
+function spawnRide(type, around = null) {
+  const def = RIDES[type], at = rideSpot(type, around);
+  if (!at) return null;
+  const b = newBoat(type, at.x, at.z, at.yaw, null, { world: 1, color: def.colors[Math.floor(Math.random() * def.colors.length)], keys: Math.random() < def.keys });
+  b.y = terrain.height(at.x, at.z); b.yx = b.x; b.yz = b.z;
+  return b;
+}
+let ridesNextAt = 0;
+function tickRides(now) {
+  if (now < ridesNextAt || process.env.RIDES === '0') return;
+  ridesNextAt = now + RIDE_RULES.tickMs;
+  const R = RIDE_RULES, alive = [...players.values()].filter((p) => !p.dead);
+  const nearSomeone = (b, r) => alive.some((p) => Math.abs(p.x - b.x) < r && Math.abs(p.z - b.z) < r);
+  // Locks run out; long-abandoned rides nobody's near get towed (their trunk left in a bag).
+  for (const b of [...db.boats]) {
+    if (!b.world) continue;
+    const rt = rtOf(b);
+    if (rt.seats.some(Boolean)) continue;
+    if (b.owner && b.freeAt && now >= b.freeAt) { b.owner = null; b.ownerName = null; b.freeAt = null; }
+    if (!b.owner && b.usedAt && now - b.usedAt > R.idleMs && !nearSomeone(b, R.idleRange)) {
+      if (b.items.length) dropBag(b.x, b.z, b.items, {}, `Left in a ${rideWord(b)}`);
+      removeBoat(b);
+    }
+  }
+  // Top up each kind, a few a tick so a fresh world fills in its first minute or two.
+  const have = {};
+  for (const b of db.boats) if (b.world) have[b.type] = (have[b.type] || 0) + 1;
+  // A fresh world gets the lot at once; after that a few a tick, a bit of each kind in turn.
+  const total = Object.values(have).reduce((x, y) => x + y, 0), want = RIDE_TYPES.reduce((x, t) => x + RIDES[t].count, 0);
+  let budget = total < want / 2 ? want : 40;
+  const t0 = Date.now(), fill = budget > 40;
+  for (let more = true; more && budget > 0;) {
+    more = false;
+    for (const t of RIDE_TYPES) if ((have[t] || 0) < RIDES[t].count && budget > 0) { budget--; have[t] = (have[t] || 0) + 1; spawnRide(t); more = true; }
+  }
+  // Always something to grab where people start out: every town and landing zone.
+  for (const s of [...map.towns, ...map.landingZones]) {
+    const free = db.boats.filter((b) => b.world && !b.owner && Math.abs(b.x - s.x) < R.nearRange && Math.abs(b.z - s.z) < R.nearRange).length;
+    for (let k = free; k < R.nearSpawn; k++) {
+      const pool = s.blocks !== undefined ? ['car', 'pickup', 'bicycle', 'golfcart', 'skateboard', 'motorcycle'] : ['atv', 'dirtbike', 'horse', 'pickup', 'bicycle'];
+      spawnRide(pool[Math.floor(Math.random() * pool.length)], { x: s.x, z: s.z, r: R.nearRange * 0.8 });
+    }
+  }
+  if (fill) console.log(`Rides: ${db.boats.filter((b) => b.world).length} cars, trucks, bikes and horses about the county (${Date.now() - t0} ms)`);
 }
 
 // Landings: buy, build and repair boats; river freight runs landing to landing.
@@ -1513,7 +1693,7 @@ const mooredAt = (b, d) => Math.hypot(b.x - d.wx, b.z - d.wz) < RV.rules.mooredA
 function deliverRiverFreight(p, d) {
   let paid = 0, n = 0;
   for (const b of db.boats) {
-    if (!canUseBoat(p, b) || !mooredAt(b, d)) continue;
+    if (isLand(b.type) || !canUseBoat(p, b) || !mooredAt(b, d)) continue;
     const here = b.items.filter((i) => i.bulk && i.dest === d.id);
     if (!here.length) continue;
     b.items = b.items.filter((i) => !here.includes(i));
@@ -1527,13 +1707,13 @@ function deliverRiverFreight(p, d) {
 }
 function dockView(p, d) {
   deliverRiverFreight(p, d);
-  const here = db.boats.filter((b) => canUseBoat(p, b) && mooredAt(b, d));
+  const here = db.boats.filter((b) => !isLand(b.type) && canUseBoat(p, b) && mooredAt(b, d));
   return {
     t: 'dock', id: d.id, name: d.name, camp: d.campId != null ? map.camps[d.campId].name : null, cash: p.cash || 0,
-    shop: Object.entries(BOATS).map(([k, v]) => ({ type: k, name: v.name, price: v.price, craft: v.craft || null, about: v._about, seats: v.seats, hold: v.hold })),
+    shop: Object.entries(BOATS).filter(([, v]) => !v.land).map(([k, v]) => ({ type: k, name: v.name, price: v.price, craft: v.craft || null, about: v._about, seats: v.seats, hold: v.hold })),
     boats: here.map((b) => ({ id: b.id, name: BOATS[b.type].name, hp: Math.round(b.hp), max: BOATS[b.type].hp, repair: Math.ceil((BOATS[b.type].hp - b.hp) * RV.rules.repairPerHp), free: BOATS[b.type].hold - b.items.length,
       cargo: b.items.filter((i) => i.bulk).map((i) => ({ name: i.name, dest: i.destName })) })),
-    freight: dockJobs(d), owned: db.boats.filter((b) => b.owner === p.token).length, maxOwned: RV.rules.maxBoatsEach,
+    freight: dockJobs(d), owned: db.boats.filter((b) => b.owner === p.token && !isLand(b.type)).length, maxOwned: RV.rules.maxBoatsEach,
   };
 }
 function launchSpot(d) {
@@ -1549,8 +1729,8 @@ function dockAction(p, msg) {
   if (!d || Math.hypot(d.x - p.x, d.z - p.z) > 6) return;
   if (msg.action === 'buy') {
     const def = own(BOATS, msg.type);
-    if (!def) return;
-    if (db.boats.filter((b) => b.owner === p.token).length >= RV.rules.maxBoatsEach) return toast(p, `You can own ${RV.rules.maxBoatsEach} boats at a time`);
+    if (!def || def.land) return;
+    if (db.boats.filter((b) => b.owner === p.token && !isLand(b.type)).length >= RV.rules.maxBoatsEach) return toast(p, `You can own ${RV.rules.maxBoatsEach} boats at a time`);
     if (msg.pay === 'craft') {
       if (!def.craft) return;
       if (!payCarried(p, def.craft)) return toast(p, `Building one takes ${costText(def.craft)}`);
@@ -1573,7 +1753,7 @@ function dockAction(p, msg) {
     const e = dockFreight.get(d.id);
     const job = e?.jobs.find((j) => j.id === msg.job);
     if (!job) return toast(p, 'That job is gone');
-    const boats = db.boats.filter((b) => canUseBoat(p, b) && mooredAt(b, d) && b.items.length < BOATS[b.type].hold).sort((a, b) => (b.id === p.boat) - (a.id === p.boat));
+    const boats = db.boats.filter((b) => !isLand(b.type) && canUseBoat(p, b) && mooredAt(b, d) && b.items.length < BOATS[b.type].hold).sort((a, b) => (b.id === p.boat) - (a.id === p.boat));
     if (!boats.length) return toast(p, 'Bring a boat with room in its hold to this landing first');
     const b = boats[0];
     b.items.push({ id: uid('freight'), kind: 'cargo', bulk: true, name: `${job.label} → ${job.toName}`, dest: job.to, destName: job.toName, pay: job.pay, from: d.id });
@@ -2955,7 +3135,8 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
     if (rtOf(b).seats.includes(shooterId)) continue;
     const def = BOATS[b.type], sn = Math.abs(Math.sin(b.yaw)), cs = Math.abs(Math.cos(b.yaw));
     const ex = (sn * def.len / 2 + cs * def.wid / 2) * 0.8, ez = (cs * def.len / 2 + sn * def.wid / 2) * 0.8;
-    const t = rayBox(ox, oy, oz, dx, dy, dz, b.x - ex, -0.3, b.z - ez, b.x + ex, 0.8, b.z + ez);
+    const y0 = def.land ? rideY(b) : -0.3, y1 = def.land ? y0 + def.h : 0.8;
+    const t = rayBox(ox, oy, oz, dx, dy, dz, b.x - ex, y0, b.z - ez, b.x + ex, y1, b.z + ez);
     if (t < best) { best = t; target = b; kind = 'boat'; }
   }
   const check = (c, k) => {
@@ -3575,6 +3756,11 @@ function explode(c, now, k = BUILD.charge) {
     if (t.dead) continue;
     const d = Math.hypot(t.x - c.x, t.z - c.z);
     if (d < k.playerRadius) applyDamage(t, k.playerDamage * (1 - d / k.playerRadius), by, !!t.isBot);
+  }
+  // Cars, bikes and boats caught in the blast: most of a rocket's punch.
+  if (k.playerRadius) for (const b of [...db.boats]) {
+    const d = Math.hypot(b.x - c.x, b.z - c.z) - BOATS[b.type].len / 3;
+    if (d < k.playerRadius) damageBoat(b, Math.max(k.playerDamage, (k.damage || 0) * 0.5) * 1.5 * (1 - Math.max(0, d) / k.playerRadius), by);
   }
 }
 
@@ -4711,6 +4897,8 @@ wss.on('connection', (ws) => {
         if (msg.give && typeof msg.give === 'object') { for (const [k, v] of Object.entries(msg.give)) if (RESOURCES.includes(k) && Number.isFinite(v)) p[k] = (p[k] || 0) + v; dirty(p); return; }
         if (Number.isInteger(msg.boatTo) && p.boat && map.docks[msg.boatTo]) { const b = boatById(p.boat), d = map.docks[msg.boatTo]; b.x = d.wx; b.z = d.wz; placeOccupants(b); return send(p.ws, { t: 'boatFix', x: b.x, z: b.z, yaw: b.yaw }); }
         if (Number.isFinite(msg.boatDamage) && msg.boatId) { const b = boatById(msg.boatId); if (b) damageBoat(b, msg.boatDamage, p); return; }
+        if (msg.spawnRide && own(RIDES, msg.spawnRide.type) && Number.isFinite(msg.spawnRide.x) && Number.isFinite(msg.spawnRide.z)) { const q = msg.spawnRide, b = newBoat(q.type, q.x, q.z, Number(q.yaw) || 0, null, { world: 1, color: 0, keys: q.keys !== false }); return send(p.ws, { t: 'devRide', id: b.id }); }
+        if (msg.rideCount) return send(p.ws, { t: 'devRide', counts: db.boats.reduce((a, b) => (a[b.type] = (a[b.type] || 0) + 1, a), {}) });
         if (msg.killEventBots) { for (const b of [...bots.values()]) if (b.eventId && !b.dead && (!msg.only || b.kind === msg.only)) { applyDamage(b, 99999, p, true); } return; }
         if (Number.isFinite(msg.x) && Number.isFinite(msg.z)) placeAt(p, msg.x, msg.z);
         return;
@@ -4758,7 +4946,8 @@ function snapshotFor(r, views, now) {
   const fast = JSON.stringify({
     t: 'snap', players: 0,
     bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp, stun: isStunned(b, now) ? 1 : 0, ...(b.crouch ? { crouch: true } : {}) })),
-    boats: db.boats.filter((b) => near(b) || (BOATS[b.type].loud && rtOf(b).speed > 1 && Math.hypot(b.x - r.x, b.z - r.z) < BOATS[b.type].loud)).map((b) => ({ id: b.id, type: b.type, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), max: BOATS[b.type].hp, owner: b.ownerName, mine: canUseBoat(r, b) ? 1 : 0, seats: rtOf(b).seats, fast: rtOf(b).speed > 1 ? 1 : 0 })),
+    boats: db.boats.filter((b) => near(b, isLand(b.type) ? RIDE_SEEN : INTEREST) || (BOATS[b.type].loud && rtOf(b).speed > 1 && Math.hypot(b.x - r.x, b.z - r.z) < BOATS[b.type].loud)).map((b) => ({ id: b.id, type: b.type, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), max: BOATS[b.type].hp, owner: b.ownerName, mine: canUseBoat(r, b) ? 1 : 0, seats: rtOf(b).seats, fast: rtOf(b).speed > 1 ? 1 : 0,
+      ...(isLand(b.type) ? { y: +rideY(b).toFixed(2), c: b.color || 0, ...(b.keys === false ? { nk: 1 } : {}), ...(b.world ? { w: 1 } : {}), ...(rtOf(b).speed > 0.3 ? { sp: +rtOf(b).speed.toFixed(1) } : {}) } : {}) })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   });
   return `${fast.slice(0, -1).replace('"players":0', `"players":[${list.join(',')}]`)},${r.slow.json}}`;
@@ -4784,7 +4973,7 @@ const loop = setInterval(() => {
   for (const p of players.values()) if (p.hop) { p.hop.vy -= JUMP_G * dt; p.hop.alt += p.hop.vy * dt; if (p.hop.alt <= 0 || p.dead || p.downed || p.boat || p.air) p.hop = null; }
   updateBots(dt, now);
   tickHacks(now);
-  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); }
+  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickRides(now); }
   tickStuns(now);
   tickEvents(now, dt);
   if (tick % 4 === 0) tickDefenses(now);
