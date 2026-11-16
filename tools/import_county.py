@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Liberty County's own GIS (its 911 road centrelines and address points) on top of the open data.
 
-    python3 tools/import_county.py <folder with Roads.shp> <folder with "Address gdb.shp">
+    python3 tools/import_county.py <folder with Roads.shp> <folder with "Address gdb.shp" | address points .json>
+
+The address points can also be a cut-down .json: {"rows": [[lat, lon, place_type, structype], ...]}.
 
 Writes data/real/county.json, which the server and every client add to the open data the same way
 (shared/county.js), after it, so no existing building or road changes its number:
@@ -121,14 +123,20 @@ for idx, v in votes.items():
 county = grid_of(county_pts)
 
 # ---- homes the open data hasn't got, and the hydrants
-ar = shapefile.Reader(os.path.join(addr_dir, 'Address gdb'))
-AF = [f[0] for f in ar.fields[1:]]
+def address_points():   # (lat, lon, {'place_type', 'structype'}) from the shapefile or the cut-down .json
+    if addr_dir.endswith('.json'):
+        for lat, lon, pt, st in json.load(open(addr_dir))['rows']:
+            yield lat, lon, {'place_type': pt, 'structype': st}
+        return
+    ar = shapefile.Reader(os.path.join(addr_dir, 'Address gdb'))
+    AF = [f[0] for f in ar.fields[1:]]
+    for sh, rec in zip(ar.shapes(), ar.records()):
+        d = dict(zip(AF, rec))
+        yield (*ll(*sh.points[0]), {'place_type': d['place_type'], 'structype': d['structype']})
 homes, hydrants, placed = [], [], []
 MOBILE = {'MH', 'SW', 'RV', 'MOBILE HOME', 'DW', 'DOUBLE WIDE', 'TRAILER'}
-for sh, rec in zip(ar.shapes(), ar.records()):
-    d = dict(zip(AF, rec))
+for lat, lon, d in address_points():
     pt = (d['place_type'] or '').strip()
-    lat, lon = ll(*sh.points[0])
     x, z = xz(lat, lon)
     if not inside(x, z):
         continue
