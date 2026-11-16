@@ -166,7 +166,8 @@ await sleep(300);
 check('with the bar up, a tap of View still opens the bag and answers nothing', await p.evaluate(() => !document.getElementById('inventory').hidden && !document.getElementById('invitebar').hidden && document.getElementById('tradepanel').hidden));
 await press(BTN.B);
 await sleep(300);
-await press(BTN.VIEW, 800);
+// Well past the half-second hold even when software rendering draws a frame a second.
+await press(BTN.VIEW, 1600);
 // Opening the trade screen takes a round trip to the server: wait for it rather than a fixed time.
 await p.waitForFunction(() => !document.getElementById('tradepanel').hidden, null, { timeout: 5000 }).catch(() => {});
 check('holding View says yes: the trade screen opens', await p.evaluate(() => !document.getElementById('tradepanel').hidden && document.getElementById('invitebar').hidden && document.getElementById('inventory').hidden), other.join(' ; '));

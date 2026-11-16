@@ -191,10 +191,34 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
 
   const texturedMat = new THREE.MeshStandardMaterial({ map: windowTexture(), vertexColors: true, roughness: 0.9 });
   const sidingMat = new THREE.MeshStandardMaterial({ map: sidingTexture(), vertexColors: true, roughness: 0.95 });
-  const brickMat = new THREE.MeshStandardMaterial({ map: brickTexture(), vertexColors: true, roughness: 0.95 });
-  const metalMat = new THREE.MeshStandardMaterial({ map: metalTexture(), vertexColors: true, roughness: 0.6, metalness: 0.25 });
+  // Walls in photo-scanned materials (Poly Haven, CC0): real brick, corrugated metal, weathered planks,
+  // each with its normal map. The building's own colour tints them (a red barn, a white shed), half way.
+  const wallTex = (name, rep) => { const t = new THREE.TextureLoader().load(`/textures/pbr/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = mobile ? 2 : 4; return t; };
+  const wallNor = (name, rep) => { if (mobile) return null; const t = new THREE.TextureLoader().load(`/textures/pbr/${name}_n.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); return t; };
+  const photoWall = (name, rep, tint, extra = {}) => {
+    const m = new THREE.MeshStandardMaterial({ map: wallTex(name, rep), normalMap: wallNor(name, rep), vertexColors: true, roughness: 0.92, ...extra });
+    m.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#if defined( USE_COLOR )
+  { float vl = max(dot(vColor.rgb, vec3(0.3, 0.59, 0.11)), 0.05); diffuseColor.rgb *= mix(vec3(1.0), vColor.rgb / vl * 0.62, ${tint.toFixed(2)}) * 1.25; }
+#endif`);
+    };
+    return m;
+  };
+  const brickMat = photoWall('brick', 2.4, 0.25);
+  const metalMat = photoWall('metal', 2, 0.65, { roughness: 0.55, metalness: 0.3 });
+  const plankMat = photoWall('planks', 2, 0.35, { color: new THREE.Color(1.8, 1.7, 1.6) });   // the plank photo is dark weathered wood: lift it
   const plainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
-  const roofMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide });
+  // Roofs: corrugated metal (as on most of rural Florida), laid in world space down the slopes, in the
+  // roof's own colour.
+  const roofTex = wallTex('metal', 1), roofNor = wallNor('metal', 1);
+  const roofMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.25, side: THREE.DoubleSide });
+  roofMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uRoof = { value: roofTex };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRoofP;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvRoofP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uRoof;\nvarying vec3 vRoofP;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+  { vec3 t = texture2D(uRoof, vRoofP.xz / 1.8).rgb; float tl = dot(t, vec3(0.3, 0.59, 0.11)) / 0.18; diffuseColor.rgb *= mix(1.0, tl, 0.85); }`);
+  };
   const trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 1, 9);
   trunkGeo.translate(0, 0.5, 0);
   // Crowns: a broadleaf is a few overlapping rounded clumps; a pine is three stacked tiers. Unit-sized,
@@ -303,36 +327,76 @@ vec2 dzWave(vec2 p, vec2 dir, float k, float sp, float a) { float ph = dot(p, di
   // The ground: smooth shading, and fine colour variation worked out per pixel from where it is (patches
   // of lighter and darker grass, soil showing through) so it reads as ground, not flat-coloured tiles.
   const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 });
-  // A real grass photo (seamless), laid over the ground in world space: full on grassy ground, a light
-  // touch of its texture everywhere else. Sampled at two sizes and angles so the repeat doesn't show.
+  // Photo-scanned ground (Poly Haven, CC0; client/textures/pbr): grass, forest floor, leaf litter and
+  // sand, with their normal maps, laid in world space and blended by what the land really is there
+  // (each corner of the ground mesh says how much of each, from the land cover). The land's own colour
+  // still tints it, so fields, woods and sandhills keep their look from the map. Phones get the
+  // colours without the normal maps.
+  const texLoader = new THREE.TextureLoader();
+  const pbr = (name, srgb = true) => { const t = texLoader.load(`/textures/pbr/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = mobile ? 2 : 4; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
   const grassTex = new THREE.TextureLoader().load('/textures/grass.jpg');
-  grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping;
-  grassTex.colorSpace = THREE.SRGBColorSpace;
-  grassTex.anisotropy = 8;
+  grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping; grassTex.colorSpace = THREE.SRGBColorSpace; grassTex.anisotropy = 8;
+  const GTEX = { grass: pbr('grass'), forest: pbr('forest'), leaves: pbr('leaves'), sand: pbr('sand'), trail: pbr('trail') };
+  const GROUND_N = mobile ? null : { grass: pbr('grass_n', false), forest: pbr('forest_n', false), sand: pbr('sand_n', false), trail: pbr('trail_n', false) };
   terrainMat.onBeforeCompile = (sh) => {
     sh.uniforms.uGrass = { value: grassTex };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    for (const [k, t] of Object.entries(GTEX)) sh.uniforms[`uG_${k}`] = { value: t };
+    if (GROUND_N) for (const [k, t] of Object.entries(GROUND_N)) sh.uniforms[`uN_${k}`] = { value: t };
+    if (GROUND_N) sh.defines = { ...(sh.defines || {}), DZ_GROUND_NORMALS: '' };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;\nattribute vec4 aMat;\nvarying vec4 vMat;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvMat = aMat;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-uniform sampler2D uGrass;
+uniform sampler2D uGrass, uG_grass, uG_forest, uG_leaves, uG_sand, uG_trail;
+#ifdef DZ_GROUND_NORMALS
+uniform sampler2D uN_grass, uN_forest, uN_sand, uN_trail;
+#endif
 varying vec3 vWorldP;
+varying vec4 vMat;
 float dzHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(dzHash(i), dzHash(i + vec2(1, 0)), f.x), mix(dzHash(i + vec2(0, 1)), dzHash(i + vec2(1, 1)), f.x), f.y); }`)
+  return mix(mix(dzHash(i), dzHash(i + vec2(1, 0)), f.x), mix(dzHash(i + vec2(0, 1)), dzHash(i + vec2(1, 1)), f.x), f.y); }
+vec3 dzN = vec3(0.0, 0.0, 1.0);`)
       .replace('#include <color_fragment>', `#include <color_fragment>
 { vec2 q = vWorldP.xz;
   float big = dzNoise(q * 0.035) * 0.6 + dzNoise(q * 0.11) * 0.4;     // patches across a field
-  float fine = dzNoise(q * 1.7) * 0.5 + dzNoise(q * 5.3) * 0.5;      // grass and grit underfoot
-  diffuseColor.rgb *= 0.84 + big * 0.26 + (fine - 0.5) * 0.12;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 0.98, 0.86), smoothstep(0.62, 0.8, big) * 0.5);
-  vec3 tA = texture2D(uGrass, q / 3.2).rgb, tB = texture2D(uGrass, mat2(0.8, -0.6, 0.6, 0.8) * q / 10.5 + 0.37).rgb;
-  vec3 tc = tA * 0.62 + tB * 0.38;
-  float tl = dot(tc, vec3(0.3, 0.59, 0.11)) / 0.1361;                 // the photo's light and dark, around 1
-  float gl = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
-  float grassy = smoothstep(0.03, 0.09, diffuseColor.g - max(diffuseColor.r, diffuseColor.b) * 0.9);
-  vec3 detail = mix(diffuseColor.rgb, diffuseColor.rgb * tl, 0.45);   // texture on any ground, keeping its colour
-  vec3 real = mix(tc * (gl / 0.1361), diffuseColor.rgb * tl, 0.35);     // the real grass, at this ground's brightness and a little of its tint
-  diffuseColor.rgb = mix(detail, real, grassy * 0.85); }`);
+  // How much of each kind of ground, from the land cover (woods, sand, bare dirt, grass), broken up a
+  // little by noise so the edges between them aren't straight lines.
+  // (Only the kinds already here vary, so a field never reads the sand or woods photos.)
+  vec4 w = vMat * (1.0 + (vec4(big, 1.0 - big, dzNoise(q * 0.07), 0.5) - 0.5) * 1.2);
+  w /= max(w.x + w.y + w.z + w.w, 1e-3);
+  vec2 qa = q / 3.0, qb = mat2(0.8, -0.6, 0.6, 0.8) * q / 3.6 + 0.37;
+  // Only read the photos this spot actually uses (most of the ground is one or two kinds). Where a
+  // kind fades out (under 2%) the skipped read can't show.
+  float leafy = smoothstep(0.35, 0.75, dzNoise(q * 0.09));
+  vec3 photo = vec3(0.0);
+  if (w.x > 0.02) {
+    vec3 woods = texture2D(uG_forest, qa).rgb;
+    if (leafy > 0.01) woods = mix(woods, texture2D(uG_leaves, qb).rgb, leafy);
+    photo += woods * w.x;
+  }
+  if (w.y > 0.02) photo += texture2D(uG_sand, qb).rgb * w.y;
+  if (w.z > 0.02) photo += texture2D(uG_trail, qa).rgb * w.z;
+  if (w.w > 0.02) photo += mix(texture2D(uG_grass, qa).rgb, texture2D(uGrass, qb * 1.1).rgb * vec3(0.95, 0.9, 0.75), 0.5) * w.w;
+  // Each photo's average brightness (not this pixel's), so the photo's own light and dark detail stays.
+  float pl = dot(w, vec4(mix(0.244, 0.142, leafy), 0.182, 0.235, 0.12)), gl = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+  // The photo, at this ground's brightness, with a third of the map's colour mixed in.
+  vec3 real = photo * (gl / pl) * mix(vec3(1.0), diffuseColor.rgb / max(gl, 1e-3) * 0.33, 0.35);
+  diffuseColor.rgb = mix(real, diffuseColor.rgb, 0.18) * (0.88 + big * 0.24);
+#ifdef DZ_GROUND_NORMALS
+  vec3 nw = vec3(0.0);
+  if (w.x > 0.02) nw += texture2D(uN_forest, qa).rgb * w.x;
+  if (w.y > 0.02) nw += texture2D(uN_sand, qb).rgb * w.y;
+  if (w.z > 0.02) nw += texture2D(uN_trail, qa).rgb * w.z;
+  if (w.w > 0.02) nw += texture2D(uN_grass, qa).rgb * w.w;
+  nw = nw * 2.0 - 1.0;
+  dzN = normalize(vec3(nw.xy * 1.2, max(nw.z, 0.2)));
+#endif
+}`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+#ifdef DZ_GROUND_NORMALS
+{ vec3 T = normalize((viewMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz), B = normalize((viewMatrix * vec4(0.0, 0.0, -1.0, 0.0)).xyz);
+  normal = normalize(T * dzN.x + B * dzN.y + normal * dzN.z); }
+#endif`);
   };
   const canopyGeo = new THREE.IcosahedronGeometry(1, 1);
   const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2d4f25, roughness: 1, flatShading: true });
@@ -445,6 +509,30 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
   const RAIL_COL = { bed: [0.45, 0.42, 0.38], tie: [0.3, 0.22, 0.16], steel: [0.62, 0.6, 0.58] };
   const ROAD_COL = { asphalt: [0.27, 0.28, 0.3], route: [0.25, 0.26, 0.28], dirt: [0.55, 0.45, 0.31], line: [0.92, 0.74, 0.2], edge: [0.85, 0.85, 0.82] };
   const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  // Real asphalt on the paved roads and loose gravel on the dirt ones (photo-scanned, laid in world
+  // space); the painted lines keep their colour with a little of the road's grain through them.
+  const ROAD_TEX = { asphalt: pbr('asphalt'), trail: GTEX.trail }, ROAD_NOR = mobile ? null : pbr('asphalt_n', false);
+  roadMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uAsph = { value: ROAD_TEX.asphalt }; sh.uniforms.uTrail = { value: ROAD_TEX.trail };
+    if (ROAD_NOR) { sh.uniforms.uAsphN = { value: ROAD_NOR }; sh.defines = { ...(sh.defines || {}), DZ_ROAD_NORMALS: '' }; }
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRoadP;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvRoadP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uAsph, uTrail;\n#ifdef DZ_ROAD_NORMALS\nuniform sampler2D uAsphN;\n#endif\nvarying vec3 vRoadP;\nfloat dzPaint = 0.0;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+  { vec2 q = vRoadP.xz / 3.5;
+    float vl = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+    float dirt = smoothstep(0.08, 0.16, diffuseColor.r - diffuseColor.b);
+    dzPaint = smoothstep(0.42, 0.55, vl) * (1.0 - dirt);
+    vec3 a = texture2D(uAsph, q).rgb, t = texture2D(uTrail, q * 1.2).rgb;
+    vec3 surf = mix(a * (vl / 0.08), t * (vl / 0.23), dirt);
+    float grain = dot(a, vec3(0.3, 0.59, 0.11)) / 0.08;
+    diffuseColor.rgb = mix(surf, diffuseColor.rgb * mix(1.0, grain, 0.25), dzPaint); }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+#ifdef DZ_ROAD_NORMALS
+  { vec3 n = texture2D(uAsphN, vRoadP.xz / 3.5).rgb * 2.0 - 1.0;
+    vec3 T = normalize((viewMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz), B = normalize((viewMatrix * vec4(0.0, 0.0, -1.0, 0.0)).xyz);
+    normal = normalize(mix(normal, normalize(T * n.x + B * n.y + normal * n.z), 1.0 - dzPaint)); }
+#endif`);
+  };
   /** Height of the drawn ground mesh itself (the same 8 m triangles), so a road never sinks into it. */
   function meshHeight(x, z) {
     const S = 8, i = Math.floor(x / S), j = Math.floor(z / S), fx = x / S - i, fz = z / S - j;
@@ -571,7 +659,7 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
   /** One chunk's ground; `wet` comes back true if any of it is under water. */
   function buildTerrain(x0, z0) {
     const STEP = 8, N = CHUNK / STEP;
-    const pos = [], col = [], idx = [];
+    const pos = [], col = [], idx = [], mat = [];
     let wet = false;
     for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
       const x = x0 + i * STEP, z = z0 + j * STEP;
@@ -584,6 +672,12 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
       if (h > 0.4 && sl > 0.18) { const k = Math.min(1, (sl - 0.18) / 0.4) * 0.7; c = [c[0] + (CLAY[0] - c[0]) * k, c[1] + (CLAY[1] - c[1]) * k, c[2] + (CLAY[2] - c[2]) * k]; }
       const v = 0.94 + (((i * 7 + j * 13) % 5) / 40);
       col.push(c[0] * v, c[1] * v, c[2] * v);
+      // What the ground is made of here: woods (forest floor and leaves), sand, bare dirt, grass.
+      const cv = terrain.hasCover ? terrain.cover(x, z) : 3;
+      const steep = h > 0.4 && sl > 0.18 ? Math.min(1, (sl - 0.18) / 0.4) : 0;
+      let mw = cv === 1 || cv === 9 ? [1, 0, 0, 0.15] : cv === 6 ? [0, 1, 0.2, 0] : cv === 4 ? [0, 0, 0.45, 0.55] : cv === 5 ? [0, 0.1, 0.25, 0.65] : cv === 2 ? [0.35, 0.1, 0.1, 0.45] : [0, 0, 0.05, 1];
+      if (steep) mw = mw.map((m, k) => m * (1 - steep) + (k === 2 ? steep : 0));
+      mat.push(...mw);
     }
     for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
       const a = i * (N + 1) + j, b = a + 1, c = a + N + 1, d = c + 1;
@@ -592,6 +686,7 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('aMat', new THREE.Float32BufferAttribute(mat, 4));
     g.setIndex(idx);
     g.computeVertexNormals();
     g.computeBoundingSphere();
@@ -669,7 +764,7 @@ float dzNoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 
       case 'building': { if (b.real) return [pick(BRICK_COLORS, id), 'brick']; const c = COLORS.building, v = hash(id) / 4294967296; return [[c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 'office']; }
       case 'civic': return [pick(CIVIC_COLORS, id), b.real ? 'brick' : 'office'];
       case 'home': return [pick(HOME_COLORS, id), 'siding'];
-      case 'barn': return [b.real ? pick(BARN_COLORS, id) : COLORS.barn, b.real ? 'metal' : null];
+      case 'barn': return [b.real ? pick(BARN_COLORS, id) : COLORS.barn, b.real ? (hash(id) % 5 < 2 ? 'planks' : 'metal') : 'planks'];   // old wooden barns and metal ones
       case 'warehouse': return [b.real ? pick(WAREHOUSE_COLORS, id) : COLORS.warehouse, b.real ? 'metal' : null];
       case 'car': return [CAR_COLORS[b.id % CAR_COLORS.length], null];
       case 'vehiclebody': return [VEHICLE_COLORS[b.vtype] || COLORS.cover, null];
@@ -793,7 +888,7 @@ vBlade = position.y;
   function buildChunk(cx, cz) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
-    const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), plain = newBuf(false), roof = newBuf(false);
+    const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), planks = newBuf(true), plain = newBuf(false), roof = newBuf(false);
     const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
@@ -804,7 +899,7 @@ vBlade = position.y;
       if (b.type === 'tank') { tanks.push(b); continue; }
       if (b.type === 'car' || b.type === 'vehiclebody') { rigs.push(b); continue; }   // drawn as real vehicles, below
       const [c, tex] = paint(b);
-      pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'metal' ? metal : plain, b, c, tex ? 4 : 0);
+      pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'metal' ? metal : tex === 'planks' ? planks : plain, b, c, tex ? 4 : 0);
     }
     for (const r of buildingsIn.get(key(cx, cz)) || []) {
       if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
@@ -823,7 +918,7 @@ vBlade = position.y;
     const roads = map.roadGrid && buildRoads(x0, z0);
     if (roads) group.add(roads);
     if (ground.wet) { const w = new THREE.Mesh(waterGeo, waterMat); w.position.set(x0 + CHUNK / 2, 0, z0 + CHUNK / 2); group.add(w); }
-    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [metal, metalMat], [plain, plainMat], [roof, roofMat]]) {
+    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [metal, metalMat], [planks, plankMat], [plain, plainMat], [roof, roofMat]]) {
       if (!buf.idx.length) continue;
       const m = new THREE.Mesh(toGeometry(buf), mat);
       m.castShadow = true;
