@@ -1493,7 +1493,10 @@ function boatState(p, msg) {
       const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.5));
       for (let i = 0; i < steps; i++) { const nx = x + dx / steps, nz = z + dz / steps; if (!floats(terrain, nx, nz)) { ok = false; break; } x = nx; z = nz; }
     }
-    rt.speed = dt > 0 ? Math.hypot(x - b.x, z - b.z) / dt : 0;
+    // Speed, smoothed: two updates arriving together mustn't read as a burst of hundreds of mph.
+    const inst = Math.min(def.speed * 1.3, Math.hypot(x - b.x, z - b.z) / Math.max(dt, 0.05));
+    rt.speed += (inst - rt.speed) * (dt > 0.03 ? 0.6 : 0.3);
+    rt.rev = (x - b.x) * Math.sin(msg.boat.yaw) + (z - b.z) * Math.cos(msg.boat.yaw) < -0.01;   // backing up
     b.x = x; b.z = z; b.yaw = msg.boat.yaw;
     if (!ok || Math.hypot(x - msg.boat.x, z - msg.boat.z) > (def.land ? 3 : 1.5)) send(p.ws, { t: 'boatFix', x, z, yaw: b.yaw });
     placeOccupants(b);
@@ -5034,7 +5037,7 @@ function snapshotFor(r, views, now) {
     t: 'snap', players: 0,
     bots: [...bots.values()].filter((b) => !b.dead && near(b)).map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), maxHp: b.maxHp, stun: isStunned(b, now) ? 1 : 0, ...(b.crouch ? { crouch: true } : {}) })),
     boats: db.boats.filter((b) => near(b, isLand(b.type) ? RIDE_SEEN : INTEREST) || (BOATS[b.type].loud && rtOf(b).speed > 1 && Math.hypot(b.x - r.x, b.z - r.z) < BOATS[b.type].loud)).map((b) => ({ id: b.id, type: b.type, x: +b.x.toFixed(2), z: +b.z.toFixed(2), yaw: +b.yaw.toFixed(3), hp: Math.round(b.hp), max: BOATS[b.type].hp, owner: b.ownerName, mine: canUseBoat(r, b) ? 1 : 0, seats: rtOf(b).seats, fast: rtOf(b).speed > 1 ? 1 : 0,
-      ...(isLand(b.type) ? { y: +rideY(b).toFixed(2), c: b.color || 0, ...(b.keys === false ? { nk: 1 } : {}), ...(b.world ? { w: 1 } : {}), ...(rtOf(b).speed > 0.3 ? { sp: +rtOf(b).speed.toFixed(1) } : {}) } : {}) })),
+      ...(isLand(b.type) ? { y: +rideY(b).toFixed(2), c: b.color || 0, ...(b.keys === false ? { nk: 1 } : {}), ...(b.world ? { w: 1 } : {}), ...(rtOf(b).speed > 0.3 ? { sp: +rtOf(b).speed.toFixed(1), ...(rtOf(b).rev ? { rev: 1 } : {}) } : {}) } : {}) })),
     charges: [...charges.values()].filter((c) => near(c)).map((c) => ({ id: c.id, x: c.x, z: c.z, y: c.y, detAt: c.detAt })),
   });
   return `${fast.slice(0, -1).replace('"players":0', `"players":[${list.join(',')}]`)},${r.slow.json}}`;

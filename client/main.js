@@ -619,6 +619,9 @@ function syncBoats(list) {
     seen.add(b.id);
     let v = boatVis.get(b.id);
     if (!v) { v = { mesh: makeBoat(b.type, b.c) }; v.mesh.position.set(b.x, b.y ?? 0, b.z); v.mesh.rotation.y = b.yaw; boatVis.set(b.id, v); }
+    // For gliding between updates: when this one came, and how fast it turns.
+    if (v.data && (v.data.x !== b.x || v.data.z !== b.z)) { const dt = (performance.now() - (v.at || 0)) / 1000; v.turn = dt > 0 && dt < 0.5 ? Math.atan2(Math.sin(b.yaw - v.data.yaw), Math.cos(b.yaw - v.data.yaw)) / dt : 0; }
+    v.at = performance.now();
     v.data = b;
     const def = BOATS[b.type], name = def.name.toLowerCase();
     // Rides only say whose they are when they're yours (the prompt tells you the rest up close).
@@ -633,7 +636,15 @@ function animateBoats(dt, now) {
     const local = state.boat && state.boat.id === id ? state.boat : null;
     const t = local || v.data, g = v.mesh, k = Math.min(1, dt * 10), def = BOATS[v.data.type];
     const px = g.position.x, pz = g.position.z;
-    if (local) { g.position.x = t.x; g.position.z = t.z; g.rotation.y = t.yaw; } else {
+    if (local) { g.position.x = t.x; g.position.z = t.z; g.rotation.y = t.yaw; }
+    else if (def.land && t.sp) {
+      // Someone else driving: carry on from their last update at their speed and turn (updates come
+      // ten times a second; easing toward each made a fast car hop), and drift onto the real track.
+      const since = Math.min(0.3, (performance.now() - (v.at || 0)) / 1000), yaw = t.yaw + (v.turn || 0) * since;
+      const fwd = (t.rev ? -1 : 1) * t.sp * since, px = t.x + Math.sin(yaw) * fwd, pz = t.z + Math.cos(yaw) * fwd, kk = Math.min(1, dt * 12);
+      g.position.x += (px - g.position.x) * kk; g.position.z += (pz - g.position.z) * kk;
+      let dy = yaw - g.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.rotation.y += dy * kk;
+    } else {
       g.position.x += (t.x - g.position.x) * k; g.position.z += (t.z - g.position.z) * k;
       let dy = t.yaw - g.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.rotation.y += dy * k;
     }
