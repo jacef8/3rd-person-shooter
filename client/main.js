@@ -1104,9 +1104,14 @@ function updateCharacterMesh(g, c, dt) {
   if (u.rig) {
     // Which way you're really moving, against the way you face: forward, back, or strafing.
     const vk = Math.min(1, adt * 10), tooFar = speed > 25;   // a teleport isn't a step
-    u.vx = (u.vx || 0) + ((tooFar ? 0 : dxm / adt) - (u.vx || 0)) * vk; u.vz = (u.vz || 0) + ((tooFar ? 0 : dzm / adt) - (u.vz || 0)) * vk;
+    // Ahead and sideways in the person's own frame, each frame's step measured against the way they
+    // face right now, then smoothed: turning while running stays running ahead (smoothing the step in
+    // the world instead lagged behind the turn and read as a strafe for a moment, a hitch in the stride).
     const yaw = g.rotation.y, still = c.boat || c.downed || c.prone || c.air;
-    const fwd = u.vx * Math.sin(yaw) + u.vz * Math.cos(yaw), side = u.vx * Math.cos(yaw) - u.vz * Math.sin(yaw);
+    const rf = tooFar ? 0 : (dxm * Math.sin(yaw) + dzm * Math.cos(yaw)) / adt, rs = tooFar ? 0 : (dxm * Math.cos(yaw) - dzm * Math.sin(yaw)) / adt;
+    u.vf = (u.vf || 0) + (rf - (u.vf || 0)) * vk; u.vs = (u.vs || 0) + (rs - (u.vs || 0)) * vk;
+    u.vx = u.vf * Math.sin(yaw) + u.vs * Math.cos(yaw); u.vz = u.vf * Math.cos(yaw) - u.vs * Math.sin(yaw);
+    const fwd = u.vf, side = u.vs;
     const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming) || now - (u.firedAt || 0) < 900;   // shooting brings the gun up to the shoulder, as aiming does
     // Busy with something that takes a while (a locker, a flag, a flare…): the gun goes away for the pose.
     const act = c.act && !c.dead && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] ? c.act : null;

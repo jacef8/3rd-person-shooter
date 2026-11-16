@@ -171,11 +171,12 @@ export function animatePerson(holder, rig, st, dt) {
   // The hips turn the rest of the way toward where you're really going; the chest keeps facing the aim.
   // Which clip: crouch-walk, walk, jog or sprint by speed; standing still, aiming or just holding.
   const crouch = st.crouch && !st.seated;
-  let gait = crouch ? 'cwalk' : s < (rig.gait === 'run' ? 3.3 : 3.8) ? 'walk' : 'run';
+  // (one switch point, with room either side, so a run starting or easing off changes clip once)
+  let gait = crouch ? 'cwalk' : s < (rig.gait === 'run' || rig.gait === 'sprint' ? 3.2 : 3.9) ? 'walk' : 'run';
   const want = !moving ? (crouch ? 'crouch' : !st.armed ? 'idle' : st.aiming ? 'aim' : 'hold')   // standing tall unless aiming or shooting
     // Running straight ahead is a real upright run (the sprint clip, played at your pace); the rifle jog,
     // which is low and short-stepped, is kept for strafing and backing up.
-    : gait === 'run' && (DIRS[dir] === 'f' || DIRS[dir] === 'fl' || DIRS[dir] === 'fr') && s > (rig.cur === 'sprint' ? 3.9 : 4.3) ? 'sprint' : `${gait}_${DIRS[dir]}`;
+    : gait === 'run' && (DIRS[dir] === 'f' || DIRS[dir] === 'fl' || DIRS[dir] === 'fr') ? 'sprint' : `${gait}_${DIRS[dir]}`;
   if (want === 'sprint') gait = 'sprint';
   rig.gait = gait; rig.cur = want;
   // (the run straight ahead also covers the diagonals ahead: the hips turn the whole way toward them)
