@@ -216,7 +216,7 @@ function drawNames(g, map, roads, v, extra = []) {
   if (v.k > 0.035) for (const l of labels) if (l.kind === 'water' && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), '#a9d7f2', 'water');
   // 6. Main roads, public places, parks and landmarks, then every street and named building.
   for (const e of roadsBy(1)) chip(e.name, e.x, e.y, CHIP.road);
-  if (v.k > 0.05) for (const l of labels) if ((l.kind === 'place' || l.kind === 'landmark') && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), PLACE_INK[l.place] || CHIP.place);
+  if (v.k > 0.05) for (const l of labels) if ((l.kind === 'place' || l.kind === 'landmark') && !l.hidden && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), PLACE_INK[l.place] || CHIP.place);
   for (const e of roadsBy(2)) chip(e.name, e.x, e.y, CHIP.ink);
   if (v.k > 0.12) for (const b of map.buildings) if (b.name && b.maxX > v.minX && b.minX < v.maxX && b.maxZ > v.minZ && b.minZ < v.maxZ) chip(b.name, v.sx((b.minX + b.maxX) / 2), v.sz(b.minZ) - 12, CHIP.place);
 }

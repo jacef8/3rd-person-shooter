@@ -23,6 +23,7 @@ import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
 import HELI from '/shared/data/activities.json' with { type: 'json' };
+import SITES from '/shared/data/sites.json' with { type: 'json' };
 import { SKY, airRates, nextMode, stepAir } from '/shared/skydive.js';
 import { BOATS, BOAT_RULES, RIDE_RULES, stepBoat, seatPos, riderFeet } from '/shared/boats.js';
 import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
@@ -1423,6 +1424,14 @@ function drawMinimap() {
   for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
   for (const e of state.extracts) edge(e.x, e.z, '#ff2a2a', 8);
   for (const e of state.worldEvents || []) edge(e.x, e.z, '#c77dff', 8);
+  for (const st of state.sites || []) {
+    const dx = st.x - state.x, dz = st.z - state.z;
+    if (Math.hypot(dx, dz) * k > R + 8) continue;
+    const c = siteColor(st, now);
+    if (!c) continue;
+    g.fillStyle = c; g.strokeStyle = '#111'; g.lineWidth = 1.5;
+    g.beginPath(); g.rect(X(st.x) - 4, Z(st.z) - 4, 8, 8); g.fill(); g.stroke();
+  }
   if (state.hotZone) {
     const hz = state.hotZone;
     g.strokeStyle = '#ff5a1f'; g.lineWidth = 2; g.beginPath(); g.arc(X(hz.x), Z(hz.z), hz.radius * k, 0, Math.PI * 2); g.stroke();
@@ -1936,6 +1945,9 @@ function handle(m) {
     case 'hotzone':
       state.hotZone = m.zone;
       syncHotZone();
+      break;
+    case 'sites':
+      state.sites = m.sites || [];
       break;
     case 'events':
       state.drops = m.drops;
@@ -2658,18 +2670,37 @@ function renderContact() {
   }
 }
 
+/** High-value sites (shared/sites.js): gold while stocked, flashing red on alarm, grey once cleared. */
+function siteColor(st, now) {
+  if (st.state === 'alarm') return Math.floor(now / 300) % 2 ? '#ff3b3b' : null;
+  return st.state === 'cleared' ? '#8a8f96' : '#ffcc33';
+}
+function siteStatus(st) {
+  if (st.state === 'cleared') return `cleared · restocks in ${Math.max(1, Math.ceil((st.restockAt - Date.now()) / 60000))} min`;
+  const guards = SITES.kinds[st.kind].guard === 'guard' ? 'guarded' : 'held by looters';
+  return `${st.state === 'alarm' ? '🚨 ALARM · ' : ''}${guards} · ${st.left} to take`;
+}
+/** The site you're at, if any. */
+function siteHere() {
+  return (state.sites || []).find((st) => Math.hypot(st.x - state.x, st.z - state.z) < st.r + 60) || null;
+}
+
 /** Active contracts shown under the kill feed. */
 function renderTracker() {
   const el = $('tracker');
   if (document.body.classList.contains('touchui')) {
     const z = state.hotZone, now = Date.now();
     const c = state.contracts[0];
+    const here = siteHere();
     el.innerHTML = carryingHot() ? '<div class="hotc carry">🔥 Hot loot: get it home</div>'
+      : here ? `<div class="sitec ${here.state}">${SITES.kinds[here.kind].icon} ${here.name} · ${siteStatus(here)}</div>`
       : z ? `<div class="hotc">🔥 ${z.name.replace(/ \(.*\)$/, '')} · ${distText(Math.hypot(z.x - state.x, z.z - state.z))} · ${z.open ? 'closes' : 'opens'} ${mmss((z.open ? z.closesAt : z.opensAt) - now)}</div>`
         : c ? `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>` : '';
     return;
   }
-  el.innerHTML = (state.hotZone ? `<div class="hotc">${hotZoneLine()}</div>` : '') +
+  const here = siteHere();
+  el.innerHTML = (here ? `<div class="sitec ${here.state}">${SITES.kinds[here.kind].icon} ${here.name} <span>${siteStatus(here)}</span></div>` : '') +
+    (state.hotZone ? `<div class="hotc">${hotZoneLine()}</div>` : '') +
     (carryingHot() ? '<div class="hotc carry">🔥 You carry hot loot: everyone sees you every 30 s. Get it home or fly it out.</div>' : '') +
     state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('') +
     (state.worldEvents || []).map((e) => `<div class="eventc">📣 ${e.name} <span>${e.type === 'swing' ? '' : `${distText(Math.hypot(e.x - state.x, e.z - state.z))} · `}${Math.max(0, Math.ceil((e.endsAt - Date.now()) / 60000))} min left</span></div>`).join('');
@@ -2876,6 +2907,12 @@ function drawMapCanvas() {
   }
   const lit = new Set(state.mapHover?.group || []);
   const lzPick = state.mapMode === 'first' || state.mapMode === 'travel';
+  // A site's marker carries its name: drop the plain place label underneath it.
+  for (const l of map.labels || []) if (l.kind === 'place' && ['prison', 'sheriff', 'hospital'].includes(l.place)) l.hidden = (state.sites || []).some((q) => Math.hypot(q.x - l.x, q.z - l.z) < 500);
+  for (const st of state.sites || []) {
+    const c = siteColor(st, Date.now()) || '#ff3b3b';
+    markers.push({ x: st.x, z: st.z, kind: 'diamond', color: c, size: st.kind === 'prison' ? 10 : 8, label: `${SITES.kinds[st.kind].icon} ${st.name.replace('Correctional Institution', 'CI')}${st.state === 'stocked' ? '' : st.state === 'alarm' ? ' · 🚨 ALARM' : ' · cleared'}`, labelMin: st.kind === 'prison' || st.kind === 'hospital' ? 0 : 0.08 });
+  }
   for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: lzPick ? 6 : 4, highlight: lit.has(lz.id), label: lzPick ? lz.name.split(' (')[0] : '', labelMin: 0 });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
   for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });

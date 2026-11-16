@@ -1,0 +1,67 @@
+{
+  "_about": "High-value sites: the county's real prisons, sheriff's and police offices, hospital, clinics, pharmacies and sporting-goods stores. Each is held by guards and stocked with better loot than the countryside. Taking the first thing (or shooting a guard) sets off the alarm: everyone within alarmRangeM hears it and reinforcements arrive after reinforceAfterMs. Prison, sheriff and sporting-goods loot is hot (you show on everyone's map until you get it home; 'crate' pings every 30 s, 'cache' every 60 s). Medkits are yours outright. Cleared sites restock after a random time in restockMs. Guards turn up when someone comes within wakeM and leave when nobody's been within sleepM for a minute.",
+  "wakeM": 320,
+  "sleepM": 800,
+  "alarmRangeM": 1609,
+  "alarmMs": 180000,
+  "kinds": {
+    "prison": {
+      "label": "Prison", "icon": "⛓", "guard": "guard", "guards": 6, "reinforce": 4, "reinforceAfterMs": 45000,
+      "radius": 260, "merge": 500, "caches": 7, "restockMs": [2700000, 3600000], "hot": "crate", "xp": 200,
+      "loot": [
+        { "w": 3, "name": "Contraband stash", "contents": { "cash": [300, 700], "intel": [1, 3] } },
+        { "w": 2, "name": "Armory rifle", "gun": true },
+        { "w": 2, "armor": "heavy" },
+        { "w": 2, "name": "Armory ammo crate", "contents": { "ammo": [150, 260], "rockets": [0, 2] } },
+        { "w": 1, "name": "Warden's safe", "contents": { "cash": [800, 1400], "intel": [2, 4] } }
+      ]
+    },
+    "sheriff": {
+      "label": "Sheriff's office", "icon": "★", "guard": "guard", "guards": 3, "reinforce": 3, "reinforceAfterMs": 40000,
+      "radius": 70, "merge": 150, "caches": 4, "restockMs": [1800000, 2700000], "hot": "crate", "xp": 120,
+      "loot": [
+        { "w": 3, "name": "Evidence locker", "contents": { "cash": [200, 500], "intel": [1, 2] } },
+        { "w": 2, "name": "Armory rifle", "gun": true },
+        { "w": 2, "armor": "medium" },
+        { "w": 2, "name": "Ammo locker", "contents": { "ammo": [100, 180], "parts": [10, 25] } }
+      ]
+    },
+    "hospital": {
+      "label": "Hospital", "icon": "✚", "guard": "looter", "guards": 4, "reinforce": 2, "reinforceAfterMs": 40000,
+      "radius": 90, "merge": 300, "caches": 6, "restockMs": [1500000, 2100000], "hot": "cache", "xp": 90,
+      "loot": [
+        { "w": 4, "medkit": 2 },
+        { "w": 2, "name": "Drug cabinet", "contents": { "cash": [200, 400], "tech": [5, 12] } },
+        { "w": 2, "name": "Lab equipment", "contents": { "tech": [20, 40], "parts": [10, 20] } },
+        { "w": 1, "armor": "light" }
+      ]
+    },
+    "clinic": {
+      "label": "Clinic", "icon": "✚", "guard": "looter", "guards": 2, "reinforce": 1, "reinforceAfterMs": 35000,
+      "radius": 45, "merge": 150, "caches": 3, "restockMs": [900000, 1500000], "hot": "cache", "xp": 50,
+      "loot": [
+        { "w": 4, "medkit": 1 },
+        { "w": 2, "name": "Sample cabinet", "contents": { "cash": [80, 200], "tech": [4, 10] } },
+        { "w": 1, "name": "Exam-room electronics", "contents": { "tech": [10, 20] } }
+      ]
+    },
+    "pharmacy": {
+      "label": "Pharmacy", "icon": "℞", "guard": "looter", "guards": 2, "reinforce": 1, "reinforceAfterMs": 35000,
+      "radius": 40, "merge": 120, "caches": 3, "restockMs": [900000, 1500000], "hot": "cache", "xp": 50,
+      "loot": [
+        { "w": 3, "medkit": 2 },
+        { "w": 3, "name": "Pharmacy safe", "contents": { "cash": [150, 350] } }
+      ]
+    },
+    "sporting": {
+      "label": "Sporting goods", "icon": "⌖", "guard": "looter", "guards": 3, "reinforce": 2, "reinforceAfterMs": 40000,
+      "radius": 45, "merge": 150, "caches": 4, "restockMs": [1200000, 1800000], "hot": "cache", "xp": 70,
+      "loot": [
+        { "w": 2, "name": "Gun case", "gun": true },
+        { "w": 3, "name": "Ammo shelf", "contents": { "ammo": [100, 200] } },
+        { "w": 1, "armor": "light" },
+        { "w": 1, "name": "Register", "contents": { "cash": [100, 250] } }
+      ]
+    }
+  }
+}

@@ -7,6 +7,7 @@
 //   near players, which is what lets one server host a PUBG-sized map.
 
 import { withCounty } from '../shared/county.js';
+import { SITES, findSites } from '../shared/sites.js';
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
@@ -1019,6 +1020,130 @@ function tickHotZone(now) {
   }
   for (const [tok, h] of [...hotDrops]) if (now >= h.arrivesAt) { hotDrops.delete(tok); landHotDrop(tok, h, now); }
 }
+// ---- high-value sites (shared/sites.js): the county's real prisons, sheriff's offices, hospital, clinics,
+// pharmacies and sporting-goods stores. Guarded, stocked with better loot; the first thing taken (or the
+// first shot at a guard) sets off the alarm: everyone near hears it and backup is on its way. Most of what
+// comes out is hot until you get it home. A cleared site restocks after a while.
+const SITE_ON = process.env.SITES !== '0' && !!realFiles.infrastructure;
+const centreOf = (b) => ({ x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2 });
+const sites = (SITE_ON ? findSites(realFiles.infrastructure, readReal('businesses.json'), map.size) : []).map((s) => {
+  const K = SITES.kinds[s.kind];
+  const near = map.buildings.map((b) => ({ b, d: Math.hypot(centreOf(b).x - s.x, centreOf(b).z - s.z) })).filter((q) => q.d < K.radius)
+    .sort((a, b) => a.d - b.d).slice(0, s.kind === 'prison' ? 12 : 3).map((q) => q.b);
+  const c = near[0] && Math.hypot(centreOf(near[0]).x - s.x, centreOf(near[0]).z - s.z) < 90 ? centreOf(near[0]) : s;
+  return { ...s, x: Math.round(c.x), z: Math.round(c.z), K, buildings: near, state: 'stocked', caches: [], guards: [], awake: false, lastNear: 0, alarmUntil: 0, reinforceAt: 0, raider: null, restockAt: 0 };
+});
+const siteById = new Map(sites.map((s) => [s.id, s]));
+const siteView = (s) => ({ id: s.id, kind: s.kind, name: s.name, x: s.x, z: s.z, r: Math.min(s.K.radius, 120), state: s.alarmUntil > Date.now() && s.state === 'stocked' ? 'alarm' : s.state, left: s.caches.length, restockAt: s.restockAt });
+const sendSites = (to) => { const msg = { t: 'sites', sites: sites.map(siteView) }; if (to) send(to, msg); else broadcast(msg); };
+const pickW = (list) => { let r = Math.random() * list.reduce((n, k) => n + k.w, 0); for (const k of list) { r -= k.w; if (r <= 0) return k; } return list[0]; };
+/** A spot inside one of the site's buildings, else outside close by. */
+function siteSpot(s) {
+  for (let t = 0; t < 20 && s.buildings.length; t++) {
+    const b = pick(s.buildings);
+    const x = b.minX + 1.2 + Math.random() * Math.max(0.1, b.maxX - b.minX - 2.4), z = b.minZ + 1.2 + Math.random() * Math.max(0.1, b.maxZ - b.minZ - 2.4);
+    if (insideBuilding(b, x, z, 0.4)) return { x, z };
+  }
+  return openSpotNear(s.x, s.z, 30) || { x: s.x + 3, z: s.z + 3 };
+}
+/** What one of the site's caches holds. */
+function siteItems(s) {
+  const k = pickW(s.K.loot), hot = (it) => Object.assign(it, { hot: s.id, hotTier: s.K.hot });
+  if (k.medkit) return Array.from({ length: k.medkit }, () => makeConsumable('medkit'));
+  if (k.armor) return [hot(makeArmor(k.armor))];
+  if (k.gun) { const w = rareWeapon(); w.name = w.name.replace('hot-zone build', s.kind === 'sporting' ? 'store stock' : 'armory'); return [hot(w)]; }
+  return [hot({ id: uid('lb'), kind: 'lockbox', name: k.name, contents: Object.fromEntries(Object.entries(k.contents).map(([key, range]) => [key, rnd(range)]).filter(([, v]) => v > 0)) })];
+}
+function stockSite(s) {
+  for (const id of s.caches) loot.delete(id);
+  s.caches = [];
+  for (let i = 0; i < s.K.caches; i++) {
+    const at = siteSpot(s);
+    siteItems(s).forEach((item, j) => {
+      const id = uid('l');
+      loot.set(id, { id, x: at.x + j * 0.6, z: at.z, item, site: s.id });
+      s.caches.push(id);
+    });
+  }
+  s.state = 'stocked';
+}
+function spawnSiteGuard(s, from) {
+  const at = from || openSpotNear(s.x, s.z, Math.min(s.K.radius, 60)) || { x: s.x, z: s.z };
+  const b = spawnBot(at.x, at.z, s.K.guard, { site: s.id });
+  if (from) b.patrol = { x: s.x, z: s.z };
+  s.guards.push(b.id);
+  return b;
+}
+function raiseSiteAlarm(s, p, now) {
+  if (s.alarmUntil > now || s.state !== 'stocked') return;
+  s.alarmUntil = now + SITES.alarmMs;
+  s.reinforceAt = now + s.K.reinforceAfterMs;
+  s.raider = p.id;
+  const who = s.K.guard === 'guard' ? 'the guards are' : 'the looters holding it are';
+  for (const o of players.values()) {
+    const d = Math.hypot(o.x - s.x, o.z - s.z);
+    if (o === p) toast(o, `🚨 You set off the alarm at ${s.name}: backup arrives in ${Math.round(s.K.reinforceAfterMs / 1000)}s. ${s.K.hot ? 'What you take is hot until you get it home.' : ''}`);
+    else if (d < SITES.alarmRangeM) toast(o, `🚨 Alarm at ${s.name}, ${distText(d)} away: somebody's inside and ${who} calling for backup.`);
+  }
+  sendSites();
+}
+/** Something was taken from a site (takeLoot). */
+function siteLooted(p, l) {
+  const s = siteById.get(l.site);
+  if (!s) return;
+  s.caches = s.caches.filter((id) => id !== l.id);
+  const now = Date.now();
+  raiseSiteAlarm(s, p, now);
+  if (s.caches.length || s.state !== 'stocked') return sendSites();
+  s.state = 'cleared';
+  s.restockAt = now + between(s.K.restockMs);
+  award(p, s.K.xp, `${s.name} cleared`, true);
+  feed(`🚨 ${p.name} cleaned out ${s.name}`);
+  sendSites();
+}
+function tickSites(now) {
+  if (!sites.length) return;
+  const alive = [...players.values()].filter((p) => !p.dead && !p.deploying);
+  let changed = false;
+  for (const s of sites) {
+    s.guards = s.guards.filter((id) => bots.has(id) && !bots.get(id).dead);
+    if (s.state === 'cleared' && now >= s.restockAt) { stockSite(s); changed = true; }
+    if (s.alarmUntil && now >= s.alarmUntil) { s.alarmUntil = 0; changed = true; }
+    let d = Infinity;
+    for (const p of alive) d = Math.min(d, Math.hypot(p.x - s.x, p.z - s.z));
+    if (d < SITES.wakeM) {
+      s.lastNear = now;
+      if (!s.awake) {
+        s.awake = true;
+        if (s.state === 'stocked') for (let i = s.guards.length; i < s.K.guards; i++) spawnSiteGuard(s);
+      }
+    } else if (s.awake && d > SITES.sleepM && now - s.lastNear > 60_000) {
+      s.awake = false;
+      for (const id of s.guards) bots.delete(id);
+      s.guards = [];
+    }
+    if (!s.awake) continue;
+    // Shooting at a guard sets off the alarm too.
+    if (s.state === 'stocked' && !(s.alarmUntil > now)) {
+      for (const id of s.guards) {
+        const a = bots.get(id)?.aggro, p = a && !a.heard && players.get(a.id);
+        if (p) { raiseSiteAlarm(s, p, now); break; }
+      }
+    }
+    if (s.reinforceAt && now >= s.reinforceAt) {
+      s.reinforceAt = 0;
+      const raider = players.get(s.raider), a = Math.random() * Math.PI * 2;
+      const from = openSpotNear(s.x + Math.cos(a) * 140, s.z + Math.sin(a) * 140, 40) || touchdownSpot(s.x + Math.cos(a) * 140, s.z + Math.sin(a) * 140);
+      for (let i = 0; i < s.K.reinforce; i++) {
+        const b = spawnSiteGuard(s, { x: from.x + i * 1.5, z: from.z });
+        if (raider && !raider.dead) b.aggro = { id: raider.id, until: now + BOT_AI.aggroMs, x: raider.x, z: raider.z, heard: true };
+      }
+      for (const o of alive) if (Math.hypot(o.x - s.x, o.z - s.z) < 400) toast(o, `🚨 Backup has arrived at ${s.name}`);
+    }
+  }
+  if (changed) sendSites();
+}
+for (const s of sites) stockSite(s);
 // ---- the hot-drop flare: the helicopter picks you (and crew beside you) up and drops you at the zone's edge
 const hotDrops = new Map();   // token -> { arrivesAt, x, z, flare }
 const makeHotFlare = () => ({ id: uid('hf'), kind: 'hotflare', name: 'Hot-drop flare' });
@@ -3508,7 +3633,7 @@ function updateBots(dt, now) {
       else { b.yaw = Math.atan2(dx, dz); mx = dx / d; mz = dz / d; speed = BOT_AI.walkSpeed; }
       b.crouch = false;
     } else {
-      const leash = b.kind === 'ambient' ? 30 : b.kind === 'guard' ? HZ.guardLeash : 12;
+      const leash = b.site ? 26 : b.kind === 'ambient' ? 30 : b.kind === 'guard' ? HZ.guardLeash : 12;
       if (!b.wander || Math.hypot(b.wander.x - b.x, b.wander.z - b.z) < 1 || Math.random() < 0.003) {
         b.wander = { x: b.homeX + (Math.random() - 0.5) * leash, z: b.homeZ + (Math.random() - 0.5) * leash };
       }
@@ -3542,6 +3667,7 @@ function takeLoot(p, l, quiet = false) {
   if (!addToPack(p, l.item)) return quiet ? null : toast(p, 'Backpack full');
   loot.delete(l.id);
   if (l.spawnIndex != null) { lootAtSpawn.delete(l.spawnIndex); spawnReadyAt.set(l.spawnIndex, Date.now() + LOOT_RESPAWN_MS); }
+  if (l.site) siteLooted(p, l);
   if (l.item.hot && !wasHot) { p.hotPingAt = Date.now(); toast(p, `🔥 ${l.item.name}: hot loot. Everyone sees where you are every ${Math.round(HZ_CACHE_PING_MS / 1000)}s (every ${Math.round(HZ_PING_MS / 1000)}s with crate loot) until you get it home or fly it out.`); }
   award(p, XP.pickup, l.item.name);
   dirty(p);
@@ -4736,6 +4862,7 @@ function handleJoin(ws, msg) {
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
   send(ws, { t: 'hotzone', zone: hotZoneView() });
+  sendSites(ws);
   send(ws, { t: 'worldEvents', list: [...worldEvents.values()].map(eventView) });
   if (db.characters[token]?.awayLog?.length) { send(ws, { t: 'awayLog', entries: db.characters[token].awayLog }); db.characters[token].awayLog = []; }
   // Contracts whose targets were finished while offline pay out now.
@@ -5096,7 +5223,7 @@ const loop = setInterval(() => {
   for (const p of players.values()) if (p.hop) { p.hop.vy -= JUMP_G * dt; p.hop.alt += p.hop.vy * dt; if (p.hop.alt <= 0 || p.dead || p.downed || p.boat || p.air) p.hop = null; }
   updateBots(dt, now);
   tickHacks(now);
-  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickRides(now); }
+  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickSites(now); tickRides(now); }
   tickStuns(now);
   tickEvents(now, dt);
   if (tick % 4 === 0) tickDefenses(now);
