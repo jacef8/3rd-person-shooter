@@ -1025,7 +1025,7 @@ vBlade = position.y;
 
   function dispose(group, from = scene) {
     from.remove(group);
-    group.traverse((o) => { if (o.geometry && !shared.has(o.geometry)) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); });
+    group.traverse((o) => { if (o.geometry && !shared.has(o.geometry) && !o.geometry.userData.shared) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); });
   }
   /** Chunks whose nearest point is within `range` of (px, pz), nearest first. */
   function chunksWithin(px, pz, range) {

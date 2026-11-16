@@ -9,7 +9,7 @@ import {
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey } from '/gunmodel.js';
 import * as sfx from '/sound.js';
-import { buildRideModel } from '/ridemodels.js';
+import { buildRideModel, preloadVehicles } from '/ridemodels.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
@@ -1163,6 +1163,7 @@ function animateFlyBys(dt) {
 }
 
 preloadPeople(['swat1', 'swat3']);
+preloadVehicles();
 const selfMesh = makeCharacter('self', '');
 selfMesh.visible = false;
 

@@ -2,7 +2,55 @@
 // RVs, buses, box trucks and houseboats people live in. Used by the game (main.js) for rides you can
 // drive, and by the world view for the wrecks and vehicle homes that are part of the map.
 import * as THREE from 'three';
+import { GLTFLoader } from '/addons/loaders/GLTFLoader.js';
 import { BOATS } from '/shared/boats.js';
+
+// Real models (client/models/vehicles, tools/build_vehicles.mjs): each is one unit long, front at +Z,
+// wheels on y = 0. A ride is built from boxes first (shown at once) and swaps to its real model when
+// that has loaded; kinds with no real model keep the boxes.
+const REAL = { car: ['sedan', 'suv', 'classic'], pickup: ['pickup'], motorcycle: ['motorcycle'], dirtbike: ['motorcycle'] };
+const gltf = new GLTFLoader(), realCache = new Map();
+function realModel(name) {
+  if (!realCache.has(name)) realCache.set(name, gltf.loadAsync(`/models/vehicles/${name}.glb`).then((g) => {
+    g.scene.traverse((o) => { if (o.isMesh) { o.geometry.userData.shared = true; o.castShadow = true; } });
+    return g.scene;
+  }).catch((e) => { console.warn('vehicle', name, e); return null; }));
+  return realCache.get(name);
+}
+const fadedCache = new Map();
+/** A weathered copy of a model's materials (sun-faded, dusty, no shine), shared by every wreck of it. */
+function faded(name, src) {
+  if (!fadedCache.has(name)) {
+    const map = new Map();
+    src.traverse((o) => {
+      if (!o.isMesh || map.has(o.material)) return;
+      const m = o.material.clone();
+      m.roughness = 1; m.metalness = 0;
+      // Sun-bleached and dusty: most of the colour gone, darker, a brown cast.
+      m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+  { float l = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); diffuseColor.rgb = mix(vec3(l), diffuseColor.rgb, 0.3) * vec3(0.78, 0.7, 0.6); }`); };
+      m.customProgramCacheKey = () => 'faded';
+      map.set(o.material, m);
+    });
+    fadedCache.set(name, map);
+  }
+  return fadedCache.get(name);
+}
+/** Swap a ride's box model for the real one, `len` metres long. */
+function useReal(g, name, len, { fade = false } = {}) {
+  realModel(name).then((src) => {
+    if (!src || g.userData.disposed) return;
+    const m = src.clone();
+    m.scale.setScalar(len);
+    if (fade) { const mats = faded(name, src); m.traverse((o) => { if (o.isMesh) o.material = mats.get(o.material) || o.material; }); }
+    const body = g.userData.body;
+    for (const c of body.children) c.visible = false;
+    body.add(m);
+    g.userData.real = m;
+  });
+}
+/** Start fetching the real models early. */
+export function preloadVehicles() { for (const list of [...Object.values(REAL), ['bus']]) for (const n of list) realModel(n); }
 
 // Shared bits for the ride models (built once, reused by every ride).
 const RIDE_MAT = {
@@ -17,7 +65,7 @@ const RIDE_MAT = {
   deck: new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.8 }),
 };
 /** A low-poly model of each kind of ride, in its paint colour. Wheels spin, horses' legs walk. */
-export function buildRideModel(type, color) {
+export function buildRideModel(type, color, { real: wantReal = true } = {}) {
   const def = BOATS[type], g = new THREE.Group(), body = new THREE.Group();
   g.add(body);
   const paint = new THREE.MeshStandardMaterial({ color: color || def.colors?.[0] || 0x888888, roughness: 0.45, metalness: type === 'horse' ? 0 : 0.35 });
@@ -126,6 +174,8 @@ export function buildRideModel(type, color) {
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   g.rotation.order = 'YXZ';
   g.userData = { body, wheels, legs, gait: 0, lean: 0 };
+  const real = REAL[type];
+  if (real && wantReal) useReal(g, real[Math.abs(Math.round((color || 0) / 7)) % real.length], def.len);
   return g;
 }
 
@@ -133,10 +183,13 @@ export function buildRideModel(type, color) {
 export function buildWreck(seed) {
   const type = seed % 3 === 0 ? 'pickup' : 'car';
   const FADED = [0x6e4b35, 0x5d5f5a, 0x7d6a4c, 0x48525a, 0x6b3a2e, 0x8a8577];
-  const g = buildRideModel(type, FADED[seed % FADED.length]);
+  const g = buildRideModel(type, FADED[seed % FADED.length], { real: false });
   g.traverse((o) => { if (o.isMesh && o.material?.color && o.material !== RIDE_MAT.tire) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.8); o.material.roughness = 0.95; o.material.metalness = 0.1; } });
   g.userData.body.position.y = -0.12;
   g.userData.body.rotation.z = ((seed % 7) - 3) * 0.012;
+  // The real thing, sun-faded, in place of the boxes.
+  const pick = type === 'pickup' ? 'pickup' : ['sedan', 'suv', 'classic'][(seed >> 2) % 3];
+  useReal(g, pick, BOATS[type].len, { fade: true });
   return g;
 }
 
@@ -190,5 +243,7 @@ export function buildHomeVehicle(vtype, len, wid, h, color) {
     if (vtype !== 'truck') for (const s of [-1, 1]) add(box(0.1, 0.12, 0.3), RIDE_MAT.head, s * wid * 0.35, floor + 0.35, len / 2 + (vtype === 'bus' ? 1.21 : 0.01));
   }
   g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  g.userData.body = body;
+  g.name = 'home-' + vtype; if (vtype === 'bus') useReal(g, 'bus', len);   // a real bus fits the box (the RV and box truck have no good match yet)
   return g;
 }
