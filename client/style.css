@@ -762,3 +762,55 @@ body.scoped #weapon { background: transparent; border-color: transparent; }
    panel title, and the title row leaves room for it. */
 body.touchui:has(#mapscreen:not([hidden])) #tclose { top: calc(1vh + 10px); right: calc(1vw + 10px); padding: 8px 14px; min-height: 44px; }
 body.touchui #mapscreen aside h2#mapTitle { margin-right: 112px; min-height: 44px; }
+
+/* Gunsmith, one screen: guns across the top; slots | the parts for that slot | the gun and its numbers.
+   Each column scrolls on its own; picking a slot shows its parts right beside it. */
+#gunsmith { display: flex; flex-direction: column; gap: 8px; }
+#gunsmith header { align-items: center; gap: 12px; }
+#gunsmith header #gsTitle { margin: 0; font-size: 20px; }
+#gunsmith header #gsTitle::after { display: none; }
+#gsWeapons { display: flex; gap: 6px; overflow-x: auto; flex: 0 0 auto; padding-bottom: 2px; scrollbar-width: thin; }
+#gsWeapons .gsweapon { flex: 0 0 auto; width: auto; margin: 0; padding: 6px 12px; min-height: 40px; gap: 8px; border-radius: 999px; font-size: 14px; }
+#gsWeapons .gsweapon small { font-size: 11px; }
+#gsWeapons .gsweapon.build { border-style: dashed; color: var(--gold); }
+#gunsmith .gsgrid { flex: 1; display: grid; grid-template-columns: minmax(150px, 0.8fr) minmax(190px, 1fr) minmax(220px, 1.25fr); gap: 10px; min-height: 0; }
+#gunsmith .gscol { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 4px; scrollbar-width: thin; }
+#gunsmith .gsgrid main { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+#gunsmith #gsview { flex: 1 1 auto; min-height: 120px; }
+#gunsmith .gsslot { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; margin: 0; padding: 5px 10px; flex-shrink: 0; }
+#gunsmith .gsslot small { flex: 0 0 auto; font-size: 11px; letter-spacing: 0.06em; }
+#gunsmith .gsslot b { flex: 1; min-width: 0; text-align: right; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#gunsmith .gsslot.sel::after { content: '›'; color: var(--accent); font-weight: 800; margin-left: 2px; }
+#gunsmith .gsopt { flex-direction: column; align-items: stretch; gap: 2px; min-height: 44px; margin: 0; padding: 6px 10px; flex-shrink: 0; }
+#gunsmith .gsopt .gsname { flex-direction: row; justify-content: space-between; gap: 6px; font-weight: 700; font-size: 14px; }
+#gunsmith .gsopt .gsname em { display: none; }
+#gunsmith .gsopt .gsdelta { font: 600 12px/1.3 var(--font-text); color: var(--ink-3); }
+#gunsmith .gsopt .gsdelta .up { color: var(--good); } #gunsmith .gsopt .gsdelta .down { color: var(--danger); }
+#gunsmith .gsopt.sel { background: color-mix(in srgb, var(--good) 14%, var(--surface)); }
+#gunsmith .gsopt.sel .gsname::after { content: '✓ on'; color: var(--good); font-size: 12px; }
+#gunsmith .gscol .colhead { font: 700 11px/1.2 var(--font-text); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); margin: 2px 0 2px; flex-shrink: 0; }
+#gunsmith .bprow { flex-shrink: 0; font-size: 13px; padding: 4px 0; gap: 8px; }
+#gunsmith .bprow button { min-height: 36px; }
+#gunsmith #gsNumbers { font-size: 12px; margin: 6px 0 2px; }
+#gunsmith .statrow { grid-template-columns: 70px 1fr; margin: 2px 0; }
+body.touchui #gunsmith { inset: 1.5vh 1.5vw; padding: 8px 10px; }
+body.touchui #gunsmith .hint { display: none; }
+@media (max-height: 520px) {
+  #gunsmith header { gap: 8px; } #gunsmith header #gsTitle { font-size: 16px; } #gunsmith header button { min-height: 36px; padding: 0 12px; }
+  #gunsmith #gsNumbers { display: none; }
+  #gunsmith .statrow { font-size: 11px; margin: 1px 0; } #gunsmith .sbar { height: 6px; }
+}
+
+/* The bag: tidy one-line rows, the choices as buttons on the line itself. */
+.iact.direct { display: flex; gap: 6px; max-width: 55%; flex-wrap: wrap; justify-content: flex-end; }
+.iact .ia { display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 700; white-space: nowrap; }
+.iact .ia:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.imeta b, .imeta small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.invcol h2, #inventory .invcol h2 { margin: 6px 0 4px; }
+body.touchui .invtop { padding-right: 150px; }
+body.touchui .iact.direct { max-width: 60%; }
+
+/* Tap or click the minimap for the big map. */
+#minimap { pointer-events: auto; cursor: pointer; }
+body.touchui .iact .ia { min-height: 34px; padding: 0 10px; font-size: 13px; }
+.iact.direct { flex-wrap: nowrap; }

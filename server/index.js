@@ -1582,6 +1582,33 @@ function sinkBoat(b, by) {
   if (by && !by.isBot && b.owner && b.owner !== by.token && !tokenInSquadWith(by, b.owner)) award(by, land ? 50 : 150, land ? 'Wrecked a ride' : 'Sank a boat', true);
 }
 
+// ---- testing: any ride you ask for, put right beside you. One each (asking again takes the last one
+// away if nobody's in it). Off with TEST_RIDES=0.
+const TEST_RIDES = process.env.TEST_RIDES !== '0';
+function testRide(p, type) {
+  const def = own(RIDES, type);
+  if (!TEST_RIDES || !def) return;
+  if (p.boat || p.air || p.downed) return toast(p, 'Get out and on your feet first');
+  const now = Date.now();
+  if (now - (p.testRideAt || 0) < 1500) return;
+  p.testRideAt = now;
+  const old = p.testRideId && boatById(p.testRideId);
+  if (old && !rtOf(old).seats.some(Boolean)) removeBoat(old);
+  // Beside you on your right, then the left, ahead, behind; a little further out if those are blocked.
+  const fx = Math.sin(p.yaw), fz = Math.cos(p.yaw), rx = -fz, rz = fx;
+  const gap = def.wid / 2 + 1.4, r = Math.max(def.len, def.wid) / 2 + 0.2;
+  for (const k of [1, 1.6, 2.4]) for (const [ox, oz] of [[rx * gap, rz * gap], [-rx * gap, -rz * gap], [fx * (def.len / 2 + 1.6), fz * (def.len / 2 + 1.6)], [-fx * (def.len / 2 + 1.6), -fz * (def.len / 2 + 1.6)]]) {
+    const x = p.x + ox * k, z = p.z + oz * k, h = terrain.height(x, z);
+    if (h < RIDE_RULES.shallow) continue;
+    if (solidsNear(x, z, r + 2).some((sb) => !sb.gone && blocksAt(sb, h) && circleOverlapsBox(x, z, r, sb))) continue;
+    const b = newBoat(type, x, z, p.yaw, p, { world: 1, color: def.colors[Math.floor(Math.random() * def.colors.length)], keys: true });
+    b.y = h; b.yx = x; b.yz = z; b.usedAt = now; b.freeAt = now + RIDE_RULES.lockMs;
+    p.testRideId = b.id;
+    return toast(p, `${def.icon} ${def.name} beside you: walk up and press E`);
+  }
+  toast(p, 'No room here for that: try somewhere more open');
+}
+
 // ---- rides lying about the county: kept topped up, towed off when abandoned
 const RIDE_TYPES = Object.keys(RIDES);
 /** Clear ground for something `len` long at (x, z), facing `yaw`: dry, not too steep, nothing in the way, nothing parked there. */
@@ -4609,7 +4636,7 @@ function handleJoin(ws, msg) {
   }
   send(ws, {
     t: 'welcome', id: p.id, token, pushKey: process.env.VAPID_PUBLIC_KEY || null, world: WORLD_ID, worldName: WORLD_NAME, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
-    x: p.x, z: p.z, yaw: p.yaw, felled: [...map.felled], packSize: PACK_SIZE, devKit: DEV_KIT, doorBase: DOOR_HP,
+    x: p.x, z: p.z, yaw: p.yaw, felled: [...map.felled], packSize: PACK_SIZE, devKit: DEV_KIT, doorBase: DOOR_HP, testRides: TEST_RIDES,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
@@ -4869,6 +4896,7 @@ wss.on('connection', (ws) => {
       case 'ptrade': return !p.dead && playerTrade(p, msg);
       case 'fairSubmit': return !p.dead && fairSubmit(p);
       case 'boatHold': return !p.dead && openHold(p);
+      case 'testRide': return !p.dead && testRide(p, msg.type);
       case 'dock': return !p.dead && dockAction(p, msg);
       case 'squad': return squadAction(p, msg);
       case 'rally': return !p.dead && rally(p);

@@ -97,37 +97,31 @@
   </div>
 
   <div id="inventory" class="panel" data-nav="lists" hidden>
-    <div class="invtop" data-navcol="top" data-navrow="1"><button class="ghost" id="openSquadBtn">Crew</button><button class="ghost" id="openMapBtn">Map</button><span class="invsum" id="packcount"></span></div>
+    <div class="invtop" data-navcol="top" data-navrow="1"><button class="ghost" id="openSquadBtn">Crew</button><button class="ghost" id="openMapBtn">Map</button><button class="ghost" id="testRideBtn" hidden>🚗 Test ride</button><span class="invsum" id="packcount"></span></div>
+    <div id="ridepick" class="invtabs" data-navrow="1" hidden></div>
     <div class="invcols">
       <section class="invcol" id="youCol" data-navcol="you"></section>
       <section class="invcol" id="packCol" data-navcol="pack"></section>
       <section class="invcol" id="containerCol" data-navcol="here" hidden></section>
     </div>
-    <div class="hint"><span class="kbonly">Click a line to see what you can do with it · Tab or Esc to close</span><span class="padonly">Ⓐ choose · Ⓑ back · ◀ ▶ switch side · ⧉ close</span></div>
+    <div class="hint"><span class="kbonly">Tap a button on a line to do it · Tab or Esc to close</span><span class="padonly">Ⓐ choose · Ⓑ back · ◀ ▶ switch side · ⧉ close</span></div>
   </div>
 
   <div id="gunsmith" class="panel" hidden>
     <header><h2 id="gsTitle">Gunsmith</h2><span id="gsParts"></span><button class="ghost" id="gsExplode">Exploded view</button><button class="ghost" id="gsClose">Back</button></header>
+    <!-- Your guns across the top; then the gun's slots, the choices for the slot you picked right beside
+         them, and the gun itself with its numbers. Nothing to scroll back and forth between. -->
+    <div id="gsWeapons" data-navrow="1"></div>
     <div class="gsgrid">
-      <aside>
-        <h3>Your weapons</h3>
-        <div id="gsWeapons"></div>
-        <h3>Build</h3>
-        <div id="gsBuild"></div>
-      </aside>
+      <div class="gscol" id="gsSlots"></div>
+      <div class="gscol" id="gsOptions"></div>
       <main>
         <canvas id="gsview"></canvas>
         <div id="gsNumbers"></div>
         <div id="gsStats"></div>
       </main>
-      <aside>
-        <h3>Slots</h3>
-        <div id="gsSlots"></div>
-        <h3>Options</h3>
-        <div id="gsOptions"></div>
-      </aside>
     </div>
-    <div class="hint"><span class="kbonly">Hover an option to preview it · Esc to go back</span><span class="padonly">Highlight an option to preview it · Ⓐ apply · Ⓨ exploded view · Ⓑ back · right stick scrolls</span></div>
+    <div class="hint"><span class="kbonly">Pick a slot, then a part: it goes on at once (swap freely, it's free) · Esc to go back</span><span class="padonly">Ⓐ pick · Ⓨ exploded view · Ⓑ back · right stick scrolls the parts</span></div>
   </div>
 
   <div id="squadpanel" class="panel" hidden>

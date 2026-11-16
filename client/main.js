@@ -832,8 +832,9 @@ function makeCharacter(kind, name) {
   const joint = (x, y, z, parent) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
   const aimPivot = joint(0, 1.3, 0, g);
   const gun = joint(-0.17, -0.06, 0.24, aimPivot);
-  const sling = [joint(-0.06, 1.33, -0.22, g), joint(0.06, 1.33, -0.25, g)];
-  for (const [i, sl] of sling.entries()) { sl.rotation.order = 'ZXY'; sl.rotation.set(-Math.PI / 2, 0, i ? -0.5 : 0.5); }
+  // Slung guns: across the back, diagonally, muzzles over a shoulder.
+  const sling = [joint(-0.02, 1.25, -0.2, g), joint(0.02, 1.22, -0.23, g)];
+  for (const [i, sl] of sling.entries()) { sl.rotation.order = 'ZXY'; sl.rotation.set(-Math.PI / 2, 0, i ? -1.0 : 1.0); }
   const thigh = joint(-0.1, 0.9, 0, g);
   const holster = joint(-0.1, -0.12, 0.02, thigh);
   holster.rotation.x = Math.PI / 2;
@@ -1680,6 +1681,8 @@ function handle(m) {
       localStorage.setItem('dz_token', m.token);
       state.myName = lobby.account?.name || $('name').value.trim() || 'Agent';
       Object.assign(state, { id: m.id, houseId: m.houseId, x: m.x, z: m.z, yaw: m.yaw || 0, packSize: m.packSize, devKit: !!m.devKit, doorBase: m.doorBase });
+      $('testRideBtn').hidden = !m.testRides;
+      document.querySelector('#touch [data-act=testRide]')?.toggleAttribute('hidden', !m.testRides);
       state.pushKey = m.pushKey || null;
       if (touchCapable && !localStorage.getItem('dz_tip_fire')) { localStorage.setItem('dz_tip_fire', '1'); setTimeout(() => toast('Tip: keep your thumb on FIRE and slide it to aim while you shoot'), 6000); }
       syncPush();
@@ -2047,7 +2050,7 @@ function attachmentChips(item) {
 /** Change parts on a gun: at your stash house's gunsmith (or anywhere while testing). */
 function partsAction(it) {
   const can = state.devKit || !!state.container?.gunsmith;
-  return ['Change parts', () => { if (!can) return toast('Change parts at the gunsmith in your stash house (or a hideout)'); gs.selectedId = it.id; openGunsmith(); }];
+  return ['Parts', () => { if (!can) return toast('Change parts at the gunsmith in your stash house (or a hideout)'); gs.selectedId = it.id; openGunsmith(); }];
 }
 
 function itemCard(item, { slot, buttons = [] } = {}) {
@@ -2078,6 +2081,7 @@ const SLOT_LABEL = { primary: 'Main gun 1', primary2: 'Main gun 2', secondary: '
 const shortGun = (it) => String(it.name || it.archetype || '').replace(/ Rifle$/, '');
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // Tap (or click) a gun in the weapon strip to take it in hand.
+$('minimap').addEventListener('click', () => doAction('map'));
 $('wslots').addEventListener('pointerdown', (e) => { const sl = e.target.closest('[data-slot]')?.dataset.slot; if (sl && state.me?.inv[sl]) { e.stopPropagation(); send({ t: 'weapon', slot: sl }); } });
 function equippedFor(item) {
   const inv = state.me.inv;
@@ -2102,10 +2106,14 @@ function invRow(key, { title, detail = '', extra = '', color = '#5a5f68', action
   row.className = 'irow';
   row.dataset.pad = key;   // so the highlight finds this line again after a redraw
   row.style.setProperty('--bar', color);
-  const act = actions.length ? actions.map((a) => a[0]).join(' · ') : why;
+  // Short choices are buttons right on the line: one tap does it. Long ones open a list under it.
+  const direct = actions.length && actions.length <= 3 && actions.every((x) => x[0].length <= 16);
+  const act = direct ? actions.map((x, i) => `<span class="ia" data-i="${i}">${x[0]}</span>`).join('') : actions.length ? actions.map((x) => x[0]).join(' · ') : why;
   if (hot) { row.classList.add('hot'); title = `<span class="hottag">HOT</span> ${title}`; detail = `Extract to keep · ${detail}`; }
-  row.innerHTML = `<span class="imeta"><b>${title}</b>${detail ? `<small>${detail}</small>` : ''}${extra ? `<small class="at">${extra}</small>` : ''}</span><span class="iact${actions.length ? '' : ' none'}">${act}</span>`;
-  row.onclick = () => {
+  row.innerHTML = `<span class="imeta"><b>${title}</b>${detail ? `<small>${detail}</small>` : ''}${extra ? `<small class="at">${extra}</small>` : ''}</span><span class="iact${actions.length ? '' : ' none'}${direct ? ' direct' : ''}">${act}</span>`;
+  row.onclick = (e) => {
+    const chip = e.target.closest?.('.ia');
+    if (chip && actions[+chip.dataset.i]) { invUi.menuFor = null; actions[+chip.dataset.i][1](); return; }
     if (!actions.length) { if (why) toast(why); return; }
     if (actions.length === 1) { invUi.menuFor = null; actions[0][1](); return; }
     invUi.menuFor = invUi.menuFor === key ? null : key;
@@ -2144,7 +2152,7 @@ function renderInventory() {
   for (const slot of ['primary', 'primary2', 'secondary', 'armor']) {
     const it = inv[slot], label = SLOT_LABEL[slot];
     you.append(...invRow(`eq-${slot}`, it
-      ? { hot: !!it.hot, title: `${label}: ${it.name}`, detail: statLine(it), extra: attachmentChips(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: it.kind === 'weapon' ? [partsAction(it), ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
+      ? { hot: !!it.hot, title: it.name, detail: `${label} · ${statLine(it)}`, color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: it.kind === 'weapon' ? [partsAction(it), ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
       : { title: `${label}: empty`, detail: 'Equip one from your backpack', why: 'Empty' }));
   }
   if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', actions: [['Open', openGunsmith]] }));
@@ -3005,67 +3013,93 @@ function renderGunsmith() {
   const me = state.me;
   if (!me || !state.gunsmithOpen) return;
   const totalParts = me.parts + (state.container?.parts || 0);
-  $('gsParts').textContent = `Level ${me.level} · ${totalParts} parts available (${me.parts} carried, ${state.container?.parts || 0} in stash)`;
-
-  // Weapon list.
+  $('gsParts').textContent = `${totalParts} parts${state.container?.parts ? ` (${me.parts} carried)` : ''}`;
+  // Your guns across the top, and a chip to build a new one.
   const list = ownedWeapons();
+  const building = gs.mode === 'build' || !list.length;
   const wl = $('gsWeapons'); wl.innerHTML = '';
   for (const { item, where } of list) {
     const b = document.createElement('button');
-    b.className = 'gsweapon' + (item.id === gs.selectedId ? ' sel' : '');
+    b.className = 'gsweapon' + (!building && item.id === gs.selectedId ? ' sel' : '');
+    b.dataset.pad = `gw-${item.id}`;
     b.innerHTML = `<b>${item.name}</b><small>${where}</small>`;
-    b.onclick = () => { gs.selectedId = item.id; gs.hover = null; renderGunsmith(); };
+    b.onclick = () => { gs.mode = 'gun'; gs.selectedId = item.id; gs.hover = null; renderGunsmith(); };
     wl.append(b);
   }
-  if (!list.length) wl.innerHTML = '<div class="empty">No weapons — build one below.</div>';
+  const nb = document.createElement('button');
+  nb.className = 'gsweapon build' + (building ? ' sel' : '');
+  nb.dataset.pad = 'gw-build';
+  nb.innerHTML = '<b>+ Build new</b>';
+  nb.onclick = () => { gs.mode = 'build'; gs.hover = null; renderGunsmith(); };
+  wl.append(nb);
 
-  // Blueprints (build new platforms / armor from parts).
-  const bp = $('gsBuild'); bp.innerHTML = '';
-  const discount = UPGRADES.workbench.tiers[state.container?.upg?.workbench || 0].discount;
-  const blueprint = (label, def, id, action, type) => {
-    const locked = !isUnlocked(def, id, me);
-    const cost = Math.round(def.cost * (1 - discount));
-    const row = document.createElement('div');
-    row.className = 'bprow' + (locked ? ' locked' : '');
-    row.innerHTML = `<span>${def.field ? '★ ' : ''}${label}</span>`;
-    const b = document.createElement('button');
-    b.className = 'ghost';
-    b.textContent = locked ? lockLabel(def) : cost ? `Build · ${cost}` : 'Build · free';
-    b.disabled = locked || totalParts < cost;
-    b.onclick = () => send({ t: 'gunsmith', action, type });
-    row.append(b);
-    bp.append(row);
-  };
-  for (const [k, a] of Object.entries(ARCHETYPES)) blueprint(a.label, a, k, 'build', k);
-  for (const [k, a] of Object.entries(ARMORS)) blueprint(`${a.name} (armor ${a.armor})`, a, k, 'buildArmor', k);
-
-  const item = list.find((w) => w.item.id === gs.selectedId)?.item;
-  $('gsTitle').textContent = item ? item.name : 'Gunsmith';
-  setPreviewModel(item ? previewItem(item, gs.hover) : null);
-  const slotsEl = $('gsSlots'); slotsEl.innerHTML = '';
-  const opts = $('gsOptions'); opts.innerHTML = '';
-  if (!item) { $('gsStats').innerHTML = ''; $('gsNumbers').innerHTML = ''; return; }
+  const slotsEl = $('gsSlots'), opts = $('gsOptions');
+  slotsEl.innerHTML = ''; opts.innerHTML = '';
+  const colHead = (el, text) => el.append(Object.assign(document.createElement('div'), { className: 'colhead', textContent: text }));
+  const item = building ? null : list.find((w) => w.item.id === gs.selectedId)?.item;
+  if (!item) {
+    // Build: guns in the first column, armor in the second; the cost on each button.
+    $('gsTitle').textContent = 'Build new';
+    setPreviewModel(null);
+    $('gsStats').innerHTML = ''; $('gsNumbers').innerHTML = 'Build a new gun or armor from parts. It goes in your backpack.';
+    const discount = UPGRADES.workbench.tiers[state.container?.upg?.workbench || 0].discount;
+    const blueprint = (into, label, def, id, action, type) => {
+      const locked = !isUnlocked(def, id, me);
+      const cost = Math.round(def.cost * (1 - discount));
+      const row = document.createElement('div');
+      row.className = 'bprow' + (locked ? ' locked' : '');
+      row.innerHTML = `<span>${def.field ? '★ ' : ''}${label}</span>`;
+      const b = document.createElement('button');
+      b.className = 'ghost';
+      b.textContent = locked ? lockLabel(def) : cost ? `Build · ${cost}` : 'Build · free';
+      b.disabled = locked || totalParts < cost;
+      b.onclick = () => send({ t: 'gunsmith', action, type });
+      row.append(b);
+      into.append(row);
+    };
+    colHead(slotsEl, 'Guns');
+    for (const [k, a] of Object.entries(ARCHETYPES)) blueprint(slotsEl, a.label, a, k, 'build', k);
+    colHead(opts, 'Armor');
+    for (const [k, a] of Object.entries(ARMORS)) blueprint(opts, `${a.name} (armor ${a.armor})`, a, k, 'buildArmor', k);
+    return;
+  }
+  $('gsTitle').textContent = item.name;
+  setPreviewModel(previewItem(item, gs.hover));
   renderStatBars(item, previewItem(item, gs.hover));
-
+  // Slots: one line each, what's on it now.
+  colHead(slotsEl, 'Slot');
+  let firstFit = null;
   for (const slot of [...SLOTS, 'paint']) {
     const cur = slot === 'paint' ? PAINTS[item.paint]?.name : PARTS[item.parts[slot] || DEFAULT_PARTS[slot]]?.name;
     const anyFit = slot === 'paint' || Object.entries(PARTS).some(([id, p]) => p.slot === slot && partFits(id, item.archetype) && p.level > 1);
+    if (anyFit && !firstFit) firstFit = slot;
     const b = document.createElement('button');
     b.className = 'gsslot' + (gs.slot === slot ? ' sel' : '');
+    b.dataset.pad = `gs-${slot}`;
     b.innerHTML = `<small>${SLOT_LABELS[slot]}</small><b>${anyFit ? cur : '—'}</b>`;
     b.disabled = !anyFit;
-    b.onclick = () => { gs.slot = slot; gs.hover = null; renderGunsmith(); };
+    b.onclick = () => { gs.slot = slot; gs.hover = null; renderGunsmith(); const o = $('gsOptions'); o.scrollTop = 0; };
     slotsEl.append(b);
   }
-
+  if (!gs.slot || (gs.slot !== 'paint' && !Object.entries(PARTS).some(([id, p]) => p.slot === gs.slot && partFits(id, item.archetype)))) gs.slot = firstFit || 'paint';
+  // The parts for that slot, right beside it: each says what it does to the gun, one tap puts it on.
+  colHead(opts, SLOT_LABELS[gs.slot] || 'Parts');
+  const before = statBars(weaponStats(item));
+  const delta = (hover) => {
+    const after = statBars(weaponStats(previewItem(item, hover)));
+    return Object.keys(before).map((k) => [k, after[k] - before[k]]).filter(([, d]) => Math.abs(d) > 0.015).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1])).slice(0, 3)
+      .map(([k, d]) => `<span class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '▲' : '▼'} ${k}</span>`).join(' ');
+  };
   const option = (label, def, id, equipped, hover, onPick) => {
     const b = document.createElement('button');
     const locked = !isUnlocked(def, id, me);
     b.className = 'gsopt' + (equipped ? ' sel' : '') + (locked ? ' locked' : '');
-    b.innerHTML = `<span class="gsname">${def.field ? '★ ' : ''}${label}${def.style ? `<em>${def.style}</em>` : ''}</span>${locked ? `<small>${lockLabel(def)}</small>` : equipped ? '<small>equipped</small>' : ''}`;
+    b.dataset.pad = `go-${id}`;
+    const d = equipped || locked ? '' : delta(hover);
+    b.innerHTML = `<span class="gsname"><span>${def.field ? '★ ' : ''}${label}</span>${locked ? `<small>${lockLabel(def)}</small>` : ''}</span>${d ? `<span class="gsdelta">${d}</span>` : equipped ? '' : def.style ? `<span class="gsdelta">${def.style}</span>` : ''}`;
     b.onmouseenter = () => { gs.hover = hover; setPreviewModel(previewItem(item, hover)); renderStatBars(item, previewItem(item, hover)); setExplode(gs.model, gs.explode, gs.slot); };
     b.onmouseleave = () => { gs.hover = null; setPreviewModel(item); renderStatBars(item, item); };
-    if (!locked && !equipped) b.onclick = onPick;
+    if (!locked && !equipped) b.onclick = () => { gs.hover = null; onPick(); };
     opts.append(b);
   };
   if (gs.slot === 'paint') {
@@ -3137,6 +3171,7 @@ function doAction(a) {
   if (!state.me) return;
   switch (a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
+    case 'testRide': if (!state.invOpen) doAction('inventory'); showRidePicker(true); return;
     case 'map':
       if (state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) closeMapScreen();
       else if (!state.mapOpen && !state.me.dead) openMapScreen('view');
@@ -4071,7 +4106,7 @@ function pollPad(dt, now) {
       const mx = deadzone(ax[2]), mz = deadzone(ax[3]);
       if (mx || mz) { const span = state.map.size / mapView.zoom; mapView.cx += mx * span * dt * 0.9; mapView.cz += mz * span * dt * 0.9; drawMapCanvas(); }
     } else {
-      const scroller = panel.id === 'gunsmith' ? panel.querySelector('.gsgrid aside:last-child') : panel;
+      const scroller = panel.id === 'gunsmith' ? $('gsOptions') : panel;
       if (scroller) scroller.scrollTop += deadzone(ax[3]) * 600 * dt;
     }
     if (panel.id === 'osk') {
@@ -4151,6 +4186,15 @@ new MutationObserver(() => {
 
 $('openSquadBtn').onclick = () => { closeInventory(); openSquadPanel(); };
 $('openMapBtn').onclick = () => { closeInventory(); openMapScreen('view'); };
+// Testing: a ride of any kind, put right beside you (while the server allows it).
+function showRidePicker(open = $('ridepick').hidden) {
+  const el = $('ridepick');
+  // (The tap that opened the list mustn't land on a button in it.)
+  if (!el.childElementCount) for (const [k, d] of Object.entries(BOATS)) if (d.land) el.append(btn(`${d.icon} ${d.name}`, () => { if (performance.now() - el.openedAt < 450) return; send({ t: 'testRide', type: k }); closeInventory(); }, 'invtab'));
+  if (open && el.hidden) el.openedAt = performance.now();
+  el.hidden = !open;
+}
+$('testRideBtn').onclick = () => showRidePicker();
 
 // ------------------------------------------------------------------ building (client)
 const build = { on: false, piece: 'wall', rot: 0, ghost: null, ok: false, x: 0, z: 0 };
@@ -4740,7 +4784,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { state, send, boatVis, structVis };
+window.__dz = { openGunsmith, state, send, boatVis, structVis };
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
@@ -4781,9 +4825,9 @@ const TOUCH_BTNS = [
   ['ZOOM', 'zoom', 'sm zoom', 'zoom'],
 ];
 const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom' };
-// Top left: the map and bag, and ⋯ for the rest.
-const TOUCH_TOP = [['MAP', 'map'], ['BAG', 'inventory'], ['⋯', 'touchMore']];
-const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build']];
+// Top left: the bag, and ⋯ for the rest (the map: tap the minimap).
+const TOUCH_TOP = [['BAG', 'inventory'], ['⋯', 'touchMore']];   // the map: tap the minimap
+const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +
@@ -4890,6 +4934,9 @@ function buildTouchUI() {
     if (pick) { e.preventDefault(); e.stopPropagation(); pick.onpick?.(); return; }
     if (!$('tpick').hidden) $('tpick').hidden = true;
     if (e.target.closest('.tbtn') || touch.editing) return;
+    // A tap on the minimap opens the big map.
+    { const r = $('minimap').getBoundingClientRect();
+      if (Math.hypot(e.clientX - (r.left + r.right) / 2, e.clientY - (r.top + r.bottom) / 2) < r.width / 2 + 6) { e.preventDefault(); doAction('map'); return; } }
     // A tap on a gun in the weapon strip (drawn under this layer) takes that gun in hand.
     for (const chip of $('wslots').children) {
       const r = chip.getBoundingClientRect();
