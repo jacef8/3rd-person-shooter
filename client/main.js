@@ -3226,7 +3226,7 @@ addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return;
   setInputMode('kb');
   const sens = state.aiming ? 0.0022 * camera.fov / 70 : 0.0022;
-  state.yaw -= e.movementX * sens;
+  state.yaw -= e.movementX * sens; if (e.movementX) state.lookAt = performance.now();
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - e.movementY * sens));
 });
 addEventListener('mousedown', (e) => {
@@ -4216,7 +4216,7 @@ function pollPad(dt, now) {
     const zoomScale = state.aiming ? camera.fov / 70 : 1;
     const slow = assistFriction();
     const speed = pad.settings.lookSpeed * zoomScale * slow;
-    state.yaw -= lx * speed * dt;
+    state.yaw -= lx * speed * dt; if (Math.abs(lx) > 0.05) state.lookAt = performance.now();
     state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - ly * speed * 0.75 * dt * (pad.settings.invertY ? -1 : 1)));
     if (state.inputMode === 'pad') {   // a controller that's connected but idle leaves touch AIM / FIRE alone
       state.aiming = val(BTN.LT) > 0.35;
@@ -4638,6 +4638,11 @@ function frame(now) {
     if (me.boat.seat === 0) {
       const v = boatVis.get(me.boat.id);
       if (!state.boat && v) state.boat = { id: me.boat.id, type: v.data.type, x: v.data.x, z: v.data.z, y: v.data.y, yaw: v.data.yaw, speed: 0 };
+      // Driving and not looking about: the camera swings round behind the vehicle (land rides).
+      if (state.boat && BOATS[state.boat.type].land && Math.abs(state.boat.speed || 0) > 2 && now - (state.lookAt || 0) > 1200 && !state.aiming) {
+        const back = state.boat.speed < 0 ? Math.PI : 0, d = Math.atan2(Math.sin(state.boat.yaw + back - state.yaw), Math.cos(state.boat.yaw + back - state.yaw));
+        state.yaw += d * Math.min(1, dt * 2.5);
+      }
       if (state.boat) {
         const n = stepBoat(state.map.terrain, state.boat, free ? { throttle: f + pad.moveY + touch.moveY, steer: r + pad.moveX + touch.moveX } : {}, dt, rideEnv());
         if (n.hit) { state.boat.crash = Math.max(state.boat.crash || 0, n.hit); sfx.hurt?.(); }
@@ -4829,7 +4834,7 @@ function frame(now) {
 
   // Hide stash labels you're standing right under.
   for (const [id, v] of houseVis) { const h = state.map.houses[id]; v.label.visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; }
-  state.view.update(state.x, state.z);
+  state.view.update(state.x, state.z, state.boat ? Math.abs(state.boat.speed || 0) : state.me?.boat ? 12 : 0);
   for (const g of state.contactMeshes) {
     g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
     // Name tags float at a fixed size: up close they'd fill the screen, so they hide within 7 m.
@@ -5267,7 +5272,7 @@ function updateAimAssist(dt) {
 /** Turn the camera by a finger's drag, in pixels (look area, or a thumb sliding on FIRE). */
 function lookBy(dx, dy) {
   const sens = (state.aiming ? 0.004 * camera.fov / 70 * (tset.adsSens || 1) : 0.006) * pad.settings.lookSpeed / 2.6 * assistFriction();
-  state.yaw -= dx * sens;
+  state.yaw -= dx * sens; if (dx) state.lookAt = performance.now();
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - dy * sens));
 }
 /** Where each button sits (moved ones by the layout editor), how big, how see-through. */

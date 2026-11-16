@@ -941,16 +941,26 @@ vBlade = position.y;
       for (const g of chunks.values()) dispose(g);
       chunks.clear();
     },
-    update(px, pz) {
+    update(px, pz, speed = 0) {
       sky.position.set(px, 0, pz);
       waterTime.value = performance.now() / 1000;
-      if (grassMesh && (!grassAt || Math.hypot(px - grassAt.x, pz - grassAt.z) > 6)) layGrass(px, pz);
+      // Grass blades are laid out around you as you move. At driving speed they'd be laid out again
+      // several times a second (a stutter on a phone) for blades nobody can see go by: hide them, and
+      // lay them out again once you slow down.
+      if (grassMesh) {
+        const fast = speed > 9;
+        grassMesh.visible = !fast;
+        if (!fast && (!grassAt || Math.hypot(px - grassAt.x, pz - grassAt.z) > 6)) layGrass(px, pz);
+      }
       const want = new Set();
       let built = 0;
+      const t0 = performance.now();
       for (const [, cx, cz] of chunksWithin(px, pz, viewRange)) {
         const k = key(cx, cz);
         want.add(k);
-        if (chunks.has(k) || built >= (chunks.size < 4 ? 9 : 2)) continue;    // spread chunk building over frames
+        // Spread the building of new ground over frames: a few at the start, then one at a time and only
+        // while this frame has time to spare, so driving into new ground doesn't hitch.
+        if (chunks.has(k) || built >= (chunks.size < 4 ? 9 : 2) || (chunks.size >= 4 && built && performance.now() - t0 > 5)) continue;
         chunks.set(k, buildChunk(cx, cz));
         built++;
       }
@@ -961,7 +971,7 @@ vBlade = position.y;
       for (const [, cx, cz] of chunksWithin(px, pz, farRange)) {
         const k = key(cx, cz);
         wantFar.add(k);
-        if (!farChunks.has(k) && built < 3) { farChunks.set(k, buildFar(cx, cz)); built++; }
+        if (!farChunks.has(k) && built < 3 && performance.now() - t0 < 8) { farChunks.set(k, buildFar(cx, cz)); built++; }
         const g = farChunks.get(k);
         if (g) g.visible = !chunks.has(k);
       }
