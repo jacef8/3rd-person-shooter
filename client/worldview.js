@@ -9,9 +9,12 @@ import { mergeGeometries } from '/addons/utils/BufferGeometryUtils.js';
 import { Sky } from '/addons/objects/Sky.js';
 import { coverColor } from './mapview.js';
 import TREE_ATLAS from '/textures/trees.json' with { type: 'json' };
+import { makeTreeKit, treePick } from '/trees3d.js';
+import { COVER } from '/shared/terrain.js';
 import { buildWreck, buildHomeVehicle } from '/ridemodels.js';
 
 const CHUNK = 160;
+const TREE_FULL = 70;   // trees in chunks within this many metres get the full build
 export const SKY_TOP = 0x5b8fc7, SKY_HORIZON = 0xc6d9e6;
 const COLORS = {
   building: [0.62, 0.6, 0.57], warehouse: [0.5, 0.47, 0.42], farmhouse: [0.72, 0.66, 0.55], barn: [0.55, 0.22, 0.18],
@@ -336,6 +339,8 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   const LEAF = [0x3b6532, 0x467236, 0x3f6a33, 0x4f7a38, 0x37602f], NEEDLE = [0x27482c, 0x2d5132, 0x24432a, 0x325836];
   // Photo trees: the pines, live oak and oak cut from real pictures (tools/build_tree_atlas.py), each
   // drawn as two crossed picture cards. One sheet holds all six; each tree says which part it uses.
+  // Close by, trees are real 3D models (client/trees3d.js); the photo cards are only for the far view.
+  const kit = makeTreeKit();
   const treeTex = new THREE.TextureLoader().load('/textures/trees.webp');
   treeTex.colorSpace = THREE.SRGBColorSpace; treeTex.anisotropy = 4;
   const PHOTO = { pine: TREE_ATLAS.trees.filter((t) => t.kind === 'pine'), tree: TREE_ATLAS.trees.filter((t) => t.kind === 'tree') };
@@ -881,15 +886,16 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
       rock.setMatrixAt(i, tm); rock.instanceMatrix.needsUpdate = true;
       return;
     }
-    const { trunks, crowns, i, x, y, z, cw, ch, yaw } = sl;
+    const { trunks, ti, parts, i, x, y, z, h, sx, yaw } = sl;
     if (t.gone) {   // a stump knee-high, and no tree
-      tm.makeScale(1.15, 0.55, 1.15).setPosition(x, y + 0.3, z); trunks.setMatrixAt(i, tm);
-      tm.makeScale(0, 0, 0).setPosition(x, y, z); crowns.setMatrixAt(i, tm);
+      tm.makeScale(Math.max(0.6, sx * 0.05), 0.55, Math.max(0.6, sx * 0.05)).setPosition(x, y + 0.3, z); trunks.setMatrixAt(ti, tm);
+      tm.makeScale(0, 0, 0).setPosition(x, y, z);
     } else {
-      tm.makeScale(0, 0, 0).setPosition(x, y, z); trunks.setMatrixAt(i, tm);
-      cardMatrix(tm, x, y - 0.15, z, cw, ch, yaw); crowns.setMatrixAt(i, tm);
+      tm.makeScale(0, 0, 0).setPosition(x, y, z); trunks.setMatrixAt(ti, tm);
+      tm.compose(cardP.set(x, y + 0.15, z), cardQ.setFromAxisAngle(UP, yaw), cardS.set(sx, h, sx));
     }
-    trunks.instanceMatrix.needsUpdate = true; crowns.instanceMatrix.needsUpdate = true;
+    for (const m of parts) { m.setMatrixAt(i, tm); m.instanceMatrix.needsUpdate = true; }
+    trunks.instanceMatrix.needsUpdate = true;
   }
   // ---------------------------------------------------------------- grass around you
   // Blades fixed in the world (each 1 m square of grassy ground gets its own few, always the same), laid
@@ -941,7 +947,12 @@ vBlade = position.y;
     // What blades can't grow in: buildings and solid things (trees are fine), roads.
     const blocked = new Uint8Array(N * N);
     for (const b of map.grid.near(cx, cz, GRASS_R + 4)) {
-      if (b.type === 'tree' || b.type === 'pine' || b.gone) continue;
+      if (b.gone) continue;
+      if (b.type === 'tree' || b.type === 'pine') {   // bare ground round the foot of a tree
+        const tx = Math.round((b.minX + b.maxX) / 2) - cx + GRASS_R, tz = Math.round((b.minZ + b.maxZ) / 2) - cz + GRASS_R;
+        for (let x = tx - 2; x <= tx + 2; x++) for (let z = tz - 2; z <= tz + 2; z++) if (x >= 0 && z >= 0 && x < N && z < N) blocked[z * N + x] = 1;
+        continue;
+      }
       for (let x = Math.floor(b.minX) - cx + GRASS_R; x <= Math.ceil(b.maxX) - cx + GRASS_R; x++) for (let z = Math.floor(b.minZ) - cz + GRASS_R; z <= Math.ceil(b.maxZ) - cz + GRASS_R; z++) if (x >= 0 && z >= 0 && x < N && z < N) blocked[z * N + x] = 1;
     }
     const roads = map.roadsNear(cx, cz, GRASS_R + 12);
@@ -963,6 +974,7 @@ vBlade = position.y;
         colorAt.set(ck, c);
       }
       if (!c || onRoad(gx + 0.5, gz + 0.5) || pavedAt?.(gx + 0.5, gz + 0.5)) continue;
+      if (terrain.hasCover && terrain.cover(gx + 0.5, gz + 0.5) === COVER.woods) continue;   // the woods floor is pine straw and leaves, not grass
       for (let k = 0; k < kmax && n < cap; k++) {
         const x = gx + ghash(gx, gz, k * 3 + 1), z = gz + ghash(gx, gz, k * 3 + 2), r = ghash(gx, gz, k * 3 + 3);
         const hgt = 0.18 + r * 0.38;
@@ -1032,21 +1044,38 @@ vBlade = position.y;
       m.receiveShadow = mat !== roofMat;
       group.add(m);
     }
-    const forest = (list, crownMaterial) => {
+    // The trees: real 3D ones, batched by which build each uses. Every build has a full version (shown
+    // when the chunk is near) and a light one (further off); the stump mesh only shows once one is cut.
+    const treeLod = [];
+    const forest = (list, kind) => {
       if (!list.length) return;
-      // The photo tree stands there; the trunk mesh is only the stump once it's been cut down.
       const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, list.length);
-      const cards = photoTrees(list.map((t) => ({ kind: crownMaterial === pineMat ? 'pine' : 'tree', id: t.id, h: t.h })), photoMat);
-      list.forEach((t, i) => {
-        const x = (t.minX + t.maxX) / 2, z = (t.minZ + t.maxZ) / 2, y = t.y0 || 0, h = t.h;
-        const kind = crownMaterial === pineMat ? 'pine' : 'tree', hh = h * (kind === 'pine' ? 1.18 : 1.05);
-        const v = PHOTO[kind][(t.id * 7 + 3) % PHOTO[kind].length];
-        treeSlots.set(t, { trunks, crowns: cards, i, x, y, z, h, cw: hh * v.aspect, ch: hh, yaw: (t.id * 2.399) % Math.PI });
-        setTreeMatrix(t);
-      });
-      cards.castShadow = !mobile; cards.customDepthMaterial = photoDepth;
+      const byBuild = new Map();
+      for (const t of list) { const [v, sx] = treePick(kit, kind, t.id, t.h); if (!byBuild.has(v)) byBuild.set(v, []); byBuild.get(v).push([t, sx]); }
+      let ti = 0;
+      for (const [v, ts] of byBuild) {
+        const mk = (geo, mat, depth) => {
+          const m = new THREE.InstancedMesh(geo, mat, ts.length);
+          m.castShadow = !mobile; m.receiveShadow = !mobile;
+          if (depth) m.customDepthMaterial = depth;
+          group.add(m);
+          return m;
+        };
+        const full = [mk(v.full.wood, kit.woodMat), mk(v.full.leaves, kit.leafMat, kit.leafDepth)];
+        const lite = [mk(v.lite.wood, kit.woodMat), mk(v.lite.leaves, kit.leafMat, kit.leafDepth)];
+        treeLod.push({ full, lite });
+        ts.forEach(([t, sx], i) => {
+          const k = 0.86 + ((t.id * 13) % 9) * 0.035;   // each tree a slightly different green and bark
+          tint.setRGB(k, k, k * (0.96 + ((t.id * 7) % 5) * 0.02));
+          for (const m of [full[1], lite[1]]) m.setColorAt(i, tint);
+          for (const m of [full[0], lite[0]]) m.setColorAt(i, tint.setRGB(k, k, k));
+          const x = (t.minX + t.maxX) / 2, z = (t.minZ + t.maxZ) / 2;
+          treeSlots.set(t, { trunks, ti: ti++, parts: [...full, ...lite], i, x, y: t.y0 || 0, z, h: t.h, sx, yaw: (t.id * 2.399) % (Math.PI * 2) });
+          setTreeMatrix(t);
+        });
+      }
       trunks.castShadow = !mobile;
-      group.add(trunks, cards);
+      group.add(trunks);
     };
     // Rocks you can mine: chunky stones, one batch per chunk, so a mined-out one can crumble in place.
     if (rocks.length) {
@@ -1055,8 +1084,9 @@ vBlade = position.y;
       im.castShadow = true; im.receiveShadow = true;
       group.add(im);
     }
-    forest(trees, crownMat);
-    forest(pines, pineMat);
+    forest(trees, 'tree');
+    forest(pines, 'pine');
+    group.userData.treeLod = treeLod; group.userData.at = [x0, z0];
     // Abandoned cars by the road, and the RVs, buses, box trucks and houseboats people live in.
     for (const b of rigs) {
       const w = b.maxX - b.minX, d = b.maxZ - b.minZ, alongX = w > d, len = Math.max(w, d), wid = Math.min(w, d);
@@ -1190,6 +1220,17 @@ vBlade = position.y;
         built++;
       }
       for (const [k, g] of chunks) if (!want.has(k)) { dispose(g); chunks.delete(k); }
+      // Trees: the full build in chunks close by, the light one further off; and a breeze in the leaves.
+      kit.tick(waterTime.value);
+      for (const g of chunks.values()) {
+        const [x0, z0] = g.userData.at || [0, 0], lod = g.userData.treeLod;
+        if (!lod?.length) continue;
+        const d = Math.hypot(Math.max(x0 - px, 0, px - x0 - CHUNK), Math.max(z0 - pz, 0, pz - z0 - CHUNK));
+        const near = d < (mobile ? 1 : TREE_FULL);   // phones: the full build only in the chunk you're in
+        if (g.userData.near === near) continue;
+        g.userData.near = near;
+        for (const l of lod) { for (const m of l.full) m.visible = near; for (const m of l.lite) m.visible = !near; }
+      }
       // Far stand-ins: built a few a frame, shown only where the full-detail chunk isn't.
       const wantFar = new Set();
       built = 0;

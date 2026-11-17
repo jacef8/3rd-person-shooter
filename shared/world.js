@@ -1325,6 +1325,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
         const [x, z] = spot(2), c = terrain.cover(x, z), roll = r(), tall = r();
         if (!(c === COVER.scrub ? roll < 0.9 : c === COVER.woods ? roll < 0.35 : c === COVER.marsh ? roll < 0.5 : false)) continue;
         if (Hf(x, z) < 0.6 || roadDist(x, z, 14) < 3 || blocked(x - 1, z - 1, x + 1, z + 1)) continue;
+        // No brush in the woods: open under the trees, so you can see (and move) through them. (Its number
+        // is still used up, so everything after it in the tile keeps its id: cut trees stay cut.)
+        if (c === COVER.woods) { id++; continue; }
         add(x - 0.9, z - 0.9, x + 0.9, z + 0.9, 1.1 + tall * 0.7, 'scrub');
       }
       if (r() < 0.3) {   // a fallen log or a stump-pile now and then; Florida has no boulders
