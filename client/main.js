@@ -10,6 +10,7 @@ import {
 import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
+import { attachAnimal, animateAnimal, preloadAnimals } from '/animals.js';
 import { createTownDressing } from '/towns.js';
 import { withCounty } from '/shared/county.js';
 import { withEdits } from '/shared/edits.js';
@@ -598,6 +599,7 @@ function makeAnimal(kind) {
     g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     g.userData = { body, head, animal: true };
     scene.add(g);
+    attachAnimal(g, 'gator');
     return g;
   }
   if (kind === 'boar') { const m = makeAnimal('hog'); m.scale.setScalar(1.8); return m; }
@@ -610,6 +612,7 @@ function makeAnimal(kind) {
     for (const [x, z] of [[-0.11, 0.3], [0.11, 0.3], [-0.11, -0.3], [0.11, -0.3]]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.36, 0.07), mat); leg.position.set(x, 0.18, z); g.add(leg); }
     g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     scene.add(g);
+    attachAnimal(g, 'dog');
     return g;
   }
   const body = new THREE.Mesh(new THREE.BoxGeometry(deer ? 0.45 : 0.55, 0.5, deer ? 1.3 : 1.1), mat);
@@ -626,6 +629,7 @@ function makeAnimal(kind) {
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   g.userData = { body, head, animal: true };
   scene.add(g);
+  attachAnimal(g, deer ? 'deer' : 'hog');
   return g;
 }
 
@@ -1252,6 +1256,7 @@ function animateFlyBys(dt) {
 
 preloadPeople(['swat1', 'swat3']);
 preloadVehicles();
+preloadAnimals();
 const selfMesh = makeCharacter('self', '');
 selfMesh.visible = false;
 
@@ -5145,6 +5150,7 @@ function frame(now) {
     g.position.x += (c.x - g.position.x) * k; g.position.z += (c.z - g.position.z) * k;
     g.position.y = ground(g.position.x, g.position.z);
     let dy = c.yaw - g.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.rotation.y += dy * k;
+    animateAnimal(g, dt);
   }
   for (const [, l] of state.loot) l.mesh.rotation.y += dt;
   for (const [, b] of state.bags) b.mesh.rotation.y += dt * 0.5;
