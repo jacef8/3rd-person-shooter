@@ -407,6 +407,19 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (oneStorey) obox(x0, z0, x1, z1, 0.3, y0 + wallH);
       else obox(x0, z0, x1, z1, total - storey, y0 + storey);
     }
+    // A flat roof: a ladder up to it, on the longest wall without a door (the back or a side).
+    if (opts.ladder) {
+      const r = runs.filter((q) => !doorRuns.has(q) && q.len >= 3).sort((p, q) => q.len - p.len)[0];
+      if (r) {
+        const m = (r.a + r.b) / 2, [ox, oz] = OUT[r.side], D = 0.22;   // out from the wall, just clear of it
+        const lx = r.along === 'x' ? m : r.at + ox * (D / 2 + 0.03), lz = r.along === 'x' ? r.at + oz * (D / 2 + 0.03) : m;
+        const [wx, wz] = W(lx, lz);
+        const top = rec.top;
+        const lb = orientedBox(wx, wz, r.along === 'x' ? 0.35 : D / 2, r.along === 'x' ? D / 2 : 0.35, ang,
+          { id: boxes.length, h: top - y0 + 0.15, y0, type: 'ladder', ladderTop: top, ladderIn: [-(ox * ca - oz * sa), -(ox * sa + oz * ca)], bldg, real: 1 });
+        boxes.push(lb); grid.insert(lb);
+      }
+    }
     // Loot inside: one spot per ~120 m² of floor, up to 3, in the bigger pieces and off the walls.
     const n = zone ? Math.max(1, Math.min(3, Math.floor(area / 120))) : 0;
     const roomy = rects.filter(([x0, z0, x1, z1]) => x1 - x0 > 3.4 && z1 - z0 > 3.4);
@@ -651,7 +664,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
               const w = 8 + rand() * 4, d = 7 + rand() * 4;
               shell(lx + 1, lz + 1, lx + 1 + Math.min(w, BLOCK / 2 - 4), lz + 1 + Math.min(d, BLOCK / 2 - 4), 3.6 + rand() * 1.6, 'building', 'town', y0);
             }
-            if (rand() < 0.6) tb(cx - 0.3, cz - 0.3, cx + 0.3, cz + 0.3, 9 + rand() * 5, 'tree');
+            if (rand() < 0.6) tb(cx - 0.3, cz - 0.3, cx + 0.3, cz + 0.3, 10 + rand() * 12, 'tree');
             lootSpawns.push({ x: cx, z: cz, zone: 'town' });
             continue;
           }
@@ -815,7 +828,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const pitched = type === 'home' || type === 'farmhouse' || type === 'barn' || (type === 'civic' && area < 1200);
       // Pieces in the building's own frame (one rectangle, or the L / T / wings of the real outline).
       const rects = pad.rects || [[-w / 2, -d / 2, w / 2, d / 2]];
-      realShell(x, z, pad.ang, rects, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, name: name || undefined, sink: 0.6, si });
+      realShell(x, z, pad.ang, rects, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, name: name || undefined, sink: 0.6, si, ladder: !pitched && (type === 'building' || type === 'civic') && area0 >= 60 });
       realBuildings.push(1);
     }
   }
@@ -1100,6 +1113,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (!open(x, z, 7)) continue;
       const height = kind === 'radio' ? 95 : 55, y = lattice(x, z, kind === 'radio' ? 4.5 : 3.2, height);
       box(x - 2.4, z - 2.4, x + 2.4, z + 2.4, 0.5, 'tower', { y0: y + height - 4 });   // the antenna platform
+      box(x + 2.45, z - 0.35, x + 2.7, z + 0.35, height - 3.35, 'ladder', { y0: y, ladderTop: y + height - 3.5, ladderIn: [-1, 0] });   // and the ladder up to it
       // The fenced yard and the equipment shed at its foot.
       for (const [a, b, c, d] of [[-7, -7, 7, -6.9], [-7, 6.9, 7, 7], [-7, -7, -6.9, 7], [6.9, -7, 7, 2]]) box(x + a, z + b, x + c, z + d, 2.4, 'fence', { y0: lowest(x, z, 7) - 0.2 });
       box(x + 3, z + 3, x + 6, z + 6, 2.8, 'equipment', { y0: lowest(x + 4.5, z + 4.5, 1.5) - 0.2 });
@@ -1111,6 +1125,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       for (const [a, b] of [[-3.2, -3.2], [3.2, -3.2], [-3.2, 3.2], [3.2, 3.2]]) box(x + a - 0.3, z + b - 0.3, x + a + 0.3, z + b + 0.3, 31, 'tower', { y0: y });
       box(x - 0.4, z - 0.4, x + 0.4, z + 0.4, 31, 'tower', { y0: y });
       box(x - 5, z - 5, x + 5, z + 5, 8, 'tank', { y0: y + 30 });
+      box(x + 5.05, z - 0.35, x + 5.3, z + 0.35, 38.15, 'ladder', { y0: y, ladderTop: y + 38, ladderIn: [-1, 0] });   // up the side to the top of the tank
     }
     for (const [lat, lon, dm] of infra.tanks || []) {
       const { x, z } = P([lat, lon]), r = dm / 2;
@@ -1278,7 +1293,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
         if (roll >= keep) continue;
         if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || nearRail(x, z, 4) || terrain.underDeck(x, z, DECK_HALF + 6) || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
         const pine = c === COVER.marsh ? false : c === COVER.scrub ? true : pineTile ? kind < 0.85 : kind < 0.3;
-        add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, c === COVER.scrub ? 5 + tall * 6 : (pine ? 15 : 10) + tall * 9, pine ? 'pine' : 'tree');
+        // Heights vary a lot, leaning tall: longleaf pines to 34 m, oaks and gums to 28 m, so the crowns are
+        // up out of the way and you can see a long way under them in the woods.
+        add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, c === COVER.scrub ? 5 + tall * 6 : pine ? 16 + tall ** 0.8 * 18 : 11 + tall ** 0.9 * 17, pine ? 'pine' : 'tree');
       }
       const brush = Math.round(14 * r()) + 6;
       for (let k = 0; k < brush; k++) {
@@ -1302,7 +1319,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (x < x0 + 0.5 || x > x0 + NATURE_TILE - 0.5 || z < z0 + 0.5 || z > z0 + NATURE_TILE - 0.5) continue;
       if (Hf(x, z) < 0.4 || roadDist(x, z, 14) < 3 || blocked(x - 0.4, z - 0.4, x + 0.4, z + 0.4)) continue;
       const pine = pineTile ? r() < 0.85 : r() < 0.2;
-      add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, (pine ? 14 : 9) + r() * 7, pine ? 'pine' : 'tree');
+      add(x - 0.3, z - 0.3, x + 0.3, z + 0.3, pine ? 15 + r() ** 0.8 * 16 : 10 + r() ** 0.9 * 15, pine ? 'pine' : 'tree');
     }
     const nRocks = Math.round(1 + b.mountain * 9 + b.desert * 2 + r() * 2);
     for (let k = 0; k < nRocks; k++) {
@@ -1499,7 +1516,7 @@ export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift 
 // ---- climbing: standing on things, and climbing onto and over them
 /** What you can't stand on or climb: trees, overhead roofs, doors, poles, and anything players built
  *  (their pieces carry no type: base walls, gates and barricades stay in the way of raiders). */
-const NO_CLIMB = new Set(['tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'rail', 'windsock', 'pole', 'scrub', 'cactus', 'bush']);
+const NO_CLIMB = new Set(['tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'rail', 'windsock', 'pole', 'scrub', 'cactus', 'bush', 'ladder']);
 const climbable = (b) => !!b.type && !b.gone && !NO_CLIMB.has(b.type) && !b.houseId;
 const insideTop = (b, x, z, m) => {
   if (b.ang !== undefined) { const [lx, lz] = toBox(b, x, z); return Math.abs(lx) <= b.hw - m && Math.abs(lz) <= b.hd - m; }
@@ -1537,6 +1554,16 @@ export function climbAhead(solids, x, z, dx, dz, y) {
     if (best) return best;
   }
   return best;
+}
+/** Ladders: up roofs, water towers and radio towers. You go up at `speed` m/s and step off the top. */
+export const LADDER = { speed: 3.4, reach: 0.75 };
+/** A ladder you're at the foot of (or partway up): { box, top } where top is how high it goes, or null. */
+export function ladderAt(solids, x, z, y) {
+  for (const b of solids) {
+    if (b.type !== 'ladder' || b.gone || y > b.ladderTop - 0.8 || y < (b.y0 || 0) - 1) continue;
+    if (circleOverlapsBox(x, z, LADDER.reach, b)) return b;
+  }
+  return null;
 }
 /** How fast you go up for a climb `h` metres high (a jump just high enough to clear it). */
 export const climbVy = (h, g) => Math.sqrt(2 * g * Math.max(0.3, h - 0.15));

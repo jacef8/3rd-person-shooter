@@ -25,7 +25,7 @@ import { BOATS, RIDES, RIDE_RULES, floats, seatPos, isLand, riderFeet } from '..
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
-  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB,
+  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB, LADDER, ladderAt,
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
@@ -4229,7 +4229,7 @@ function interact(p) {
   if (!it) {
     if (taxiAt(p) && !map.contacts.some((c) => Math.hypot(c.x - p.x, c.z - p.z) < 8)) return taxiMenu(p);
     const b = buildingAt(p.x, p.z);
-    if (b >= 0) return startClaimBuilding(p, b);
+    if (b >= 0 && standing(p) < map.buildings[b].top - 1) return startClaimBuilding(p, b);   // (inside it, not up on the roof)
     if (nearWater(p.x, p.z)) {
       if (!hasTool(p, 'rod')) return toast(p, 'You need a fishing rod (trading posts sell them; craft one at your stash)');
       return startHack(p, 'fish', 0);
@@ -5035,6 +5035,7 @@ function handleState(p, msg) {
   const y0 = standing(p);
   const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain, y0, p.hop ? p.hop.alt : 0);
   if (p.hop && np.y !== y0) { p.hop.alt -= np.y - y0; if (p.hop.alt <= 0) p.hop = null; }   // landed on a top mid-climb
+  if (p.hop?.hold && Math.hypot(p.x - p.hop.x0, p.z - p.hop.z0) > 3) p.hop.hold = 0;   // stepped away from the top of a ladder without landing: let go
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
   if (p.speed > 0.5) p.lastActive = now;
   p.x = np.x; p.z = np.z;
@@ -5200,6 +5201,11 @@ wss.on('connection', (ws) => {
         const now = Date.now();
         if (p.dead || p.downed || p.prone || p.boat || p.air || p.hop || now - (p.lastJump || 0) < 650 || isStunned(p, now)) return;
         p.lastJump = now;
+        // Up a ladder that's really there.
+        if (msg.ladder) {
+          const lad = ladderAt(solidsNear(p.x, p.z, 3), p.x, p.z, standing(p));
+          if (lad) { p.hop = { alt: 0, vy: 0, ladder: lad.ladderTop - standing(p) + 0.35, x0: p.x, z0: p.z }; return; }
+        }
         // A climb: only as high as something there really is to climb, in some direction.
         const want = Number(msg.climb);
         if (want > 0 && want <= CLIMB.max) {
@@ -5372,7 +5378,11 @@ const loop = setInterval(() => {
   for (const c of bots.values()) if (!c.dead) { (c.hist ??= []).push({ t: now, x: c.x, z: c.z, y: gy(c), crouch: c.crouch }); if (c.hist.length > 8) c.hist.shift(); }
   const dt = 1 / TICK_HZ;
   for (const p of players.values()) if (p.air && !p.dead) tickAir(p, dt);
-  for (const p of players.values()) if (p.hop) { p.hop.vy -= JUMP_G * dt; p.hop.alt += p.hop.vy * dt; if (p.hop.alt <= 0 || p.dead || p.downed || p.boat || p.air) p.hop = null; }
+  for (const p of players.values()) if (p.hop) {
+    if (p.hop.ladder) { p.hop.alt = Math.min(p.hop.ladder, p.hop.alt + LADDER.speed * dt); if (p.hop.alt >= p.hop.ladder) { p.hop.ladder = 0; p.hop.vy = 0; p.hop.hold = Date.now() + 60_000; } }   // at the top: hang on until you step off (landing on the top ends it; so does moving away)
+    else if (!(p.hop.hold > Date.now())) { p.hop.vy -= JUMP_G * dt; p.hop.alt += p.hop.vy * dt; }
+    if (p.hop.alt <= 0 || p.dead || p.downed || p.boat || p.air) p.hop = null;
+  }
   updateBots(dt, now);
   tickHacks(now);
   if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickSites(now); tickRides(now); }

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from '/addons/geometries/RoundedBoxGeometry.js';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy } from '/shared/world.js';
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy, LADDER, ladderAt } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
@@ -3325,6 +3325,7 @@ function jump() {
   state.lastJump = now;
   state.slide = null;   // a jump out of a slide keeps its speed, as momentum does
   state.crouch = false;
+  if (climbLadder()) return;
   // Jump at a ledge, a fence, a car or a crate up to about 2 m high and you climb it: a jump just high
   // enough to clear it, carried forward onto it (or over a fence to the far side).
   const v = state.vel || [0, 0], sp = Math.hypot(v[0], v[1]);
@@ -3339,8 +3340,19 @@ function jump() {
   state.hop = { alt: 0, vy: JUMP_V };
   send({ t: 'jump' });
 }
+/** At the foot of a ladder: up it (JUMP or USE). Up you go at a steady pace and step off at the top. */
+function climbLadder() {
+  const lad = !state.hop && !state.air && !state.me?.boat && ladderAt(solidsNear(state.x, state.z, 3), state.x, state.z, myY());
+  if (!lad) return false;
+  state.hop = { alt: 0, vy: 0, ladder: lad.ladderTop - myY() + 0.35, dir: lad.ladderIn };
+  state.slide = null; state.crouch = false; state.prone = false;
+  state.vel = [0, 0];
+  send({ t: 'jump', ladder: 1 });
+  return true;
+}
 function doAction(a) {
   if (!state.me) return;
+  if (a === 'interact' && !state.me.dead && !state.me.downed && /^🪜/.test(state.promptText || '') && climbLadder()) return;
   switch (a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
     case 'testRide': setTimeout(openRidePicker, 250); return;   // after the tap that asked for it has ended
@@ -3369,7 +3381,7 @@ function doAction(a) {
   }
   switch (a) {
     case 'jump': jump(); break;
-    case 'padA': if (state.promptText) send({ t: 'interact' }); else jump(); break;   // controller A: use if there's something to use, else jump
+    case 'padA': if (state.promptText) { if (!(/^🪜/.test(state.promptText) && climbLadder())) send({ t: 'interact' }); } else jump(); break;   // controller A: use if there's something to use, else jump
     case 'interact': send({ t: 'interact' }); break;
     case 'tag': if (state.aimTargetId) send({ t: 'mark', id: state.aimTargetId }); break;
     case 'sensor': toggleNadeAim(); break;
@@ -3687,6 +3699,8 @@ function nearestInteractable() {
   if (state.me?.boat) return myRide()?.land ? `${myRide().icon} Get off the ${myRide().name.toLowerCase()}` : canStepOut() ? '🚤 Get out onto the bank' : null;
   let best = null, bestD = INTERACT_RANGE;
   const consider = (d, text) => { if (d < bestD) { bestD = d; best = text; } };
+  // At the foot of a ladder (a roof, a water tower, a radio tower).
+  { const y = myY(), lad = !state.hop && !state.air && ladderAt(solidsNear(state.x, state.z, 3), state.x, state.z, y); if (lad) consider(0.4, `🪜 Climb the ladder (${feet(lad.ladderTop - y)} up)`); }
   // Boats and landing posts (boats are boarded from a little further off: they sit in the water).
   for (const [, v] of boatVis) {
     const def = BOATS[v.data.type];
@@ -3812,7 +3826,7 @@ function nearestInteractable() {
   }
   if (!best && me) {
     // Inside an enterable building nobody holds: it can become your stash house.
-    const b = state.map.buildings.find((q) => state.x > q.minX && state.x < q.maxX && state.z > q.minZ && state.z < q.maxZ && insideBuilding(q, state.x, state.z, 0.3));
+    const b = state.map.buildings.find((q) => state.x > q.minX && state.x < q.maxX && state.z > q.minZ && state.z < q.maxZ && insideBuilding(q, state.x, state.z, 0.3) && myY() < q.top - 1);   // inside, not up on its roof
     if (b) {
       const held = [...structVis.values()].find((sv) => PIECES[sv.data.type].claim && sv.data.x > b.minX && sv.data.x < b.maxX && sv.data.z > b.minZ && sv.data.z < b.maxZ);
       const what = b.name || ({ building: 'building', home: 'house', civic: 'hall' }[b.type] || b.type);
@@ -4954,7 +4968,16 @@ function frame(now) {
     if (state.mouseDown && free && !build.on) tryFire(now); else if (!state.mouseDown) state.firedThisPress = false;
   }
   if (!alive) state.air = null;
-  if (state.hop) { state.hop.vy -= JUMP_G * dt; state.hop.alt += state.hop.vy * dt; if (state.hop.alt <= 0 || !alive) state.hop = null; }
+  if (state.hop?.ladder) {
+    // On a ladder: up at a steady pace; at the top, a little hop and a step onto the roof or platform.
+    state.hop.alt = Math.min(state.hop.ladder, state.hop.alt + LADDER.speed * dt);
+    // At the top you hang on while you step off (however slow the frames), then let go.
+    if (state.hop.alt >= state.hop.ladder) { state.climbPush = { until: now + 1500, dir: state.hop.dir, frames: 0, x0: state.x, z0: state.z }; state.hop.ladder = 0; state.hop.vy = 0; state.hop.hold = true; }
+    if (!alive) state.hop = null;
+  } else if (state.hop) {
+    if (!(state.hop.hold && state.climbPush)) { state.hop.vy -= JUMP_G * dt; state.hop.alt += state.hop.vy * dt; }
+    if (state.hop.alt <= 0 || !alive) state.hop = null;
+  }
   if (alive && state.air && !inBoat) {
     // On a jump: Sprint (held) flies the squirrel suit, the stick steers, Use pulls the chute.
     const k = state.keys;
@@ -5019,9 +5042,12 @@ function frame(now) {
     if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
     updateStance(dt, now);
     let want = len > 0.05 && !stunnedNow && now >= (state.stanceBusyUntil || 0) ? [mx * speed, mz * speed] : [0, 0];
+    if (state.hop?.ladder) want = [0, 0];   // on a ladder: up, not about
     // Climbing: carried on forward, onto the top or over to the other side.
-    if (state.climbPush && now < state.climbPush.until && state.hop) { const cp = state.climbPush.dir; want = [cp[0] * Math.max(3.2, speed * 0.6), cp[1] * Math.max(3.2, speed * 0.6)]; }
-    else state.climbPush = null;
+    // (a few frames at least, however slow they come, and no further than the step off a ladder needs)
+    const cp0 = state.climbPush;
+    if (cp0 && state.hop && (now < cp0.until || cp0.frames < 24) && Math.hypot(state.x - (cp0.x0 ?? state.x), state.z - (cp0.z0 ?? state.z)) < 2.2) { cp0.frames = (cp0.frames || 0) + 1; want = [cp0.dir[0] * Math.max(3.2, speed * 0.6), cp0.dir[1] * Math.max(3.2, speed * 0.6)]; }
+    else { state.climbPush = null; if (state.hop) state.hop.hold = false; }
     if (sl) {
       const t = (now - sl.start) / SLIDE.ms, s = SLIDE.speed * (1 - 0.7 * t * t);
       if (len > 0.05) { const k = Math.min(1, dt * 2.5); sl.dir[0] += (mx - sl.dir[0]) * k; sl.dir[1] += (mz - sl.dir[1]) * k; const l = Math.hypot(sl.dir[0], sl.dir[1]) || 1; sl.dir[0] /= l; sl.dir[1] /= l; }

@@ -39,3 +39,18 @@ test('climbing: over a fence to the far side', () => {
   assert.ok(over.x > 2.1 + PLAYER_RADIUS, `cleared it (at ${over.x.toFixed(2)})`);
   assert.equal(over.y, 0, 'nothing to stand on up there: you come down the far side');
 });
+
+test('ladders: at the foot of one, up to the roof, step off onto it', async () => {
+  const { ladderAt } = await import('../shared/world.js');
+  const roof = { minX: 0, minZ: -5, maxX: 10, maxZ: 5, h: 0.3, y0: 4.2, type: 'building' };       // a roof slab, top 4.5 m
+  const wallE = { minX: 9.7, minZ: -5, maxX: 10, maxZ: 5, h: 4.5, y0: 0, type: 'building' };      // its east wall
+  const ladder = { minX: 10.05, minZ: -0.35, maxX: 10.27, maxZ: 0.35, h: 4.65, y0: 0, type: 'ladder', ladderTop: 4.5, ladderIn: [-1, 0] };
+  const solids = [roof, wallE, ladder];
+  assert.equal(ladderAt(solids, 10.7, 0, 0), ladder, 'standing at its foot');
+  assert.equal(ladderAt(solids, 14, 0, 0), null, 'too far away');
+  assert.equal(ladderAt(solids, 10.7, 0, 4.5), null, 'already up top');
+  // Up it (alt = top + 0.35), then step west onto the roof.
+  const up = moveWithCollision(10.7, 0, -1.2, 0, PLAYER_RADIUS, solids, flat, 0, 4.5 + 0.35);
+  assert.ok(up.x < 9.8 && Math.abs(up.y - 4.5) < 1e-9, `on the roof (at ${up.x.toFixed(2)}, ${up.y})`);
+  assert.equal(platformTop(solids, 5, 0, 4.6), 4.5, 'and you can walk about up there');
+});

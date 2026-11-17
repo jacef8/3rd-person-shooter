@@ -129,6 +129,22 @@ export function pushBox(buf, b, color, tile) {
     buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
 }
+/** A steel ladder: two rails and a rung every 30 cm, across the box's wider side. */
+const LADDER_STEEL = [0.42, 0.44, 0.46];
+export function pushLadder(buf, b) {
+  const turned = b.ang !== undefined;
+  const ca = turned ? b.ca : 1, sa = turned ? b.sa : 0;
+  const cx = turned ? b.cx : (b.minX + b.maxX) / 2, cz = turned ? b.cz : (b.minZ + b.maxZ) / 2;
+  const hw = turned ? b.hw : (b.maxX - b.minX) / 2, hd = turned ? b.hd : (b.maxZ - b.minZ) / 2;
+  const wideX = hw >= hd, half = Math.max(hw, hd), y0 = b.y0 || 0, h = b.h;
+  const piece = (u, w, yy, hh) => {   // u: along the ladder's width; w: that piece's width
+    const lx = wideX ? u : 0, lz = wideX ? 0 : u;
+    pushBox(buf, { ang: b.ang || 0, ca, sa, cx: cx + lx * ca - lz * sa, cz: cz + lx * sa + lz * ca, hw: wideX ? w / 2 : 0.03, hd: wideX ? 0.03 : w / 2, y0: yy, h: hh }, LADDER_STEEL, 0);
+  };
+  piece(-half + 0.03, 0.06, y0, h + 0.9);   // the rails run up past the top, to hold on to
+  piece(half - 0.03, 0.06, y0, h + 0.9);
+  for (let y = y0 + 0.3; y < y0 + h; y += 0.3) piece(0, half * 2 - 0.06, y, 0.035);
+}
 /** A pitched roof over a building record: one per piece of a real building, turned to its walls. */
 export function pushRoof(buf, r, color, wall, low = false) {
   if (!r.rects) return roofPiece(buf, r.minX, r.minZ, r.maxX, r.maxZ, r.top, color, wall, 1, 0, 0, 0, low);
@@ -376,7 +392,8 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
     list.forEach((t, i) => {
       const v = PHOTO[t.kind][(t.id * 7 + 3) % PHOTO[t.kind].length];
       uvs.set([v.u, v.v, v.w, v.h], i * 4);
-      t.cardH = t.h * (t.kind === 'pine' ? 1.18 : 1.05); t.cardW = t.cardH * v.aspect; t.cardYaw = ((t.id * 2.399) % Math.PI);
+      // A tall tree is drawn taller more than wider: its trunk runs up longer and its crown sits higher.
+      t.cardH = t.h * (t.kind === 'pine' ? 1.18 : 1.05); t.cardW = Math.min(t.cardH, 12 * (t.cardH / 12) ** 0.72) * v.aspect; t.cardYaw = ((t.id * 2.399) % Math.PI);
       const k = 0.84 + ((t.id * 13) % 9) * 0.03;
       im.setColorAt(i, tint.setRGB(k, k, k * 0.97));
     });
@@ -984,6 +1001,7 @@ vBlade = position.y;
       if (b.type === 'canopy') { canopies.push(b); continue; }
       if (b.type === 'tank') { tanks.push(b); continue; }
       if (b.type === 'car' || b.type === 'vehiclebody') { rigs.push(b); continue; }   // drawn as real vehicles, below
+      if (b.type === 'ladder') { pushLadder(plain, b); continue; }
       const [c, tex] = paint(b);
       pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'metal' ? metal : tex === 'planks' ? planks : plain, b, c, tex ? 4 : 0);
     }
@@ -1089,7 +1107,7 @@ vBlade = position.y;
     }
     return list;
   }
-  const FAR_SKIP = new Set(['terminal', 'rail', 'border', 'cover', 'rock', 'car', 'crate', 'scrub', 'cactus', 'boulder', 'jetty', 'canopy', 'caveroof']);
+  const FAR_SKIP = new Set(['terminal', 'rail', 'border', 'cover', 'rock', 'car', 'crate', 'scrub', 'cactus', 'boulder', 'jetty', 'canopy', 'caveroof', 'ladder']);
   /** The same buildings as plain boxes with their roofs, and the trees as bare crowns. No ground. */
   function buildFar(cx, cz) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
