@@ -3480,7 +3480,14 @@ const REWIND_MS = 300;   // favour the shooter: a hit on what their screen showe
 function fire(shooter, dir, isBot = false, botAccuracy = 1, opts = {}) {
   const s = isBot ? shooter.weapon : stats(shooter);
   const eye = shooter.prone ? PRONE_EYE : shooter.crouch ? CROUCH_EYE : STAND_EYE;
-  const ox = shooter.x, oy = gy(shooter) + eye, oz = shooter.z;
+  let ox = shooter.x, oy = gy(shooter) + eye, oz = shooter.z;
+  // Fired from where the shooter's own screen has them (a step ahead of the server's copy of them when
+  // they've just stepped out from a corner), if that's close and nothing solid is in between: otherwise a
+  // shot from round a corner would hit the wall the server still has them behind.
+  if (!isBot && opts.from) {
+    const [fx, fy, fz] = opts.from, ddx = fx - ox, ddy = fy - oy, ddz = fz - oz, dl = Math.hypot(ddx, ddz);
+    if (dl <= 1.6 && Math.abs(ddy) <= 0.8 && (dl < 0.05 || rayAgainstBoxes(ox, oy, oz, ddx / Math.hypot(ddx, ddy, ddz), ddy / Math.hypot(ddx, ddy, ddz), ddz / Math.hypot(ddx, ddy, ddz), solidsNear(ox, oz, dl + 1), Math.hypot(ddx, ddy, ddz) + 0.35).t > Math.hypot(ddx, ddy, ddz) + 0.3)) { ox = fx; oy = fy; oz = fz; }
+  }
   // The shot goes from your eye to the point under your crosshair, so it lands where you aimed even
   // if the server's copy of you is a step behind where your screen has you.
   if (opts.at) { const ax = opts.at[0] - ox, ay = opts.at[1] - oy, az = opts.at[2] - oz, al = Math.hypot(ax, ay, az); if (al > 0.5 && al < 2000) dir = [ax, ay, az]; }
@@ -3712,7 +3719,10 @@ function updateBots(dt, now) {
     if (!alive.some((p) => dist2(p, b) < BOT_ACTIVE_RANGE * BOT_ACTIVE_RANGE)) continue;   // asleep
     const sight = (b.kind === 'hvt' ? COMBAT.bots.hvt : b.kind === 'guard' ? COMBAT.bots.guard : COMBAT.bots.rogue).sightRange;
     const sees = (p) => lineOfSight(b.x, gy(b) + STAND_EYE, b.z, p.x, gy(p) + (p.crouch ? 0.9 : 1.3), p.z);
-    let best = null, bestD = sight;
+    // Roaming rogues leave you be unless you come right up on them (or shoot: see botsHear / botProvoked).
+    // Guards at the big sites and the lieutenant open up on anyone they see.
+    const wary = b.kind !== 'hvt' && b.kind !== 'guard';
+    let best = null, bestD = wary ? Math.min(sight, COMBAT.bots.rogue.territory ?? 12) : sight;
     for (const p of alive) {
       if (p.downed) continue;   // rogues move on to whoever is still fighting
       const d = Math.hypot(p.x - b.x, p.z - b.z);
@@ -5114,7 +5124,8 @@ function handleShoot(p, msg) {
   p.lastShot = now;
   p.mags[w.id] = mag - 1;
   const at = Array.isArray(msg.at) && msg.at.length === 3 && msg.at.every(Number.isFinite) ? msg.at : null;
-  fire(p, msg.dir, false, 1, { at, since, tid: typeof msg.tid === 'string' ? msg.tid : null });
+  const from = Array.isArray(msg.from) && msg.from.length === 3 && msg.from.every(Number.isFinite) ? msg.from : null;
+  fire(p, msg.dir, false, 1, { at, from, since, tid: typeof msg.tid === 'string' ? msg.tid : null });
   dirty(p);
 }
 function handleReload(p) {

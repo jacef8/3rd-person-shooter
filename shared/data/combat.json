@@ -23,7 +23,9 @@
       "name": "Rogue",
       "hp": 140,
       "damageMul": 0.35,
-      "sightRange": 45
+      "sightRange": 45,
+      "territory": 12,
+      "_about": "Roaming rogues only open fire on someone who comes within territory metres, or who shoots at them or near them (then the whole group within callRange joins in). sightRange is how far they see once they're after you."
     },
     "hvt": {
       "name": "Rogue Lieutenant",

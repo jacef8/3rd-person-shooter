@@ -3714,7 +3714,7 @@ function tryFire(now) {
   const eye = new THREE.Vector3(state.x, eyeHeight(), state.z);
   const dir = target.clone().sub(eye).normalize();
   // The server aims from its copy of you at the same point, and checks the target you saw.
-  send({ t: 'shoot', dir: [dir.x, dir.y, dir.z], at: [+target.x.toFixed(2), +target.y.toFixed(2), +target.z.toFixed(2)], tid: state.aimTargetId || undefined });
+  send({ t: 'shoot', dir: [dir.x, dir.y, dir.z], at: [+target.x.toFixed(2), +target.y.toFixed(2), +target.z.toFixed(2)], from: [+eye.x.toFixed(2), +eye.y.toFixed(2), +eye.z.toFixed(2)], tid: state.aimTargetId || undefined });
   sfx.shot(0, 0, 0, w.archetype, s.suppressed ? (s.subsonic ? 2 : 1) : 0, true);
   shotFx(selfMesh, w.archetype, s.suppressed ? (s.subsonic ? 2 : 1) : 0);
   state.lastShot = now;
