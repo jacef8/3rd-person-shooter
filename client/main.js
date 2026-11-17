@@ -1744,7 +1744,10 @@ function handle(m) {
       $('testRideBtn').hidden = !m.testRides;
       document.querySelector('#touch [data-act=testRide]')?.toggleAttribute('hidden', !m.testRides);
       state.pushKey = m.pushKey || null;
-      if (touchCapable && !localStorage.getItem('dz_tip_fire')) { localStorage.setItem('dz_tip_fire', '1'); setTimeout(() => toast('Tip: keep your thumb on FIRE and slide it to aim while you shoot'), 6000); }
+      { const n = Number(localStorage.getItem('dz_tip_fire2') || 0);   // the first three games on a phone
+        if (touchCapable && n < 3) { localStorage.setItem('dz_tip_fire2', String(n + 1)); setTimeout(() => toast(tset.autoFire && tset.autoFire !== 'off'
+          ? 'Aiming: drag the right side of the screen to put the crosshair on someone. Your gun fires by itself (AUTO on the FIRE button). To fire by hand, hold FIRE and slide that thumb to aim.'
+          : 'Aiming: hold FIRE and slide that same thumb to aim while you shoot. Or turn on Auto-fire in Settings → Controls.'), 6000); } }
       syncPush();
       if (!state.map) initWorld(m);
       selfMesh.visible = true;
@@ -5134,11 +5137,16 @@ window.__dz = { nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis, 
 // on the right to look, and buttons for everything else. Hidden while a controller is in use.
 const touch = { moveX: 0, moveY: 0, sprint: false, stick: null, look: null, autoRun: false };
 // Phone settings (this device): button layout, size and see-through, the left fire button, gyro aim.
-const tset = { pos: {}, scale: 1, alpha: 1, leftFire: false, gyro: 'off', aimMode: 'mixed', autoFire: 'off', adsSens: 1, aimAssist: 'strong', autoPick: { ammo: true, heals: true, supplies: true, gear: false } };
+const tset = { pos: {}, scale: 1, alpha: 1, leftFire: false, gyro: 'off', aimMode: 'mixed', autoFire: 'always', adsSens: 1, aimAssist: 'strong', autoPick: { ammo: true, heals: true, supplies: true, gear: false } };
 try { Object.assign(tset, JSON.parse(localStorage.getItem('dz_touch') || '{}')); } catch { /* keep the defaults */ }
 tset.autoPick = { ammo: true, heals: true, supplies: true, gear: false, ...(tset.autoPick || {}) };
 if (!tset.lf2) { tset.leftFire = false; tset.lf2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }   // the left FIRE button starts off once (turn it on in Settings)
-const saveTset = () => { try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } };
+// Auto-fire starts on (once) for phones: aiming and holding FIRE with one thumb is the hard part on a
+// phone, so like the big phone shooters' simple mode the gun fires itself when the crosshair is on someone.
+if (!tset.af2) { if (!tset.autoFire || tset.autoFire === 'off') tset.autoFire = 'always'; tset.af2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }
+const saveTset = () => { try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } markAutoFire(); };
+/** The FIRE buttons wear an AUTO badge while auto-fire is on. */
+function markAutoFire() { for (const b of document.querySelectorAll('#touch .tbtn.fire')) b.classList.toggle('auto', !!tset.autoFire && tset.autoFire !== 'off'); }
 // Line icons for the phone buttons (24-unit grid, drawn in the button's text colour).
 const TICON = {
   fire: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/>',
@@ -5180,6 +5188,7 @@ function buildTouchUI() {
     '<div id="tedit" hidden><b>Drag any button to move it</b><span><button class="tbtn tiny" data-ed="small">Smaller</button><button class="tbtn tiny" data-ed="big">Bigger</button><button class="tbtn tiny" data-ed="faint">More see-through</button><button class="tbtn tiny" data-ed="solid">Less</button><button class="tbtn tiny" data-ed="reset">Reset</button><button class="tbtn tiny" data-ed="done">Done</button></span></div>' +
     `<div class="ttop">${TOUCH_TOP.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>` +
     `<div class="tmore" hidden>${TOUCH_MORE.map(([l, a]) => `<button class="tbtn tiny" data-act="${a}">${l}</button>`).join('')}</div>`;
+  markAutoFire();
   for (const b of ui.querySelectorAll('#tedit [data-ed]')) b.addEventListener('click', (e) => { e.stopPropagation(); editTouch(b.dataset.ed); });
   for (const b of ui.querySelectorAll('.tbtn[data-act]')) {
     // Layout editor: drag the button to where you want it.

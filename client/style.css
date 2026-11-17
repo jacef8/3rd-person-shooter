@@ -532,6 +532,7 @@ input { min-height: 44px; border-radius: 10px; }
 body.touchui .tbtn { background: rgba(20, 24, 30, 0.35); border: 1.5px solid rgba(255, 255, 255, 0.35); font-size: 12px; }
 body.touchui .tbtn.on { background: rgba(255, 138, 42, 0.55); border-color: var(--accent); }
 body.touchui .tbtn.fire { background: rgba(170, 30, 30, 0.42); }
+body.touchui .tbtn.fire.auto::after { content: 'AUTO'; position: absolute; top: -9px; left: 50%; transform: translateX(-50%); padding: 2px 7px; border-radius: 8px; background: #ffc53d; color: #111; font: 800 11px/1.2 var(--font-text); letter-spacing: 0.08em; pointer-events: none; }
 body.touchui .tbtn.big { width: 68px; height: 68px; right: calc(14px + env(safe-area-inset-right)); bottom: 16px; font-size: 13px; }
 body.touchui .tbtn.mid { width: 52px; height: 52px; }
 body.touchui .tbtn.sm { width: 48px; height: 48px; }
