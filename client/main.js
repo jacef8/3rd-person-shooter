@@ -3171,6 +3171,24 @@ function openGunsmith() {
   const list = ownedWeapons();
   if (!list.some((w) => w.item.id === gs.selectedId)) gs.selectedId = list[0]?.item.id ?? null;
   renderGunsmith();
+  if (state.inputMode === 'pad') gsFocusParts();
+}
+/** Controller: the highlight goes to the part fitted in the slot shown (the list you pick from). */
+function gsFocusParts() {
+  const o = $('gsOptions');
+  const el = o.querySelector('.gsopt.sel') || o.querySelector('.gsopt:not(.locked)') || o.querySelector('button:not([disabled])');
+  if (el) padFocus(el);
+}
+/** Controller: the next (or previous) slot that has parts for this gun, its parts listed at once. */
+function gsStepSlot(step) {
+  const slots = [...$('gsSlots').querySelectorAll('.gsslot:not([disabled])')].map((b) => b.dataset.pad.slice(3));
+  if (!slots.length) return;
+  const k = slots.indexOf(gs.slot);
+  gs.slot = slots[(k + step + slots.length) % slots.length]; gs.hover = null;
+  sfx.click();
+  renderGunsmith();
+  $('gsOptions').scrollTop = 0;
+  gsFocusParts();
 }
 function closeGunsmith() {
   state.gunsmithOpen = false;
@@ -3239,7 +3257,7 @@ function renderGunsmith() {
     b.className = 'gsweapon' + (!building && item.id === gs.selectedId ? ' sel' : '');
     b.dataset.pad = `gw-${item.id}`;
     b.innerHTML = `<b>${item.name}</b><small>${where}</small>`;
-    b.onclick = () => { gs.mode = 'gun'; gs.selectedId = item.id; gs.hover = null; renderGunsmith(); };
+    b.onclick = () => { gs.mode = 'gun'; gs.selectedId = item.id; gs.hover = null; renderGunsmith(); if (state.inputMode === 'pad') gsFocusParts(); };
     wl.append(b);
   }
   const nb = document.createElement('button');
@@ -3294,7 +3312,7 @@ function renderGunsmith() {
     b.dataset.pad = `gs-${slot}`;
     b.innerHTML = `<small>${SLOT_LABELS[slot]}</small><b>${anyFit ? cur : '—'}</b>`;
     b.disabled = !anyFit;
-    b.onclick = () => { gs.slot = slot; gs.hover = null; renderGunsmith(); const o = $('gsOptions'); o.scrollTop = 0; };
+    b.onclick = () => { gs.slot = slot; gs.hover = null; renderGunsmith(); const o = $('gsOptions'); o.scrollTop = 0; if (state.inputMode === 'pad') gsFocusParts(); };
     slotsEl.append(b);
   }
   if (!gs.slot || (gs.slot !== 'paint' && !Object.entries(PARTS).some(([id, p]) => p.slot === gs.slot && partFits(id, item.archetype)))) gs.slot = firstFit || 'paint';
@@ -4492,6 +4510,7 @@ function pollPad(dt, now) {
     else if (dir && (navPressed || now > pad.navAt)) {
       // On a number box or a pick-list, left and right change it (hold LB or RB for tens); up and down move on.
       if (dial && dir[0]) { padAdjust(cur, dir[0] * (b(BTN.LB) || b(BTN.RB) ? 10 : 1)); pad.navAt = now + (navPressed ? 380 : 90); }
+      else if (panel.id === 'gunsmith' && dir[0] && $('gsOptions').contains(cur) && gs.mode !== 'build') { gsStepSlot(dir[0]); pad.navAt = now + 380; }
       else { moveFocus(panel, dir[0], dir[1]); pad.navAt = now + (navPressed ? 380 : 160); }
     }
     if (!dir) pad.navAt = 0;
@@ -4524,6 +4543,17 @@ function pollPad(dt, now) {
     if (just(BTN.B)) { pad.bEat = true; padBack(); }
     if (just(BTN.MENU)) pad.menuEat = true;
     if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
+    if (panel.id === 'gunsmith' && now > (pad.armAt || 0)) {
+      // LT / RT: the slot before or after (sight, muzzle, grip...), its parts listed with the fitted one
+      // highlighted; up and down go through them (the gun shows each one as you pass it), Ⓐ fits it.
+      if (just(BTN.LT)) gsStepSlot(-1);
+      if (just(BTN.RT)) gsStepSlot(1);
+      // Ⓧ: back to the stock part for this slot.
+      if (just(BTN.X)) {
+        const item = ownedWeapons().find((w) => w.item.id === gs.selectedId)?.item;
+        if (item && gs.mode !== 'build' && gs.slot && gs.slot !== 'paint' && item.parts[gs.slot] && item.parts[gs.slot] !== DEFAULT_PARTS[gs.slot]) { sfx.click(true); send({ t: 'gunsmith', action: 'attach', itemId: item.id, slot: gs.slot, partId: DEFAULT_PARTS[gs.slot] }); }
+      }
+    }
     // Every other window: LB / RB step between its columns (the gunsmith: between your guns), so you
     // never have to walk the highlight across a whole screen.
     if (panel.id !== 'inventory' && panel.id !== 'osk' && now > (pad.armAt || 0) && (just(BTN.LB) || just(BTN.RB))) {
@@ -4531,7 +4561,7 @@ function pollPad(dt, now) {
       if (panel.id === 'gunsmith') {
         const guns = [...$('gsWeapons').querySelectorAll('button')], k = guns.findIndex((g) => g.classList.contains('sel'));
         const next = guns[(k + step + guns.length) % guns.length];
-        if (next) { sfx.click(); next.click(); setTimeout(() => { const g = $('gsWeapons').querySelector('.sel'); if (g) padFocus(g); }, 60); }
+        if (next) { sfx.click(); next.click(); }
       } else panelJump(panel, step);
     }
     // The inventory: Ⓧ and Ⓨ act on the highlighted line; LB / RB jump between its columns.
