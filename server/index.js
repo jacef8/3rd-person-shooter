@@ -3685,7 +3685,7 @@ function manageAmbientBots() {
 // squad nearby; a shot they hear brings them to look. In a fight they strafe, close in or back off to
 // a good range, rush the last place they saw you when you break line of sight, and pull back to cover
 // when hurt. They give up after a while and drift home.
-const BOT_AI = { aggroMs: 25_000, callRange: 40, chaseRange: 160, fireRange: 70, bestMin: 9, bestMax: 26, runSpeed: 4.8, walkSpeed: 3.2, flinchMs: 280, hurtBelow: 0.35 };
+const BOT_AI = { aggroMs: 25_000, callRange: 40, chaseRange: 160, fireRange: 70, bestMin: 9, bestMax: 26, runSpeed: 6.0, walkSpeed: 3.8, flinchMs: 280, hurtBelow: 0.35 };
 const fighter = (b) => !b.dead && !b.animal && !b.npc && !b.dog;
 function botProvoked(b, attacker, call = true) {
   const now = Date.now();
@@ -5039,6 +5039,7 @@ function handleState(p, msg) {
   p.yaw = Number(msg.yaw) || 0;
   p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
   p.crouch = (!!msg.crouch && !p.prone) || !!p.downed;
+  p.slide = !!msg.slide && p.crouch && !p.downed;   // (for how others draw you)
   p.aiming = !!msg.aim;
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
   p.y = np.y; p.yx = p.x; p.yz = p.z;
@@ -5403,7 +5404,7 @@ const loop = setInterval(() => {
   if (tick % SNAPSHOT_EVERY === 0 && players.size) {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
       id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
-      crouch: p.crouch, prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
+      crouch: p.crouch, ...(p.slide ? { sl: 1 } : {}), prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : p.hop ? Math.round(p.hop.alt * 100) / 100 : undefined,
       y: !p.boat && standing(p) > terrain.height(p.x, p.z) + 0.8 ? +standing(p).toFixed(2) : undefined,   // up on a bridge deck

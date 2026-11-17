@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from '/addons/geometries/RoundedBoxGeometry.js';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, JUMP_V, JUMP_G } from '/shared/world.js';
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
@@ -1114,7 +1114,7 @@ function updateCharacterMesh(g, c, dt) {
     // Ahead and sideways in the person's own frame, each frame's step measured against the way they
     // face right now, then smoothed: turning while running stays running ahead (smoothing the step in
     // the world instead lagged behind the turn and read as a strafe for a moment, a hitch in the stride).
-    const yaw = g.rotation.y, still = c.boat || c.downed || c.prone || c.air;
+    const yaw = g.rotation.y, still = c.boat || c.downed || c.prone || c.air || c.slide || c.sl;   // (a slide is a crouch carried along, not running legs)
     const rf = tooFar ? 0 : (dxm * Math.sin(yaw) + dzm * Math.cos(yaw)) / adt, rs = tooFar ? 0 : (dxm * Math.cos(yaw) - dzm * Math.sin(yaw)) / adt;
     u.vf = (u.vf || 0) + (rf - (u.vf || 0)) * vk; u.vs = (u.vs || 0) + (rs - (u.vs || 0)) * vk;
     u.vx = u.vf * Math.sin(yaw) + u.vs * Math.cos(yaw); u.vz = u.vf * Math.cos(yaw) - u.vs * Math.sin(yaw);
@@ -3323,6 +3323,7 @@ function jump() {
   const me = state.me, now = performance.now();
   if (!me || me.dead || me.downed || me.boat || state.air || state.hop || state.prone || now - (state.lastJump || 0) < 650 || build.on) return;
   state.lastJump = now;
+  state.slide = null;   // a jump out of a slide keeps its speed, as momentum does
   state.hop = { alt: 0, vy: JUMP_V };
   state.crouch = false;
   send({ t: 'jump' });
@@ -3379,7 +3380,18 @@ function doAction(a) {
     case 'slot2': send({ t: 'weapon', slot: 'primary2' }); break;
     case 'slot3': send({ t: 'weapon', slot: 'secondary' }); break;
     case 'heal': send({ t: 'inv', action: 'use' }); break;
-    case 'crouch': if (state.prone) { state.prone = false; state.crouch = true; } else state.crouch = !state.crouch; stanceNote(); break;
+    case 'crouch': {
+      // Crouch at a sprint: slide.
+      const now = performance.now(), v = state.vel ? Math.hypot(state.vel[0], state.vel[1]) : 0;
+      if (state.sprint && !state.prone && !state.hop && !state.air && v >= SLIDE.minSpeed && now >= (state.slideReadyAt || 0)) {
+        state.slide = { start: now, until: now + SLIDE.ms, dir: [state.vel[0] / v, state.vel[1] / v] };
+        state.slideReadyAt = now + SLIDE.cooldownMs;
+        state.crouch = true; sfx.step?.('grass', false);
+        break;
+      }
+      if (state.prone) { state.prone = false; state.crouch = true; } else state.crouch = !state.crouch;
+      stanceNote(); break;
+    }
     case 'prone': state.prone = !state.prone; if (state.prone) state.crouch = false; stanceNote(); break;
     case 'sprint': touch.sprintOn = !touch.sprintOn; if (touch.sprintOn) { state.prone = false; state.crouch = false; } break;
   }
@@ -4970,7 +4982,11 @@ function frame(now) {
     const mobility = (ws ? ws.mobility : 1.05) + armorStats(me.inv.armor).mobility;
     if (me.downed || (me.food ?? 100) < HOMESTEAD.hunger.noSprintBelow) state.sprint = false;
     const stunnedNow = performance.now() < (state.stunnedUntil || 0);
-    const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : state.prone ? PRONE_SPEED : (state.sprint ? SPRINT_SPEED : (state.crouch || state.aiming) ? CROUCH_SPEED : WALK_SPEED) * mobility;
+    const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : state.prone ? PRONE_SPEED : (state.sprint ? SPRINT_SPEED : state.crouch ? CROUCH_SPEED : state.aiming ? ADS_SPEED : WALK_SPEED) * mobility;
+    // Sliding: carried along the way you were sprinting, fast at first and slowing to a crouch; the
+    // stick steers it a little. Standing up (sprint or jump) or hitting something ends it.
+    const sl = state.slide && now < state.slide.until && !me.downed && !stunnedNow ? state.slide : null;
+    if (state.slide && !sl) state.slide = null;
     const mYaw = touch.freeLook ? touch.freeLook.yaw : state.yaw;   // free look: you keep going the way you faced
     const fx = Math.sin(mYaw), fz = Math.cos(mYaw);
     const rx = -Math.cos(mYaw), rz = Math.sin(mYaw);
@@ -4987,12 +5003,18 @@ function frame(now) {
         sfx.step(gh < 0.2 ? 'water' : onRoad ? 'road' : 'grass', state.crouch);
       }
     }
-    // Momentum: you reach full speed in about a tenth of a second and slide a step when you let go,
-    // instead of starting and stopping dead.
+    // Momentum: you reach full speed in well under a tenth of a second and stop almost as fast:
+    // quick to start and stop, without dead stops.
     if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
     updateStance(dt, now);
-    const want = len > 0.05 && !stunnedNow && now >= (state.stanceBusyUntil || 0) ? [mx * speed, mz * speed] : [0, 0];
-    const v = state.vel || (state.vel = [0, 0]), rate = Math.min(1, dt * (len > 0.05 ? 11 : 9));
+    let want = len > 0.05 && !stunnedNow && now >= (state.stanceBusyUntil || 0) ? [mx * speed, mz * speed] : [0, 0];
+    if (sl) {
+      const t = (now - sl.start) / SLIDE.ms, s = SLIDE.speed * (1 - 0.7 * t * t);
+      if (len > 0.05) { const k = Math.min(1, dt * 2.5); sl.dir[0] += (mx - sl.dir[0]) * k; sl.dir[1] += (mz - sl.dir[1]) * k; const l = Math.hypot(sl.dir[0], sl.dir[1]) || 1; sl.dir[0] /= l; sl.dir[1] /= l; }
+      want = [sl.dir[0] * s, sl.dir[1] * s];
+      state.sprint = false; state.crouch = true;
+    }
+    const v = state.vel || (state.vel = [0, 0]), rate = Math.min(1, dt * (sl ? 30 : len > 0.05 ? 16 : 14));
     v[0] += (want[0] - v[0]) * rate; v[1] += (want[1] - v[1]) * rate;
     if (Math.hypot(v[0], v[1]) > 0.05) {
       const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, myY(), state.hop ? state.hop.alt : 0);
@@ -5005,7 +5027,7 @@ function frame(now) {
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', tp: state.tp || 0, x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch || (state.prone && !proneSettled()), prone: proneSettled(), aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined, crash: state.boat?.crash ? +state.boat.crash.toFixed(1) : undefined });
+    send({ t: 'state', tp: state.tp || 0, ...(state.slide ? { slide: 1 } : {}), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch || (state.prone && !proneSettled()), prone: proneSettled(), aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined, crash: state.boat?.crash ? +state.boat.crash.toFixed(1) : undefined });
     if (state.boat) state.boat.crash = 0;
   }
 
@@ -5028,7 +5050,7 @@ function frame(now) {
   const nowP = performance.now();
   const myAct = state.hack ? { act: state.hack.kind, ap: Math.min(1, (nowP - state.hack.start) / state.hack.total) }
     : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) } : {};
-  updateCharacterMesh(selfMesh, { ...myAct, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { ...myAct, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
@@ -5078,7 +5100,7 @@ function frame(now) {
   sfx.setListener(camera.position.x, camera.position.y, camera.position.z, state.yaw);
   // Optic zoom sets ADS field of view; handling sets how fast you get there.
   const ws = me && weaponStats(me.inv[me.active]);
-  const fov = aim && ws ? 70 / Math.max(1.4, ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : state.sprint ? 76 : 70;   // a touch wider at a sprint
+  const fov = aim && ws ? 70 / Math.max(1.4, ws.zoom + (state.zoomAlt ? ws.zoomAlt : 0)) : state.slide ? 80 : state.sprint ? 77 : 70;   // wider at a sprint, wider still on a slide
   updateSight(aim ? ws : null, now);
   const adsRate = ws ? 4 + ws.handling / 6 : 12;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * adsRate); camera.updateProjectionMatrix(); }

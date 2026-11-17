@@ -20,10 +20,14 @@ export const STAND_EYE = 1.6;
 export const CROUCH_EYE = 1.05;
 export const PRONE_EYE = 0.45;
 export const PRONE_HEIGHT = 0.6;
-export const PRONE_SPEED = 1.3;
-export const WALK_SPEED = 5.4;
-export const SPRINT_SPEED = 8.6;
-export const CROUCH_SPEED = 2.9;
+// Fast-paced: a jog that covers ground, a real sprint, and aiming that still moves.
+export const PRONE_SPEED = 1.6;
+export const WALK_SPEED = 6.2;
+export const SPRINT_SPEED = 9.8;
+export const CROUCH_SPEED = 3.6;
+export const ADS_SPEED = 4.4;   // walking while aiming down the sights
+/** Sprint, then crouch: a slide that starts faster than a sprint and runs out over `ms` (then you're crouched). */
+export const SLIDE = { speed: 12.5, ms: 750, cooldownMs: 1100, minSpeed: 7 };
 export const INTERACT_RANGE = 2.4;
 
 export function mulberry32(seed) {
