@@ -14,6 +14,8 @@ import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { packMap, natureTiles } from './gmap.js';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -134,6 +136,16 @@ function loadDb() {
 }
 const db = loadDb();
 Object.assign(db, { seed: SEED, version: DB_VERSION, size: WORLD_SIZE });
+// Guns renamed since they were made (the "Carbine" is the Assault Rifle now): saved ones take the new name.
+{
+  const OLD = { carbine: ['Carbine'] };
+  const walk = (o, depth = 0) => {
+    if (!o || typeof o !== 'object' || depth > 8) return;
+    if (o.kind === 'weapon' && OLD[o.archetype]?.includes(o.name) && ARCHETYPES[o.archetype]) o.name = ARCHETYPES[o.archetype].label;
+    for (const v of Array.isArray(o) ? o : Object.values(o)) if (v && typeof v === 'object') walk(v, depth + 1);
+  };
+  walk(db);
+}
 moveWithEdits();
 /**
  * A building moved or turned in the map editor takes what's inside it along: a claimed building's stash
@@ -177,7 +189,29 @@ if (process.send) process.on('message', (m) => {
     const missing = Object.entries(EDITS?.b || {}).filter(([k, e]) => !e.gone && !built.has(Number(k))).map(([k]) => Number(k));
     process.send({ t: 'claims', id: m.id, list: out, missing });
   } else if (m?.t === 'check') process.send({ t: 'check', id: m.id, ...checkPlacement(Number(m.si), m.e || {}) });
+  // The Godot client's copy of the map (server/gmap.js): packed once, written beside the other temp files.
+  else if (m?.t === 'gmap') gmapFiles().then((dir) => process.send({ t: 'gmap', id: m.id, dir }), (e) => process.send({ t: 'gmap', id: m.id, error: String(e) }));
+  else if (m?.t === 'nature') process.send({ t: 'nature', id: m.id, tiles: natureTiles(map, (m.tiles || []).filter((q) => Array.isArray(q) && q.length === 2 && q.every(Number.isInteger)), map.felled) });
 });
+let gmapReady = null;
+if (process.send && !process.env.NO_GMAP) setTimeout(() => gmapFiles().catch((e) => console.warn('Godot map:', e)), 8000).unref();   // ready before anyone asks
+function gmapFiles() {
+  gmapReady ??= new Promise((resolve, reject) => setImmediate(() => {
+    try {
+      const t0 = Date.now(), dir = path.join(os.tmpdir(), `deadzone-gmap-${WORLD_ID}-${MAP_SUM}`);
+      if (!fs.existsSync(path.join(dir, 'meta.json.gz'))) {
+        const pk = packMap(map, { seed: SEED, sum: String(MAP_SUM) });
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'heights.d16.gz'), pk.heights);
+        fs.writeFileSync(path.join(dir, 'colors.rgb.gz'), pk.colors);
+        fs.writeFileSync(path.join(dir, 'meta.json.gz'), zlib.gzipSync(JSON.stringify(pk.meta), { level: 9 }));
+        console.log(`Godot map packed in ${Date.now() - t0} ms`);
+      }
+      resolve(dir);
+    } catch (e) { gmapReady = null; reject(e); }
+  }));
+  return gmapReady;
+}
 /** Would the world build building `si` where the editor's putting it? The same tests the world makes
  *  when it lays the county out (shared/world.js): on the map, on dry ground, not too steep, nothing in the way. */
 const NATURE = new Set(['tree', 'pine', 'rock', 'boulder', 'bush', 'scrub', 'cactus', 'canopy', 'caveroof', 'cover', 'border']);

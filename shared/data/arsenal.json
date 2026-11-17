@@ -55,7 +55,7 @@
       "zoom": 1.25
     },
     "carbine": {
-      "label": "Carbine",
+      "label": "Assault Rifle",
       "level": 3,
       "cost": 45,
       "semi": false,

@@ -12,7 +12,7 @@ import { PAINTS, DEFAULT_PARTS } from '/shared/items.js';
 const REAL = {
   carbine: { file: 'carbine', len: 0.84, grip: [0.317, 0.45], fore: [0.65, 0.69], bore: 0.76, rail: 0.855, optic: 0.40, mag: [0.475, 0.25] },
   smg:     { file: 'smg', len: 0.62, grip: [0.425, 0.44], fore: [0.78, 0.66], bore: 0.78, rail: 0.93, optic: 0.63, mag: [0.65, 0.23] },
-  dmr:     { file: 'dmr', len: 1.02, grip: [0.30, 0.47], fore: [0.667, 0.72], bore: 0.83, rail: 0.96, optic: 0.45, mag: [0.5, 0.38] },
+  dmr:     { file: 'dmr', len: 1.1, grip: [0.30, 0.52], fore: [0.55, 0.68], bore: 0.85, rail: 0.91, optic: 0.41, mag: [0.334, 0.48] },   // a wood-stocked hunting rifle
   shotgun: { file: 'shotgun', len: 1.0, grip: [0.31, 0.44], fore: [0.70, 0.55], bore: 0.84, rail: 0.91, optic: 0.425, mag: [0.5, 0.6] },
   lmg:     { file: 'lmg', len: 0.98, grip: [0.067, 0.32], fore: [0.517, 0.6], bore: 0.70, rail: 0.82, optic: 0.25, mag: [0.27, 0.19] },
   sidearm: { file: 'sidearm', len: 0.19, grip: [0.18, 0.38], fore: [0.24, 0.3], bore: 0.94, rail: 0.99, optic: 0.5, mag: [0.18, 0.2] },
