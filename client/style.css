@@ -301,6 +301,13 @@ body.building #gadgets { display: none; }
 @keyframes xblink { 50% { background: rgba(120,60,0,0.75); } }
 #downbar { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); padding: 10px 18px; background: var(--danger-surface); border: 1px solid var(--danger); color: var(--ink); font-size: 15px; text-align: center; }
 #downbar b { color: var(--danger); letter-spacing: 0.12em; }
+/* Downed on a phone: buttons to tap (above the touch controls), not keys to press. */
+#downtouch { position: fixed; left: 50%; top: calc(40% + 62px); transform: translateX(-50%); z-index: 7; display: flex; gap: 14px; pointer-events: auto; }
+#downtouch[hidden] { display: none; }
+#downtouch button { min-width: 148px; min-height: 56px; padding: 0 20px; border-radius: 14px; border: 1px solid var(--danger); background: var(--danger-surface); color: var(--ink); font: 700 17px/1 var(--font-text); }
+#downtouch button[data-down="patch"] { background: var(--danger); color: #fff; border-color: var(--danger); }
+#downtouch button[data-down="giveup"].sure { background: #3a0d0d; border-color: #ff6b6b; color: #ffb3b3; }
+#downtouch button[hidden] { display: none; }
 body:has(#downbar:not([hidden])) #game { filter: saturate(0.3) brightness(0.8); }
 #stunfx { position: fixed; inset: 0; background: radial-gradient(circle, rgba(255,255,255,0.95), rgba(220,230,255,0.75)); opacity: 0; pointer-events: none; transition: opacity 0.25s; }
 

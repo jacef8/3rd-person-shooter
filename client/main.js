@@ -1351,7 +1351,17 @@ function damageNumber(n, crit, pos) {
 // Messages: one at a time on a phone (two on a big screen), the same message never twice in a row,
 // a few queued at most, each up long enough to read and no longer.
 const toastQ = { queue: [], shown: new Map() };
+/** The server's messages name keyboard keys ("press E"); say the button for what you're playing on. */
+function deviceKeys(text) {
+  if (typeof text !== 'string') return text;
+  const touchy = state.touchUI && state.inputMode !== 'pad', pad = state.inputMode === 'pad';
+  if (!touchy && !pad) return text;
+  return text.replace(/\b([Pp])ress E\b/g, (_, p) => (touchy ? `${p === 'P' ? 'T' : 't'}ap USE` : `${p}ress ${GLYPHS.E}`))
+    .replace(/\(E\)/g, touchy ? '(tap USE)' : `(${GLYPHS.E})`)
+    .replace(/\b([Pp])ress Q\b/g, (_, p) => (touchy ? `${p === 'P' ? 'T' : 't'}ap Give up` : `${p}ress ${GLYPHS.Q}`));
+}
 function toast(text) {
+  text = deviceKeys(text);
   const now = performance.now();
   if ((toastQ.shown.get(text) || 0) > now - 6000 || toastQ.queue.includes(text)) return;
   toastQ.queue.push(text);
@@ -3858,8 +3868,14 @@ function drawMarkers() {
   if (state.me?.downed && !state.me.dead) {
     const left = Math.max(0, Math.ceil((state.me.downedUntil - Date.now()) / 1000));
     dbar.hidden = false;
-    dbar.innerHTML = `<b>✚ DOWN</b> — bleeding out in ${left}s<br><small>${state.me.selfRevive ? `<kbd>${glyph('E')}</kbd> patch yourself up (uses a medkit, ${COMBAT_RULES.downed.selfReviveMs / 1000}s) · ` : 'Crawl to cover. A crewmate can revive you. '}<kbd>${glyph('Q')}</kbd> give up</small>`;
-  } else dbar.hidden = true;
+    // On a phone: buttons to tap below the bar. With a controller or keyboard: its buttons, named.
+    const touchy = state.touchUI && state.inputMode !== 'pad', dt = $('downtouch');
+    const patch = `patch yourself up (uses a medkit, ${COMBAT_RULES.downed.selfReviveMs / 1000}s)`;
+    dbar.innerHTML = `<b>✚ DOWN</b> — bleeding out in ${left}s<br><small>${touchy ? (state.me.selfRevive ? `Patch up to ${patch.replace('patch yourself up', 'get back on your feet')}, or crawl to cover.` : 'Crawl to cover. A crewmate can revive you.')
+      : `${state.me.selfRevive ? `<kbd>${glyph('E')}</kbd> ${patch} · ` : 'Crawl to cover. A crewmate can revive you. '}<kbd>${glyph('Q')}</kbd> give up`}</small>`;
+    dt.hidden = !touchy;
+    dt.querySelector('[data-down="patch"]').hidden = !state.me.selfRevive || !!state.hack;
+  } else { dbar.hidden = true; $('downtouch').hidden = true; }
   // Extraction countdown for anyone near a flare.
   const xb = $('extractbar');
   const ex = state.extracts.find((e) => Math.hypot(e.x - state.x, e.z - state.z) < EXTRACT.radius * 3);
@@ -4152,7 +4168,23 @@ function airHud() {
   const sprint = state.inputMode === 'pad' ? 'L3' : !$('touch').hidden ? 'Sprint' : 'Shift';
   return `${a.mode === 'suit' ? '🐿 Squirrel suit' : 'Freefall'} · ${height} · hold <kbd>${sprint}</kbd> to fly the suit · <kbd>${glyph('E')}</kbd> pull chute (opens by itself at ${feet(SKY.autoChute, 10)})`;
 }
-function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : k; }
+// On a phone: the on-screen button (or where to find it) instead of a key it hasn't got.
+const TOUCH_NAMES = { E: 'USE', M: 'the minimap', Tab: '⋯', P: '⋯ → CREW', V: '⋯ → CAMO', X: '⋯ → BUILD', Q: 'swap' };
+function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : state.touchUI ? (TOUCH_NAMES[k] || k) : k; }
+// Downed on a phone: Patch up, or Give up (tapped twice, so a panicked thumb doesn't end it).
+$('downtouch').addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('[data-down]');
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  if (b.dataset.down === 'patch') return send({ t: 'interact' });
+  if (!b.classList.contains('sure')) {
+    b.classList.add('sure'); b.textContent = 'Tap again to give up';
+    clearTimeout(b._t); b._t = setTimeout(() => { b.classList.remove('sure'); b.textContent = 'Give up'; }, 2500);
+    return;
+  }
+  b.classList.remove('sure'); b.textContent = 'Give up';
+  send({ t: 'giveUp' });
+});
 
 for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, () => sfx.unlock(), { passive: true });
 function setInputMode(m) {
@@ -5076,7 +5108,7 @@ function frame(now) {
     if (t.life <= 0) { scene.remove(t.obj); if (!t.shared) t.obj.geometry.dispose(); tracers.splice(i, 1); }
   }
 
-  const prompt = alive && !state.invOpen && !state.air ? nearestInteractable() : null;
+  const prompt = alive && !state.invOpen && !state.air && !state.me?.downed ? nearestInteractable() : null;   // (down: the DOWN panel says what you can do)
   state.promptText = prompt;
   // On a phone the prompt names the button to tap (the same word and hand as the USE button, lit up).
   const pkey = state.touchUI && state.inputMode !== 'pad' ? `<kbd class="tk">${ticon('use')}${useVerb(prompt)}</kbd>` : `<kbd>${glyph('E')}</kbd>`;

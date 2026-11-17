@@ -3207,7 +3207,7 @@ function goDown(p, attacker, headshot) {
   send(p.ws, { t: 'container', closed: true });
   feed(`${attacker ? attacker.name : 'The city'} downed ${p.name}`);
   for (const m of squadMembersOnline(p)) if (m !== p) { toast(m, `✚ ${p.name} is down — get to them and revive (E)`); send(m.ws, { t: 'alert', x: p.x, z: p.z, text: `${p.name} down` }); }
-  toast(p, soloRevive(p) ? 'You\'re down! Press E / Ⓐ to patch yourself up with a medkit, or crawl to cover. Q / Ⓨ to give up.' : 'You\'re down! Crawl to cover — a crewmate can revive you. Q / Ⓨ to give up.');
+  toast(p, soloRevive(p) ? 'You\'re down! Patch yourself up with a medkit, or crawl to cover.' : 'You\'re down! Crawl to cover — a crewmate can revive you. Q / Ⓨ to give up.');
   dirty(p);
 }
 function revive(p, by) {
