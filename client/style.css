@@ -871,7 +871,7 @@ body.touchui #inventory { height: 96vh; }
   #invDetail { padding: 10px; gap: 8px; } #invDetail h3 { font-size: 16px; } #invDetail p { font-size: 14px; } #invDetail .dact { min-height: 44px; font-size: 15px; }
   #inventory .invtop button, #invTabs .invtab { min-height: 38px; }
 }
-#youCol > h2:first-child, #packCol > h2:first-child { display: none; }
+/* (the column headings show: the inventory is all on one screen) */
 @media (max-height: 520px) { .itile { min-height: 80px; } }
 #reconnect { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; padding: 8px 16px; border-radius: 999px; background: rgba(10, 12, 16, 0.85); color: #ffc53d; font: 700 15px/1.2 var(--font-text); pointer-events: none; }
 #reconnect[hidden] { display: none; }
@@ -892,3 +892,47 @@ body.touchui .tbtn.use { right: calc(18px + env(safe-area-inset-right)); bottom:
 body.touchui .tbtn.r6 { left: calc(14px + env(safe-area-inset-left)); top: calc(78px + env(safe-area-inset-top)); right: auto; bottom: auto; width: 48px; height: 48px; }   /* heal */
 body.touchui .tbtn.r5 { left: calc(70px + env(safe-area-inset-left)); top: calc(78px + env(safe-area-inset-top)); right: auto; bottom: auto; width: 48px; height: 48px; }   /* tag */
 body.touchui .tbtn.zoom { right: calc(100px + env(safe-area-inset-right)); bottom: 66px; top: auto; left: auto; width: 48px; height: 48px; }  /* only through a 2-zoom scope */
+
+/* ---- Inventory, one screen (PUBG-style): Nearby | Backpack | Equipped, and the choices bar below. */
+#inventory { width: min(1320px, 98vw); height: min(92vh, 880px); max-height: 96vh; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+#inventory .invcols, #inventory:has(#containerCol[hidden]) .invcols { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1.1fr); gap: 12px; overflow: hidden; }
+#inventory .invcols .invcol { height: auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--surface-2, var(--surface)); border: 1px solid var(--line); border-radius: 14px; scrollbar-width: thin; }
+#inventory .invcols .invcol > h2 { margin: 2px 2px 4px; }
+#inventory .invcols .invcol > * { flex-shrink: 0; }
+#inventory .invcols .invcol .empty { padding: 10px 4px; color: var(--ink-2); font-size: 14px; }
+.irow { position: relative; display: grid; grid-template-columns: 60px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 6px 10px 6px 8px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-left: 5px solid var(--bar, #5a5f68); border-radius: 10px; text-align: left; cursor: pointer; font: inherit; }
+.irow.mini { min-height: 46px; grid-template-columns: 34px minmax(0, 1fr) auto; }
+.irow.big { min-height: 76px; }
+.irow .ic { font-size: 26px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+.irow.mini .ic { font-size: 20px; }
+.irow .ic .gunbadge { font-size: 10.5px; padding: 5px 4px; max-width: 58px; overflow: hidden; }
+.irow .tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.irow .tx b { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.irow .tx small { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.irow .tx .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.irow .tx .chip { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2, #22262c); color: var(--ink-3, #9aa0a8); border: 1px solid var(--line); }
+.irow .tx .chip.on { color: var(--ink); border-color: var(--accent); }
+.irow .qa { display: none; font-size: 12.5px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.irow.sel .qa { display: inline; }
+.irow.sel, .irow.padfocus { border-color: var(--accent); background: var(--accent-tint); box-shadow: 0 0 0 2px var(--accent) inset; }
+.irow.inhand::after { content: 'IN HAND'; position: absolute; top: 6px; right: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--on-accent, #111); background: var(--accent); border-radius: 5px; padding: 1px 5px; }
+.irow.inhand.sel .qa { margin-top: 18px; }
+.irow.hot .tx small { color: #ff8a3d; font-weight: 700; }
+.irow.idle { opacity: 0.78; }
+#invBar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; min-height: 78px; padding: 10px 14px; background: var(--surface-2, var(--surface)); border: 1px solid var(--line); border-radius: 14px; }
+#invBar .info { display: flex; gap: 12px; align-items: center; min-width: 0; }
+#invBar .info .ic { font-size: 34px; line-height: 1; }
+#invBar .info h3 { margin: 0 0 2px; font-size: 16px; }
+#invBar .info p { margin: 0; font-size: 14px; color: var(--ink-2); }
+#invBar .info p.at { color: var(--ink-3, #9aa0a8); font-size: 13px; }
+#invBar .acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+#invBar .acts .dact { min-height: 46px; padding: 0 16px; font-size: 15px; }
+#invBar .acts .why { margin: 0; color: var(--ink-2); font-size: 14px; }
+@media (max-width: 760px) {
+  #inventory .invcols, #inventory:has(#containerCol[hidden]) .invcols { grid-template-columns: 1fr 1fr; }
+  #inventory #youCol { grid-column: 1 / -1; }
+  #invBar { grid-template-columns: 1fr; }
+}
+body.touchui #inventory { width: 99vw; height: 96vh; }
+body.touchui #inventory .invcols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr); }
+body.touchui .irow { min-height: 52px; }

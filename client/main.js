@@ -2141,13 +2141,15 @@ function attachmentLine(item) {
 }
 /** A gun's main attachment slots as chips (fitted ones lit), for the gear column. */
 const CHIP_SLOTS = [['optic', 'Sight'], ['muzzle', 'Muzzle'], ['underbarrel', 'Grip'], ['magazine', 'Mag'], ['stock', 'Stock']];
-function attachmentChips(item) {
+function attachmentChips(item, all = true) {
   if (item.kind !== 'weapon') return '';
-  return `<span class="chips">${CHIP_SLOTS.map(([sl, label]) => {
+  // Equipped guns show every slot (empty ones dim); elsewhere only what's fitted.
+  const chips = CHIP_SLOTS.map(([sl, label]) => {
     const id = item.parts?.[sl], part = id && PARTS[id];
     const fitted = part && part.level > 1;
-    return `<span class="chip${fitted ? ' on' : ''}">${fitted ? part.name.replace(/ (Sight|Scope|Sights)$/, '') : `${label}: —`}</span>`;
-  }).join('')}</span>`;
+    return fitted ? `<span class="chip on">${part.name.replace(/ (Sight|Scope|Sights)$/, '')}</span>` : all ? `<span class="chip">${label}</span>` : '';
+  }).join('');
+  return chips ? `<span class="chips">${chips}</span>` : '';
 }
 /** Change parts on a gun: at your stash house's gunsmith (or anywhere while testing). */
 function partsAction(it) {
@@ -2193,24 +2195,27 @@ function equippedFor(item) {
 }
 
 // ------------------------------------------------------------------ inventory
-// Every line is one button, in one of two columns: you (left) and the stash, bag or body beside you
-// (right). Ⓐ on a line does its only action, or opens a short list of what you can do with it right
-// under it. Up and down go along the column; left and right switch sides.
-const invUi = { tab: 'contents', menuFor: null, kind: null, view: 'pack', sel: null, rows: new Map() };
+// One screen, PUBG-style: what's here (the ground round you, or the stash, bag or body you opened) on the
+// left, your backpack and supplies in the middle, and what you have on (your guns with their parts, and
+// armor) on the right. Everything you can do with the highlighted thing is on the bar along the bottom,
+// and on a controller it's one press: Ⓐ does the main thing (take, equip, use), Ⓧ the next (drop, put
+// away, unequip), Ⓨ the third (the other gun slot, take and equip). LB / RB jump between the columns,
+// the stick or D-pad moves about, Ⓑ closes. With a mouse: click to pick, double-click (or right-click)
+// for the main thing, or click a button on the bar.
+const invUi = { tab: 'contents', menuFor: null, kind: null, sel: null, rows: new Map() };
 const RES_USE = {
   cash: 'Buy and sell at trading posts', parts: 'Build guns and armor at your gunsmith', tech: 'Powers gadgets and lock bypass',
   salvage: 'Stash house upgrades', ammo: 'Rounds for every gun', wood: 'Building (chop trees with a hatchet)', stone: 'Building (mine rocks with a pickaxe)',
   intel: 'Upload at your stash for XP. Lost if you die carrying it.', seeds: 'Plant in a farm plot',
 };
-/** One line: a full-width button. `actions` is [[label, fn], ...]; `why` says why there's nothing to do. */
 const RES_ICON = { food: '🍽️', trade: '📦', cash: '💵', parts: '⚙️', tech: '🔌', salvage: '🔩', ammo: '🟡', rockets: '🚀', wood: '🪵', stone: '🪨', intel: '💾', seeds: '🌱', corn: '🌽', peanuts: '🥜', cotton: '☁️', fish: '🐟', meat: '🍖', meals: '🍲', honey: '🍯', shine: '🫙', hide: '🟫' };
 const GUN_BADGE = { sidearm: 'PISTOL', smg: 'SMG', carbine: 'RIFLE', dmr: 'DMR', shotgun: 'SHOTGUN', lmg: 'LMG', launcher: 'RPG' };
 const KEY_ICON = { gunsmith: '🛠', intel: '💾', travel: '🗺', takeall: '⬇️', putall: '⬆️', ruin: '🔨', abandon: '⚠️', devgunsmith: '🛠', 'g-all': '⬇️' };
-/** The picture on a tile: a gun's type in its paint colour, or an emoji for everything else. */
+/** The picture for a line: a gun's type in its paint colour, or an emoji for everything else. */
 function tileIcon(key, o) {
   const it = o.item;
   if (it?.kind === 'weapon') return `<span class="gunbadge" style="--paint:${PAINTS[it.paint]?.color || '#888'}">${GUN_BADGE[it.archetype] || 'GUN'}</span>`;
-  if (it) return { armor: '🦺', medkit: '🩹', flare: '🧨', hotflare: '🔥', charge: '💣', marker: '🚩', package: '📦', frag: '💥', sensor: '📡' }[it.kind]
+  if (it) return { armor: '🦺', medkit: '🩹', flare: '🧨', hotflare: '🔥', charge: '💣', marker: '🚩', package: '📦', frag: '💥', sensor: '📡', lockbox: '🗄️' }[it.kind]
     || (/hammer/i.test(it.name) ? '🔨' : /hatchet|axe/i.test(it.name) ? '🪓' : /rod|fish/i.test(it.name) ? '🎣' : /shovel/i.test(it.name) ? '⛏️' : /claim/i.test(it.name) ? '🚩' : '🎒');
   const r = key.replace(/^(rs|cr)-/, '');
   if (RES_ICON[r] && /^(rs|cr)-/.test(key)) return RES_ICON[r];
@@ -2220,78 +2225,102 @@ function tileIcon(key, o) {
   if (/^eq-/.test(key)) return '➖';
   return KEY_ICON[key] || '•';
 }
-/** One thing in the bag: a tile. Tap it and the panel beside the tiles shows all of it and what you can do. */
+/**
+ * One line in a column. `o.acts` = { a, x, y } (each [label, fn]): what Ⓐ, Ⓧ and Ⓨ do; `o.more` holds
+ * any further choices (on the bar for mouse and touch). `o.why` says why there's nothing to do.
+ */
 function invRow(key, o) {
   if (o.hot) o = { ...o, tag: 'HOT · extract to keep' };
   invUi.rows.set(key, o);
   const t = document.createElement('button');
-  t.className = 'itile' + (invUi.sel === key ? ' sel' : '') + (o.hot ? ' hot' : '') + (o.actions?.length ? '' : ' idle');
+  const acts = o.acts || {};
+  t.className = 'irow' + (o.big ? ' big' : '') + (o.mini ? ' mini' : '') + (invUi.sel === key ? ' sel' : '') + (o.hot ? ' hot' : '') + (acts.a || acts.x || acts.y || o.more?.length ? '' : ' idle') + (o.inHand ? ' inhand' : '');
   t.dataset.pad = key;
   t.style.setProperty('--bar', o.color || '#5a5f68');
-  t.innerHTML = `<span class="tic">${tileIcon(key, o)}</span><b>${o.title}</b>${o.tag ? `<small>${o.tag}</small>` : ''}`;
-  t.onclick = () => { invUi.sel = key; renderInvDetail(); };
+  t.innerHTML = `<span class="ic">${tileIcon(key, o)}</span><span class="tx"><b>${o.title}</b>${o.tag ? `<small>${o.tag}</small>` : ''}${o.chips || ''}</span>${acts.a && !o.mini ? `<span class="qa"><kbd class="padonly">Ⓐ</kbd> ${acts.a[0]}</span>` : ''}`;
+  t.onfocus = () => invSelect(key);
+  t.onclick = () => { if (state.inputMode === 'pad') invAct('a'); else invSelect(key); };
+  t.ondblclick = () => invAct('a');
+  t.oncontextmenu = (e) => { e.preventDefault(); invSelect(key); invAct('a'); };
   return [t];
 }
-/** The details of what's picked: all of the description, and every choice as a big button. */
-function renderInvDetail() {
-  const el = $('invDetail'), col = $(INV_VIEWS[invUi.view] || 'packCol');
-  const tiles = [...col.querySelectorAll('.itile')];
-  if (!tiles.some((t) => t.dataset.pad === invUi.sel)) invUi.sel = tiles[0]?.dataset.pad || null;
-  for (const t of document.querySelectorAll('#inventory .itile')) t.classList.toggle('sel', t.dataset.pad === invUi.sel);
+function invSelect(key) {
+  if (invUi.sel === key) return;
+  invUi.sel = key;
+  for (const t of document.querySelectorAll('#inventory .irow')) t.classList.toggle('sel', t.dataset.pad === key);
+  renderInvBar();
+}
+/** Do Ⓐ, Ⓧ or Ⓨ on the highlighted line. */
+function invAct(which) {
   const o = invUi.sel && invUi.rows.get(invUi.sel);
-  if (!o) { el.innerHTML = '<p class="empty">Nothing here yet.</p>'; return; }
-  el.innerHTML = `<div class="dhead"><span class="tic">${tileIcon(invUi.sel, o)}</span><div><h3>${o.title}</h3>${o.tag ? `<small>${o.tag}</small>` : ''}</div></div>${o.detail ? `<p>${o.detail}</p>` : ''}${o.extra ? `<p class="at">${o.extra}</p>` : ''}`;
+  const a = o?.acts?.[which];
+  if (a) { sfx.click(true); a[1](); }
+}
+/** The bar along the bottom: all about the highlighted thing, and every choice it has. */
+function renderInvBar() {
+  const el = $('invBar');
+  const o = invUi.sel && invUi.rows.get(invUi.sel);
+  if (!o) { el.innerHTML = '<div class="info"><p class="empty">Pick something to see what it is and what you can do with it.</p></div>'; return; }
+  const pad = state.inputMode === 'pad';
+  el.innerHTML = `<div class="info"><span class="ic">${tileIcon(invUi.sel, o)}</span><div><h3>${o.title}</h3>${o.detail ? `<p>${o.detail}</p>` : ''}${o.extra ? `<p class="at">${o.extra}</p>` : ''}</div></div>`;
   const acts = document.createElement('div');
-  acts.className = 'dacts';
-  (o.actions || []).forEach(([label, fn], i) => { const b = btn(label, () => { fn(); }, i ? 'dact ghost' : 'dact'); b.dataset.pad = `act-${i}`; acts.append(b); });
-  if (!o.actions?.length && o.why) acts.append(Object.assign(document.createElement('p'), { className: 'why', textContent: o.why }));
+  acts.className = 'acts';
+  const a = o.acts || {};
+  for (const [k, glyphK] of [['a', 'Ⓐ'], ['x', 'Ⓧ'], ['y', 'Ⓨ']]) {
+    if (!a[k]) continue;
+    const b = btn(`${pad ? `${glyphK} ` : ''}${a[k][0]}`, () => invAct(k), k === 'a' ? 'dact' : 'dact ghost');
+    b.classList.add('nopad');
+    acts.append(b);
+  }
+  if (!pad) for (const [label, fn] of o.more || []) { const b = btn(label, fn, 'dact ghost'); b.classList.add('nopad'); acts.append(b); }
+  if (!a.a && !a.x && !a.y && !(o.more || []).length && o.why) acts.append(Object.assign(document.createElement('p'), { className: 'why', textContent: o.why }));
   el.append(acts);
 }
-const INV_VIEWS = { gear: 'youCol', pack: 'packCol', here: 'containerCol' };
-function setInvView(v) { invUi.view = v; invUi.sel = null; applyInvView(); renderInvDetail(); }
-function applyInvView() {
-  const c = state.container, me = state.me;
-  for (const [v, id] of Object.entries(INV_VIEWS)) $(id).hidden = v !== invUi.view;
-  const tabs = $('invTabs');
-  const label = { gear: 'Gear', pack: `Backpack ${me.inv.pack.length}/${state.packSize}`, here: c ? c.title : 'Nearby' };
-  tabs.innerHTML = '';
-  for (const v of ['gear', 'pack', 'here']) { const b = btn(label[v], () => setInvView(v), `invtab${invUi.view === v ? ' on' : ''}`); b.dataset.pad = `view-${v}`; tabs.append(b); }
-}
-function closeInvMenu() {
-  const key = invUi.menuFor;
-  invUi.menuFor = null;
-  renderInventory();
-  const row = key && document.querySelector(`#inventory .irow[data-pad="${key}"]`);
-  if (row) { if (state.inputMode === 'pad') padFocus(row); else row.focus(); }
-}
+function closeInvMenu() { invUi.menuFor = null; renderInventory(); }
 const head = (text) => Object.assign(document.createElement('h2'), { textContent: text });
 
 function renderInventory() {
   if (!state.me) return;
-  const was = invUi.kind;
   invUi.rows = new Map();
   buildInvColumns();
-  if ((state.container?.kind || null) !== was || !invUi.view) invUi.view = state.container ? 'here' : invUi.view || 'pack';
-  applyInvView();
-  renderInvDetail();
+  if (!invUi.rows.has(invUi.sel)) invUi.sel = null;
+  if (!invUi.sel) {   // start on something useful: what's here, or the backpack
+    const first = $('containerCol').querySelector('.irow:not(.idle)') || $('packCol').querySelector('.irow') || $('youCol').querySelector('.irow');
+    invUi.sel = first?.dataset.pad || null;
+  }
+  for (const t of document.querySelectorAll('#inventory .irow')) t.classList.toggle('sel', t.dataset.pad === invUi.sel);
+  renderInvBar();
+}
+/** LB / RB: over to the column left or right, onto the line nearest where you were. */
+function invJump(dir) {
+  const cols = ['containerCol', 'packCol', 'youCol'].map($).filter((c) => !c.hidden && focusables(c).length);
+  const cur = cols.findIndex((c) => c.contains(document.activeElement));
+  const next = cols[(cur + dir + cols.length) % cols.length] || cols[0];
+  if (!next) return;
+  const pick = [...next.querySelectorAll('.irow')].find((r) => r.dataset.pad === invUi.sel) || next.querySelector('.irow:not(.idle)') || focusables(next)[0];
+  if (pick) { sfx.click(); padFocus(pick); }
 }
 function buildInvColumns() {
   const me = state.me;
   const inv = me.inv, c = state.container;
   if ((c?.kind || null) !== invUi.kind) { invUi.kind = c?.kind || null; invUi.tab = 'contents'; invUi.menuFor = null; }
   const put = !!c?.canPut;
-  // ---- you
-  // Three columns side by side: what you have on (guns with their parts), your backpack and supplies,
-  // and what's here (the ground around you, or the stash, bag or body you opened).
+  const drop = (it) => ['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })];
+  const gunColor = (it) => (it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68');
+  // ---- what you have on: the three guns (with their parts) and armor
   const you = $('youCol'); you.innerHTML = '';
-  you.append(head('Gear'));
+  you.append(head('Equipped'));
   for (const slot of ['primary', 'primary2', 'secondary', 'armor']) {
     const it = inv[slot], label = SLOT_LABEL[slot];
-    you.append(...invRow(`eq-${slot}`, it
-      ? { item: it, tag: label, hot: !!it.hot, title: it.name, detail: `${label} · ${statLine(it)}`, color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : '#5aa8ff', actions: it.kind === 'weapon' ? [partsAction(it), ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] : [['Unequip', () => send({ t: 'inv', action: 'unequip', slot })]] }
-      : { title: 'Empty', tag: label, detail: `Nothing in ${label.toLowerCase()}. Equip one from your backpack.`, why: 'Pick something in the Backpack tab and equip it.' }));
+    if (!it) { you.append(...invRow(`eq-${slot}`, { title: 'Empty', tag: label, big: slot !== 'armor', detail: `Nothing in ${label.toLowerCase()}. Equip one from your backpack.`, why: 'Highlight something in your backpack and press its button to equip it.' })); continue; }
+    const unequip = ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })];
+    const acts = it.kind === 'weapon'
+      ? { a: me.active === slot ? partsAction(it) : ['Hold it', () => send({ t: 'weapon', slot })], x: unequip, y: me.active === slot ? null : partsAction(it) }
+      : { x: unequip };
+    you.append(...invRow(`eq-${slot}`, { item: it, tag: `${label}${me.active === slot ? ' · in hand' : ''}`, inHand: me.active === slot, hot: !!it.hot, big: it.kind === 'weapon', title: it.name, chips: attachmentChips(it), detail: `${label} · ${statLine(it)}`, extra: attachmentLine(it), color: gunColor(it), acts }));
   }
-  if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', actions: [['Open', openGunsmith]] }));
+  if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', acts: { a: ['Open', openGunsmith] } }));
+  // ---- your backpack, then your supplies
   const packEl = $('packCol'); packEl.innerHTML = '';
   const full = inv.pack.length / (state.packSize || 1);
   packEl.append(head(`Backpack · ${inv.pack.length} of ${state.packSize}`));
@@ -2301,60 +2330,60 @@ function buildInvColumns() {
   packEl.append(bar);
   if (!inv.pack.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
   inv.pack.forEach((it) => {
-    const actions = [];
+    const acts = {}, more = [];
+    // Ⓧ puts it away at a stash, or drops it anywhere else (never on Ⓐ, so a quick press can't lose it).
+    acts.x = put ? ['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })] : it.kind !== 'package' ? drop(it) : null;
+    if (put && it.kind !== 'package') more.push(drop(it));
     if (it.kind === 'weapon' && it.archetype !== 'sidearm') {
-      // Two main guns: put it in either slot (it swaps with what's there).
-      for (const slot of ['primary', 'primary2']) actions.push([inv[slot] ? `${SLOT_LABEL[slot]}: swap for ${inv[slot].name}` : `Carry as ${SLOT_LABEL[slot].toLowerCase()}`, () => send({ t: 'inv', action: 'equip', itemId: it.id, slot })]);
-    } else if (it.kind === 'weapon' || it.kind === 'armor') actions.push(['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })]);
-    if (it.kind === 'medkit') actions.push(['Use', () => send({ t: 'inv', action: 'use' })]);
-    if (it.kind === 'lockbox') actions.push(['Break it open', () => { send({ t: 'inv', action: 'breakbox', itemId: it.id }); closeInventory(); }]);
-    if (it.kind === 'flare') actions.push(['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }]);
-    if (it.kind === 'hotflare') actions.push(['Fire it: hot drop', () => { send({ t: 'inv', action: 'hotdrop', itemId: it.id }); closeInventory(); }]);
-    if (put) actions.push(['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })]);
-    if (it.kind !== 'package') actions.push(['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })]);
-    packEl.append(...invRow(`pk-${it.id}`, { item: it, hot: !!it.hot, title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions }));
+      // Two main guns: Ⓐ into the empty slot (or swapped for the one in hand), Ⓨ into the other.
+      const first = !inv.primary ? 'primary' : !inv.primary2 ? 'primary2' : me.active === 'primary2' ? 'primary2' : 'primary', other = first === 'primary' ? 'primary2' : 'primary';
+      const lab = (slot) => (inv[slot] ? `Swap for ${shortGun(inv[slot])} (${SLOT_LABEL[slot]})` : `Carry as ${SLOT_LABEL[slot].toLowerCase()}`);
+      acts.a = [lab(first), () => send({ t: 'inv', action: 'equip', itemId: it.id, slot: first })];
+      acts.y = [lab(other), () => send({ t: 'inv', action: 'equip', itemId: it.id, slot: other })];
+    } else if (it.kind === 'weapon' || it.kind === 'armor') acts.a = ['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })];
+    if (it.kind === 'medkit') acts.a = ['Use', () => send({ t: 'inv', action: 'use' })];
+    if (it.kind === 'lockbox') acts.a = ['Break it open', () => { send({ t: 'inv', action: 'breakbox', itemId: it.id }); closeInventory(); }];
+    if (it.kind === 'flare') acts.a = ['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }];
+    if (it.kind === 'hotflare') acts.a = ['Fire it: hot drop', () => { send({ t: 'inv', action: 'hotdrop', itemId: it.id }); closeInventory(); }];
+    packEl.append(...invRow(`pk-${it.id}`, { item: it, hot: !!it.hot, title: it.name, tag: it.kind === 'weapon' ? statLine(it) : '', chips: attachmentChips(it, false), detail: statLine(it), extra: attachmentLine(it), color: gunColor(it), acts, more }));
   });
   const carried = RES_UI.filter((r) => me[r]);
   packEl.append(head('Supplies'));
   if (!carried.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No supplies.' }));
-  for (const r of carried.filter((q) => !GROUPED.has(q))) {
-    const actions = [];
-    if (put && r !== 'intel') actions.push(['Put in stash', () => send({ t: 'container', action: 'put', res: r })]);
-    packEl.append(...invRow(`rs-${r}`, { title: resText(r, me[r]), detail: RES_USE[r] || '', color: '#3f4650', actions, why: c ? '' : 'Carried' }));
-  }
   const foods = FOOD_GOODS.filter((r) => me[r]), trades = TRADE_GOODS.filter((r) => me[r]);
   const list = (rs, src) => rs.map((r) => resText(r, src[r])).join(' · ');
   if (foods.length) {
-    const best = foods[0], actions = [[`Eat ${GOODS[best].name} (+${GOODS[best].food} food)`, () => send({ t: 'inv', action: 'eat', good: best })]];
-    if (put) actions.push(['Put food in stash', () => { for (const r of foods) send({ t: 'container', action: 'put', res: r }); }]);
-    packEl.append(...invRow('rs-food', { title: `Food · ${foods.reduce((n, r) => n + me[r], 0)}`, detail: `${list(foods, me)}. Eat it when you're hungry (cooked meals fill you most); sell the rest at a trading post.`, color: '#3f4650', actions }));
+    const best = foods[0];
+    packEl.append(...invRow('rs-food', { mini: true, title: `Food · ${foods.reduce((n, r) => n + me[r], 0)}`, detail: `${list(foods, me)}. Eat it when you're hungry (cooked meals fill you most); sell the rest at a trading post.`, color: '#3f4650',
+      acts: { a: [`Eat ${GOODS[best].name} (+${GOODS[best].food} food)`, () => send({ t: 'inv', action: 'eat', good: best })], x: put ? ['Put food in stash', () => { for (const r of foods) send({ t: 'container', action: 'put', res: r }); }] : null } }));
+  }
+  for (const r of carried.filter((q) => !GROUPED.has(q))) {
+    packEl.append(...invRow(`rs-${r}`, { mini: true, title: resText(r, me[r]), detail: RES_USE[r] || '', color: '#3f4650', acts: { x: put && r !== 'intel' ? ['Put in stash', () => send({ t: 'container', action: 'put', res: r })] : null }, why: 'Carried' }));
   }
   if (trades.length) {
-    const actions = put ? [['Put them in stash', () => { for (const r of trades) send({ t: 'container', action: 'put', res: r }); }]] : [];
-    packEl.append(...invRow('rs-trade', { title: `Trade goods · ${trades.reduce((n, r) => n + me[r], 0)}`, detail: `${list(trades, me)}. Sell at a trading post${me.seeds ? ' (seed packets: plant them in a farm plot)' : ''}.`, color: '#3f4650', actions, why: c ? '' : 'Carried' }));
+    packEl.append(...invRow('rs-trade', { mini: true, title: `Trade goods · ${trades.reduce((n, r) => n + me[r], 0)}`, detail: `${list(trades, me)}. Sell at a trading post${me.seeds ? ' (seed packets: plant them in a farm plot)' : ''}.`, color: '#3f4650',
+      acts: { x: put ? ['Put them in stash', () => { for (const r of trades) send({ t: 'container', action: 'put', res: r }); }] : null }, why: 'Carried' }));
   }
   $('packcount').textContent = `Carrying ${inv.pack.length} of ${state.packSize} · ${me.ammo} rounds`;
   // ---- the stash, bag or body beside you; or, with nothing open, what's on the ground nearby
   const col = $('containerCol');
-  if (!c) {
-    const ground = [...state.loot.values()].map((l) => [Math.hypot(l.data.x - state.x, l.data.z - state.z), l.data]).filter(([d]) => d < 5).sort((a, b) => a[0] - b[0]);
-    col.hidden = false;
-    col.innerHTML = '';
-    col.append(head('On the ground nearby'));
-    if (!ground.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing on the ground within reach. Loot glows with a beam of light: walk up to it.' }));
-    if (ground.length > 1) col.append(...invRow('g-all', { title: 'Take everything here', detail: `${ground.length} things`, color: '#7dff9a', actions: [['Take everything', () => { for (const [, l] of ground) send({ t: 'takeLoot', id: l.id }); }]] }));
-    for (const [, l] of ground) col.append(...invRow(`g-${l.id}`, { lootKind: l.kind, title: `${l.name}${l.amount ? ` ×${l.amount}` : ''}`, detail: lootCategory(l.kind) === 'gear' ? 'Goes in your backpack' : 'Goes in your supplies', color: `#${(LOOT_COLORS[l.kind] ?? 0x5a5f68).toString(16).padStart(6, '0')}`, actions: [['Take', () => send({ t: 'takeLoot', id: l.id })]] }));
-    return;
-  }
   col.hidden = false;
   col.innerHTML = '';
+  if (!c) {
+    const ground = [...state.loot.values()].map((l) => [Math.hypot(l.data.x - state.x, l.data.z - state.z), l.data]).filter(([d]) => d < 5).sort((a, b) => a[0] - b[0]);
+    col.append(head('Nearby'));
+    if (!ground.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing on the ground within reach. Loot glows with a beam of light: walk up to it.' }));
+    const takeAll = ground.length > 1 ? ['Take everything', () => { for (const [, l] of ground) send({ t: 'takeLoot', id: l.id }); }] : null;
+    for (const [, l] of ground) col.append(...invRow(`g-${l.id}`, { lootKind: l.kind, title: `${l.name}${l.amount ? ` ×${l.amount}` : ''}`, tag: lootCategory(l.kind) === 'gear' ? 'Into your backpack' : 'Into your supplies', detail: lootCategory(l.kind) === 'gear' ? 'Goes in your backpack' : 'Goes in your supplies', color: `#${(LOOT_COLORS[l.kind] ?? 0x5a5f68).toString(16).padStart(6, '0')}`, acts: { a: ['Take', () => send({ t: 'takeLoot', id: l.id })], x: takeAll } }));
+    return;
+  }
   col.append(head(`${c.title}${c.cap ? ` · ${c.items.length} of ${c.cap}` : ''}`));
   const own = !!c.gunsmith;
   if (own) {
     const tabs = document.createElement('div');
     tabs.className = 'invtabs'; tabs.dataset.navrow = '1';
     for (const [k, label] of [['contents', 'Stash'], ['upgrades', 'Upgrades'], ['craft', 'Craft'], ['home', 'Home & raids']]) {
-      const b = btn(label, () => { invUi.tab = k; invUi.menuFor = null; renderInventory(); }, `invtab${invUi.tab === k ? ' on' : ''}`);
+      const b = btn(label, () => { invUi.tab = k; invUi.menuFor = null; invUi.sel = null; renderInventory(); }, `invtab${invUi.tab === k ? ' on' : ''}`);
       b.dataset.pad = `tab-${k}`;
       tabs.append(b);
     }
@@ -2364,54 +2393,53 @@ function buildInvColumns() {
   if (tab === 'contents') {
     if (own) {
       const n = me.intel + (c.intel || 0);
-      col.append(...invRow('gunsmith', { title: 'Gunsmith', detail: 'Change parts, build guns and armor', color: '#ff7a1a', actions: [['Open', openGunsmith]] }));
-      col.append(...invRow('intel', { title: `Upload intel: ${n}`, detail: n ? `+${n * 40} XP` : 'Bring intel home from terminals and Rogues', color: '#ff7a1a', actions: n ? [['Upload', () => send({ t: 'container', action: 'bank' })]] : [], why: 'No intel' }));
-      col.append(...invRow('travel', { title: 'Fast travel', detail: 'To a Contact you have found, or your crew', color: '#ff7a1a', actions: [['Choose where', () => { closeInventory(); openMapScreen('travel'); }]] }));
+      col.append(...invRow('gunsmith', { mini: true, title: 'Gunsmith', detail: 'Change parts, build guns and armor', color: '#ff7a1a', acts: { a: ['Open', openGunsmith] } }));
+      col.append(...invRow('intel', { mini: true, title: `Upload intel: ${n}`, detail: n ? `+${n * 40} XP` : 'Bring intel home from terminals and Rogues', color: '#ff7a1a', acts: { a: n ? ['Upload', () => send({ t: 'container', action: 'bank' })] : null }, why: 'No intel' }));
+      col.append(...invRow('travel', { mini: true, title: 'Fast travel', detail: 'To a Contact you have found, or your crew', color: '#ff7a1a', acts: { a: ['Choose where', () => { closeInventory(); openMapScreen('travel'); }] } }));
     }
     if (c.raid) col.append(raidPanel(c));
-    if (c.ruin) col.append(...invRow('ruin', { title: 'Rebuild this stash house', detail: `It's a ruin. Needs a hammer and ${costText(c.ruin.cost)} carried.`, color: '#ff6b6b', actions: [['Rebuild', () => send({ t: 'rebuild' })]] }));
+    if (c.ruin) col.append(...invRow('ruin', { title: 'Rebuild this stash house', detail: `It's a ruin. Needs a hammer and ${costText(c.ruin.cost)} carried.`, color: '#ff6b6b', acts: { a: ['Rebuild', () => send({ t: 'rebuild' })] } }));
     const takeable = !c.raid?.sealed && (RES_UI.some((r) => c[r]) || c.items.length);
-    if ((c.kind === 'bag' || c.raid) && takeable) {
-      col.append(...invRow('takeall', { title: 'Take everything', detail: c.raid ? 'As much as one raid can carry off' : 'Into your backpack and supplies', color: '#7dff9a', actions: [['Take everything', () => {
-        for (const r of RES_UI) if (c[r]) send({ t: 'container', action: 'take', res: r });
-        for (const it of c.items) send({ t: 'container', action: 'take', itemId: it.id });
-      }]] }));
-    }
+    const takeEverything = (c.kind === 'bag' || c.raid) && takeable ? ['Take everything', () => {
+      for (const r of RES_UI) if (c[r]) send({ t: 'container', action: 'take', res: r });
+      for (const it of c.items) send({ t: 'container', action: 'take', itemId: it.id });
+    }] : null;
+    if (takeEverything) col.append(...invRow('takeall', { mini: true, title: 'Take everything', detail: c.raid ? 'As much as one raid can carry off' : 'Into your backpack and supplies', color: '#7dff9a', acts: { a: takeEverything } }));
     if (put && carried.some((r) => r !== 'intel')) {
-      col.append(...invRow('putall', { title: 'Put all supplies in the stash', detail: carried.filter((r) => r !== 'intel').map((r) => resText(r, me[r])).join(' · '), color: '#7dff9a', actions: [['Put them all in', () => { for (const r of carried) if (r !== 'intel') send({ t: 'container', action: 'put', res: r }); }]] }));
+      col.append(...invRow('putall', { mini: true, title: 'Put all supplies in the stash', detail: carried.filter((r) => r !== 'intel').map((r) => resText(r, me[r])).join(' · '), color: '#7dff9a', acts: { a: ['Put them all in', () => { for (const r of carried) if (r !== 'intel') send({ t: 'container', action: 'put', res: r }); }] } }));
     }
     const res = RES_UI.filter((r) => c[r]);
     if (!c.items.length && !res.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty.' }));
     const canTake = (r) => (c.raid ? Math.min(c[r], c.raid.res[r] || 0) : c[r]);
+    const blocked = c.raid && (c.raid.sealed || c.raid.items <= 0);
+    for (const it of c.items) {
+      const acts = blocked ? {} : { a: ['Take', () => send({ t: 'container', action: 'take', itemId: it.id })], x: takeEverything };
+      if (!blocked && (it.kind === 'weapon' || it.kind === 'armor')) acts.y = ['Take and equip', () => { send({ t: 'container', action: 'take', itemId: it.id }); send({ t: 'inv', action: 'equip', itemId: it.id }); }];
+      col.append(...invRow(`ci-${it.id}`, { item: it, title: it.name, tag: it.kind === 'weapon' ? statLine(it) : '', chips: attachmentChips(it, false), detail: statLine(it), extra: attachmentLine(it), color: gunColor(it), acts, why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
+    }
     for (const r of res.filter((q) => !GROUPED.has(q))) {
       const can = canTake(r);
-      col.append(...invRow(`cr-${r}`, { title: resText(r, c[r]), detail: c.raid ? `You can take ${can}` : RES_USE[r] || '', color: '#3f4650', actions: can > 0 && !c.raid?.sealed ? [[`Take ${can}`, () => send({ t: 'container', action: 'take', res: r })]] : [], why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
+      col.append(...invRow(`cr-${r}`, { mini: true, title: resText(r, c[r]), detail: c.raid ? `You can take ${can}` : RES_USE[r] || '', color: '#3f4650', acts: { a: can > 0 && !c.raid?.sealed ? [`Take ${can}`, () => send({ t: 'container', action: 'take', res: r })] : null, x: takeEverything }, why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
     }
     for (const [key, name, group] of [['food', 'Food', FOOD_GOODS], ['trade', 'Trade goods', TRADE_GOODS]]) {
       const rs = group.filter((r) => c[r]);
       if (!rs.length) continue;
       const take = rs.filter((r) => canTake(r) > 0);
-      col.append(...invRow(`cr-${key}`, { title: `${name} · ${rs.reduce((n, r) => n + c[r], 0)}`, detail: rs.map((r) => resText(r, c[r])).join(' · '), color: '#3f4650',
-        actions: take.length && !c.raid?.sealed ? [['Take it all', () => { for (const r of take) send({ t: 'container', action: 'take', res: r }); }]] : [], why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
-    }
-    const blocked = c.raid && (c.raid.sealed || c.raid.items <= 0);
-    for (const it of c.items) {
-      const actions = blocked ? [] : [['Take', () => send({ t: 'container', action: 'take', itemId: it.id })]];
-      if (!blocked && (it.kind === 'weapon' || it.kind === 'armor')) actions.push(['Take and equip', () => { send({ t: 'container', action: 'take', itemId: it.id }); send({ t: 'inv', action: 'equip', itemId: it.id }); }]);
-      col.append(...invRow(`ci-${it.id}`, { item: it, title: it.name, detail: statLine(it), extra: attachmentLine(it), color: it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68', actions, why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
+      col.append(...invRow(`cr-${key}`, { mini: true, title: `${name} · ${rs.reduce((n, r) => n + c[r], 0)}`, detail: rs.map((r) => resText(r, c[r])).join(' · '), color: '#3f4650',
+        acts: { a: take.length && !c.raid?.sealed ? ['Take it all', () => { for (const r of take) send({ t: 'container', action: 'take', res: r }); }] : null, x: takeEverything }, why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
     }
   } else if (tab === 'upgrades') {
     const hl = c.home?.level ?? 1, have = (k) => (k === 'comms' ? me.comms : (me[k] || 0) + (c[k] || 0));
     for (const [key, u] of Object.entries(UPGRADES)) {
       const tier = c.upg[key] || 0, next = u.tiers[tier + 1];
       const lack = next && (hl < next.home ? `Needs home level ${next.home}` : !Object.entries(next.cost).every(([k, v]) => have(k) >= v) ? `Needs ${costText(next.cost)}` : '');
-      col.append(...invRow(`up-${key}`, { title: `${u.name}: ${u.tiers[tier].label}`, detail: u.desc, extra: next ? `Next: ${next.label} · ${costText(next.cost)}` : 'Fully upgraded', color: '#ffc53d', actions: next && !lack ? [[`Install ${next.label}`, () => send({ t: 'upgrade', track: key })]] : [], why: next ? lack : 'Done' }));
+      col.append(...invRow(`up-${key}`, { title: `${u.name}: ${u.tiers[tier].label}`, tag: next ? `Next: ${next.label}` : 'Fully upgraded', detail: u.desc, extra: next ? `Next: ${next.label} · ${costText(next.cost)}` : 'Fully upgraded', color: '#ffc53d', acts: { a: next && !lack ? [`Install ${next.label}`, () => send({ t: 'upgrade', track: key })] : null }, why: next ? lack : 'Done' }));
     }
   } else if (tab === 'craft') {
     const have = (k) => (me[k] || 0) + (c[k] || 0);
     for (const [key, d] of Object.entries(CRAFTS)) {
       const lack = me.level < d.level ? `Needs level ${d.level}` : !Object.entries(d.cost).every(([k, v]) => have(k) >= v) ? `Needs ${Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(', ')}` : '';
-      col.append(...invRow(`cf-${key}`, { title: d.name, detail: TOOLS[key]?.desc || d.desc || '', extra: Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(' · '), color: '#9fe39f', actions: lack ? [] : [['Craft', () => send({ t: 'craft', item: key })]], why: lack }));
+      col.append(...invRow(`cf-${key}`, { title: d.name, tag: Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(' · '), detail: TOOLS[key]?.desc || d.desc || '', extra: Object.entries(d.cost).map(([k, v]) => `${v} ${k}`).join(' · '), color: '#9fe39f', acts: { a: lack ? null : ['Craft', () => send({ t: 'craft', item: key })] }, why: lack }));
     }
   } else if (tab === 'home' && c.home) {
     const h = c.home;
@@ -2421,16 +2449,20 @@ function buildInvColumns() {
     info.innerHTML = `<b>${h.name} · home level ${h.level}</b>${h.level >= MAX_HOME_LEVEL ? 'Top level.' : `${h.xp - lo} of ${hi - lo} home XP to level ${h.level + 1} (${HOME_LEVEL_TEXT[h.level]}).`} Now: +${h.perks.storage} slots, door ×${h.perks.doorMul.toFixed(2)}, ${feet(h.perks.radius)} claim, ${h.perks.buildCap} structures. Home XP comes from upgrades, building inside your claim, uploading intel here, and holding it.`;
     col.append(info);
     if (h.raid) col.append(raidWindowPanel(h));
-    col.append(...invRow('abandon', { title: 'Abandon this stash house', detail: 'Anything left inside can be taken by anyone', color: '#ff6b6b', actions: [['Yes, abandon it', () => send({ t: 'abandon' })], ['Keep it', () => {}]] }));
+    // Abandoning is on Ⓨ only, never Ⓐ: a slip of the thumb mustn't give your house away.
+    col.append(...invRow('abandon', { title: 'Abandon this stash house', detail: 'Anything left inside can be taken by anyone. This can\'t be undone.', color: '#ff6b6b', acts: { y: ['Yes, abandon it', () => send({ t: 'abandon' })] } }));
   }
 }
 
 function openInventory() {
   invUi.menuFor = null;
+  invUi.sel = null;
   state.invOpen = true;
   $('inventory').hidden = false;
   document.exitPointerLock?.();
   renderInventory();
+  // A controller starts on the highlighted line, ready for Ⓐ.
+  if (state.inputMode === 'pad') { const r = invUi.sel && document.querySelector(`#inventory .irow[data-pad="${invUi.sel}"]`); if (r) padFocus(r); }
 }
 function closeInventory() {
   state.invOpen = false;
@@ -4398,6 +4430,16 @@ function regainFocus(panel) {
   padFocus(best || list[Math.min(Math.max(m.idx, 0), list.length - 1)]);
   return false;
 }
+/** LB / RB in a window: over to the next column (a section, or a marked column) on its first choice. */
+function panelJump(panel, step) {
+  let cols = [...panel.querySelectorAll('[data-navcol], section, .gscol, aside')].filter((c) => c.offsetParent !== null && focusables(c).length && c.dataset.navcol !== 'top');
+  cols = cols.filter((c) => !cols.some((o) => o !== c && o.contains(c)));   // the outermost ones
+  if (cols.length < 2) return;
+  const k = cols.findIndex((c) => c.contains(document.activeElement));
+  const next = cols[(k + step + cols.length) % cols.length];
+  sfx.click();
+  padFocus(focusables(next)[0]);
+}
 function padBack() {
   if (osk.input) return closeOsk(false);
   if (state.invOpen && invUi.menuFor) return closeInvMenu();
@@ -4482,6 +4524,23 @@ function pollPad(dt, now) {
     if (just(BTN.B)) { pad.bEat = true; padBack(); }
     if (just(BTN.MENU)) pad.menuEat = true;
     if (just(BTN.Y) && state.gunsmithOpen) $('gsExplode').click();
+    // Every other window: LB / RB step between its columns (the gunsmith: between your guns), so you
+    // never have to walk the highlight across a whole screen.
+    if (panel.id !== 'inventory' && panel.id !== 'osk' && now > (pad.armAt || 0) && (just(BTN.LB) || just(BTN.RB))) {
+      const step = just(BTN.RB) ? 1 : -1;
+      if (panel.id === 'gunsmith') {
+        const guns = [...$('gsWeapons').querySelectorAll('button')], k = guns.findIndex((g) => g.classList.contains('sel'));
+        const next = guns[(k + step + guns.length) % guns.length];
+        if (next) { sfx.click(); next.click(); setTimeout(() => { const g = $('gsWeapons').querySelector('.sel'); if (g) padFocus(g); }, 60); }
+      } else panelJump(panel, step);
+    }
+    // The inventory: Ⓧ and Ⓨ act on the highlighted line; LB / RB jump between its columns.
+    if (panel.id === 'inventory' && now > (pad.armAt || 0)) {
+      if (just(BTN.X)) invAct('x');
+      if (just(BTN.Y)) invAct('y');
+      if (just(BTN.LB)) invJump(-1);
+      if (just(BTN.RB)) invJump(1);
+    }
     if (viewTap && !['login', 'mapscreen', 'osk', 'tradepanel'].includes(panel.id)) doAction('inventory');
     if (just(BTN.MENU) && panel.id === 'mapscreen') doAction('map');
     if (panel.id === 'mapscreen' && state.mapMode === 'view') {
