@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from '/addons/geometries/RoundedBoxGeometry.js';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G } from '/shared/world.js';
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
@@ -3324,8 +3324,19 @@ function jump() {
   if (!me || me.dead || me.downed || me.boat || state.air || state.hop || state.prone || now - (state.lastJump || 0) < 650 || build.on) return;
   state.lastJump = now;
   state.slide = null;   // a jump out of a slide keeps its speed, as momentum does
-  state.hop = { alt: 0, vy: JUMP_V };
   state.crouch = false;
+  // Jump at a ledge, a fence, a car or a crate up to about 2 m high and you climb it: a jump just high
+  // enough to clear it, carried forward onto it (or over a fence to the far side).
+  const v = state.vel || [0, 0], sp = Math.hypot(v[0], v[1]);
+  const dir = sp > 1 ? [v[0] / sp, v[1] / sp] : [Math.sin(state.yaw), Math.cos(state.yaw)];
+  const h = climbAhead(solidsNear(state.x, state.z, 3), state.x, state.z, dir[0], dir[1], myY());
+  if (h > 0) {
+    state.hop = { alt: 0, vy: climbVy(h, JUMP_G), climb: 1 };
+    state.climbPush = { until: now + 700, dir };
+    send({ t: 'jump', climb: Math.round(h * 100) / 100 });
+    return;
+  }
+  state.hop = { alt: 0, vy: JUMP_V };
   send({ t: 'jump' });
 }
 function doAction(a) {
@@ -5008,6 +5019,9 @@ function frame(now) {
     if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
     updateStance(dt, now);
     let want = len > 0.05 && !stunnedNow && now >= (state.stanceBusyUntil || 0) ? [mx * speed, mz * speed] : [0, 0];
+    // Climbing: carried on forward, onto the top or over to the other side.
+    if (state.climbPush && now < state.climbPush.until && state.hop) { const cp = state.climbPush.dir; want = [cp[0] * Math.max(3.2, speed * 0.6), cp[1] * Math.max(3.2, speed * 0.6)]; }
+    else state.climbPush = null;
     if (sl) {
       const t = (now - sl.start) / SLIDE.ms, s = SLIDE.speed * (1 - 0.7 * t * t);
       if (len > 0.05) { const k = Math.min(1, dt * 2.5); sl.dir[0] += (mx - sl.dir[0]) * k; sl.dir[1] += (mz - sl.dir[1]) * k; const l = Math.hypot(sl.dir[0], sl.dir[1]) || 1; sl.dir[0] /= l; sl.dir[1] /= l; }
@@ -5017,9 +5031,14 @@ function frame(now) {
     const v = state.vel || (state.vel = [0, 0]), rate = Math.min(1, dt * (sl ? 30 : len > 0.05 ? 16 : 14));
     v[0] += (want[0] - v[0]) * rate; v[1] += (want[1] - v[1]) * rate;
     if (Math.hypot(v[0], v[1]) > 0.05) {
-      const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, myY(), state.hop ? state.hop.alt : 0);
-      if (dt > 0 && Math.hypot(p.x - state.x - v[0] * dt, p.z - state.z - v[1] * dt) > 0.01) { v[0] = (p.x - state.x) / dt; v[1] = (p.z - state.z) / dt; }   // walked into something: keep only the slide along it
+      const y0 = myY();
+      const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, y0, state.hop ? state.hop.alt : 0);
+      if (dt > 0 && Math.hypot(p.x - state.x - v[0] * dt, p.z - state.z - v[1] * dt) > 0.01 && !state.climbPush) { v[0] = (p.x - state.x) / dt; v[1] = (p.z - state.z) / dt; }   // walked into something: keep only the slide along it
       state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
+      // Up onto a top in mid-jump: what's left of the jump is measured from there (you land on it).
+      // Off the edge of one: you drop, rather than snapping to the ground.
+      if (state.hop && p.y !== y0) { state.hop.alt -= p.y - y0; if (state.hop.alt <= 0) { state.hop = null; state.climbPush = null; } }
+      else if (!state.hop && y0 - p.y > 0.6) state.hop = { alt: y0 - p.y, vy: 0 };
     } else { v[0] = 0; v[1] = 0; }
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
     else if (state.nadeAim) updateNadeAim(now);

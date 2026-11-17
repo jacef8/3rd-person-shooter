@@ -25,7 +25,7 @@ import { BOATS, RIDES, RIDE_RULES, floats, seatPos, isLand, riderFeet } from '..
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
-  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox,
+  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB,
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
@@ -5032,7 +5032,9 @@ function handleState(p, msg) {
   const maxStep = isStunned(p, now) ? 0.05 : p.prone ? PRONE_SPEED * dt * 1.5 + 0.15 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
-  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain, standing(p), p.hop ? p.hop.alt : 0);
+  const y0 = standing(p);
+  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain, y0, p.hop ? p.hop.alt : 0);
+  if (p.hop && np.y !== y0) { p.hop.alt -= np.y - y0; if (p.hop.alt <= 0) p.hop = null; }   // landed on a top mid-climb
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
   if (p.speed > 0.5) p.lastActive = now;
   p.x = np.x; p.z = np.z;
@@ -5197,7 +5199,16 @@ wss.on('connection', (ws) => {
       case 'jump': {   // off the ground only, not lying down, a breath between jumps
         const now = Date.now();
         if (p.dead || p.downed || p.prone || p.boat || p.air || p.hop || now - (p.lastJump || 0) < 650 || isStunned(p, now)) return;
-        p.lastJump = now; p.hop = { alt: 0, vy: JUMP_V };
+        p.lastJump = now;
+        // A climb: only as high as something there really is to climb, in some direction.
+        const want = Number(msg.climb);
+        if (want > 0 && want <= CLIMB.max) {
+          const solids = solidsNear(p.x, p.z, 3), y = standing(p);
+          let h = 0;
+          for (let k = 0; k < 16 && h < want - 0.05; k++) h = Math.max(h, climbAhead(solids, p.x, p.z, Math.sin(k * Math.PI / 8), Math.cos(k * Math.PI / 8), y));
+          if (h > 0) { p.hop = { alt: 0, vy: climbVy(Math.min(want, h), JUMP_G), climb: 1 }; return; }
+        }
+        p.hop = { alt: 0, vy: JUMP_V };
         return;
       }
       case 'shoot': return handleShoot(p, msg);

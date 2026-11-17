@@ -1476,15 +1476,18 @@ export const JUMP_V = 5.2, JUMP_G = 18;
 export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift = 0) {
   const dist = Math.hypot(dx, dz);
   const steps = Math.max(1, Math.ceil(dist / 0.15));
-  const stand = (px, pz, from) => (terrain.standY ? terrain.standY(px, pz, from) : terrain.height(px, pz));
-  let y = terrain ? (fromY !== undefined ? stand(x, z, fromY) : terrain.height(x, z)) : undefined;
+  // Where you stand: the ground, a bridge deck, or the top of something you've climbed onto (a crate,
+  // a car, a loading dock, a low wall: see platformTop).
+  const stand = (px, pz, from, reach) => Math.max(terrain.standY ? terrain.standY(px, pz, from) : terrain.height(px, pz), solids ? platformTop(solids, px, pz, from + reach) : -Infinity);
+  let y = terrain ? (fromY !== undefined ? stand(x, z, fromY, 0.05) : terrain.height(x, z)) : undefined;
   for (let i = 0; i < steps; i++) {
     const p = resolveCircle(x + dx / steps, z + dz / steps, r, solids, y === undefined ? y : y + lift);   // up in a jump, low things pass under you
     if (terrain) {
-      const ny = stand(p.x, p.z, y);
+      const ny = stand(p.x, p.z, y, lift + 0.45);   // a step up, or (in a jump) onto whatever you've cleared
       const run = Math.hypot(p.x - x, p.z - z);
-      // Too steep to climb stops you, but a curb-high step (onto a bridge deck where two meet) doesn't.
-      const curb = ny - y <= 0.5 && ny > terrain.height(p.x, p.z) + 0.3;   // only onto a deck, never up a hillside
+      // Too steep to climb stops you, but a step up onto something standing on the ground (a bridge deck
+      // where two meet, a crate, a low wall) doesn't: a curb's height on foot, as high as you've jumped in a jump.
+      const curb = ny - y <= 0.5 + lift && ny > terrain.height(p.x, p.z) + 0.3;   // only onto a deck or a top, never up a hillside
       if (ny < DEEP_WATER || (run > 1e-6 && !curb && (ny - y) / run > MAX_STEP_SLOPE)) break;
       y = ny;
     }
@@ -1492,6 +1495,51 @@ export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift 
   }
   return { x, z, y };
 }
+
+// ---- climbing: standing on things, and climbing onto and over them
+/** What you can't stand on or climb: trees, overhead roofs, doors, poles, and anything players built
+ *  (their pieces carry no type: base walls, gates and barricades stay in the way of raiders). */
+const NO_CLIMB = new Set(['tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'rail', 'windsock', 'pole', 'scrub', 'cactus', 'bush']);
+const climbable = (b) => !!b.type && !b.gone && !NO_CLIMB.has(b.type) && !b.houseId;
+const insideTop = (b, x, z, m) => {
+  if (b.ang !== undefined) { const [lx, lz] = toBox(b, x, z); return Math.abs(lx) <= b.hw - m && Math.abs(lz) <= b.hd - m; }
+  return x >= b.minX + m && x <= b.maxX - m && z >= b.minZ + m && z <= b.maxZ - m;
+};
+/** A top wide enough to stand on (a fence or a wall's top isn't: you go over it). */
+const wideTop = (b) => (b.ang !== undefined ? Math.min(b.hw, b.hd) * 2 : Math.min(b.maxX - b.minX, b.maxZ - b.minZ)) >= 0.6;
+/** The highest top you could stand on at (x, z), no higher than `maxTop` (-Infinity if none). */
+export function platformTop(solids, x, z, maxTop) {
+  let best = -Infinity;
+  for (const b of solids) {
+    if (!climbable(b) || !wideTop(b)) continue;
+    const top = (b.y0 || 0) + b.h;
+    if (top > maxTop || top <= best || !insideTop(b, x, z, 0.05)) continue;
+    best = top;
+  }
+  return best;
+}
+/** How to climb: jump at something up to CLIMB.max above your feet and you go up onto it (or over it). */
+export const CLIMB = { max: 2.1, min: 0.45, reach: 0.9 };
+/**
+ * Something you could climb right ahead of you (direction dx, dz, unit): how far its top is above your
+ * feet `y`, or 0 if there's nothing to climb (nothing there, too high, or not climbable).
+ */
+export function climbAhead(solids, x, z, dx, dz, y) {
+  let best = 0;
+  for (const d of [0.35, 0.6, CLIMB.reach]) {
+    const px = x + dx * d, pz = z + dz * d;
+    for (const b of solids) {
+      if (b.gone || !blocksAt(b, y) || !circleOverlapsBox(px, pz, 0.25, b)) continue;
+      const h = (b.y0 || 0) + b.h - y;
+      if (!climbable(b) || h > CLIMB.max) return best;   // a wall too high, or one you can't climb: no
+      if (h > CLIMB.min && h > best) best = h;
+    }
+    if (best) return best;
+  }
+  return best;
+}
+/** How fast you go up for a climb `h` metres high (a jump just high enough to clear it). */
+export const climbVy = (h, g) => Math.sqrt(2 * g * Math.max(0.3, h - 0.15));
 
 /** Ray vs 3D axis-aligned box. Returns hit distance t or Infinity. */
 export function rayBox(ox, oy, oz, dx, dy, dz, minX, minY, minZ, maxX, maxY, maxZ) {
