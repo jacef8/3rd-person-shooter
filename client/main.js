@@ -36,6 +36,11 @@ const GOODS = HOMESTEAD.goods;
 // Everything you can carry, stash and trade, in display order.
 const RES_UI = ['cash', 'parts', 'tech', 'salvage', 'ammo', 'rockets', 'wood', 'stone', 'intel', 'seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals', 'honey', 'shine', 'hide'];
 const RES_LABEL = { parts: 'parts', tech: 'tech', intel: 'intel drives', ammo: 'rounds', salvage: 'salvage', wood: 'wood', stone: 'stone', ...Object.fromEntries(Object.entries(GOODS).map(([k, g]) => [k, g.name])) };
+// In the bag and the stash the goods go in two rows rather than one each: everything you can eat, best
+// first, and the things you sell (or plant).
+const FOOD_GOODS = ['meals', 'corn', 'peanuts', 'honey', 'fish', 'meat'];
+const TRADE_GOODS = ['seeds', 'cotton', 'shine', 'hide'];
+const GROUPED = new Set([...FOOD_GOODS, ...TRADE_GOODS]);
 const resText = (r, n) => (r === 'cash' ? `$${n}` : `${n} ${RES_LABEL[r] || r}`);
 
 const $ = (id) => document.getElementById(id);
@@ -2175,7 +2180,7 @@ const RES_USE = {
   intel: 'Upload at your stash for XP. Lost if you die carrying it.', seeds: 'Plant in a farm plot',
 };
 /** One line: a full-width button. `actions` is [[label, fn], ...]; `why` says why there's nothing to do. */
-const RES_ICON = { cash: '💵', parts: '⚙️', tech: '🔌', salvage: '🔩', ammo: '🟡', rockets: '🚀', wood: '🪵', stone: '🪨', intel: '💾', seeds: '🌱', corn: '🌽', peanuts: '🥜', cotton: '☁️', fish: '🐟', meat: '🍖', meals: '🍲', honey: '🍯', shine: '🫙', hide: '🟫' };
+const RES_ICON = { food: '🍽️', trade: '📦', cash: '💵', parts: '⚙️', tech: '🔌', salvage: '🔩', ammo: '🟡', rockets: '🚀', wood: '🪵', stone: '🪨', intel: '💾', seeds: '🌱', corn: '🌽', peanuts: '🥜', cotton: '☁️', fish: '🐟', meat: '🍖', meals: '🍲', honey: '🍯', shine: '🫙', hide: '🟫' };
 const GUN_BADGE = { sidearm: 'PISTOL', smg: 'SMG', carbine: 'RIFLE', dmr: 'DMR', shotgun: 'SHOTGUN', lmg: 'LMG', launcher: 'RPG' };
 const KEY_ICON = { gunsmith: '🛠', intel: '💾', travel: '🗺', takeall: '⬇️', putall: '⬆️', ruin: '🔨', abandon: '⚠️', devgunsmith: '🛠', 'g-all': '⬇️' };
 /** The picture on a tile: a gun's type in its paint colour, or an emoji for everything else. */
@@ -2289,11 +2294,21 @@ function buildInvColumns() {
   const carried = RES_UI.filter((r) => me[r]);
   packEl.append(head('Supplies'));
   if (!carried.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No supplies.' }));
-  for (const r of carried) {
+  for (const r of carried.filter((q) => !GROUPED.has(q))) {
     const actions = [];
-    if (GOODS[r]?.food) actions.push([`Eat (+${GOODS[r].food} food)`, () => send({ t: 'inv', action: 'eat', good: r })]);
     if (put && r !== 'intel') actions.push(['Put in stash', () => send({ t: 'container', action: 'put', res: r })]);
-    packEl.append(...invRow(`rs-${r}`, { title: resText(r, me[r]), detail: GOODS[r]?.food ? `Food: +${GOODS[r].food} each` : RES_USE[r] || (GOODS[r] ? 'Sell at a trading post' : ''), color: '#3f4650', actions, why: c ? '' : 'Carried' }));
+    packEl.append(...invRow(`rs-${r}`, { title: resText(r, me[r]), detail: RES_USE[r] || '', color: '#3f4650', actions, why: c ? '' : 'Carried' }));
+  }
+  const foods = FOOD_GOODS.filter((r) => me[r]), trades = TRADE_GOODS.filter((r) => me[r]);
+  const list = (rs, src) => rs.map((r) => resText(r, src[r])).join(' · ');
+  if (foods.length) {
+    const best = foods[0], actions = [[`Eat ${GOODS[best].name} (+${GOODS[best].food} food)`, () => send({ t: 'inv', action: 'eat', good: best })]];
+    if (put) actions.push(['Put food in stash', () => { for (const r of foods) send({ t: 'container', action: 'put', res: r }); }]);
+    packEl.append(...invRow('rs-food', { title: `Food · ${foods.reduce((n, r) => n + me[r], 0)}`, detail: `${list(foods, me)}. Eat it when you're hungry (cooked meals fill you most); sell the rest at a trading post.`, color: '#3f4650', actions }));
+  }
+  if (trades.length) {
+    const actions = put ? [['Put them in stash', () => { for (const r of trades) send({ t: 'container', action: 'put', res: r }); }]] : [];
+    packEl.append(...invRow('rs-trade', { title: `Trade goods · ${trades.reduce((n, r) => n + me[r], 0)}`, detail: `${list(trades, me)}. Sell at a trading post${me.seeds ? ' (seed packets: plant them in a farm plot)' : ''}.`, color: '#3f4650', actions, why: c ? '' : 'Carried' }));
   }
   $('packcount').textContent = `Carrying ${inv.pack.length} of ${state.packSize} · ${me.ammo} rounds`;
   // ---- the stash, bag or body beside you; or, with nothing open, what's on the ground nearby
@@ -2344,9 +2359,17 @@ function buildInvColumns() {
     }
     const res = RES_UI.filter((r) => c[r]);
     if (!c.items.length && !res.length) col.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Empty.' }));
-    for (const r of res) {
-      const can = c.raid ? Math.min(c[r], c.raid.res[r] || 0) : c[r];
+    const canTake = (r) => (c.raid ? Math.min(c[r], c.raid.res[r] || 0) : c[r]);
+    for (const r of res.filter((q) => !GROUPED.has(q))) {
+      const can = canTake(r);
       col.append(...invRow(`cr-${r}`, { title: resText(r, c[r]), detail: c.raid ? `You can take ${can}` : RES_USE[r] || '', color: '#3f4650', actions: can > 0 && !c.raid?.sealed ? [[`Take ${can}`, () => send({ t: 'container', action: 'take', res: r })]] : [], why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
+    }
+    for (const [key, name, group] of [['food', 'Food', FOOD_GOODS], ['trade', 'Trade goods', TRADE_GOODS]]) {
+      const rs = group.filter((r) => c[r]);
+      if (!rs.length) continue;
+      const take = rs.filter((r) => canTake(r) > 0);
+      col.append(...invRow(`cr-${key}`, { title: `${name} · ${rs.reduce((n, r) => n + c[r], 0)}`, detail: rs.map((r) => resText(r, c[r])).join(' · '), color: '#3f4650',
+        actions: take.length && !c.raid?.sealed ? [['Take it all', () => { for (const r of take) send({ t: 'container', action: 'take', res: r }); }]] : [], why: c.raid?.sealed ? 'Sealed' : 'Raid limit reached' }));
     }
     const blocked = c.raid && (c.raid.sealed || c.raid.items <= 0);
     for (const it of c.items) {
