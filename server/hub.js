@@ -324,13 +324,13 @@ const editorOk = (req) => {
 };
 const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
 /** Ask the first world something (its answer has the same `t`), or `fallback` if it can't say. */
-function askWorld(msg, fallback) {
+function askWorld(msg, fallback, waitMs = 2500) {
   const w = WORLDS[0];
   if (!w.proc?.connected || !w.up) return Promise.resolve(fallback);
   return new Promise((resolve) => {
     const id = crypto.randomBytes(4).toString('hex');
     const on = (m) => { if (m?.t === msg.t && m.id === id) { w.proc.off('message', on); clearTimeout(t); resolve(m); } };
-    const t = setTimeout(() => { w.proc.off('message', on); resolve(fallback); }, 2500);
+    const t = setTimeout(() => { w.proc.off('message', on); resolve(fallback); }, waitMs);
     w.proc.on('message', on);
     w.proc.send({ ...msg, id });
   });
@@ -338,6 +338,27 @@ function askWorld(msg, fallback) {
 /** Which buildings are someone's stash house right now, and which edits the world couldn't build. */
 const worldStatus = () => askWorld({ t: 'claims' }, { list: [], missing: [] });
 const claimedBuildings = async () => (await worldStatus()).list || [];
+// ---------------------------------------------------------------- the map for the Godot client (server/gmap.js)
+// The same county the world runs on, so map editor fixes reach the Godot client with no rebuild.
+const GMAP_FILES = { 'meta.json': ['meta.json.gz', 'application/json', true], 'heights.d16.gz': ['heights.d16.gz', 'application/octet-stream'], 'colors.rgb.gz': ['colors.rgb.gz', 'application/octet-stream'] };
+async function gmapApi(req, res, url) {
+  const name = url.slice('/gmap/'.length).split('?')[0];
+  if (name === 'nature') {
+    const q = new URL(req.url, 'http://x').searchParams.get('t') || '';
+    const tiles = q.split(';').slice(0, 64).map((p) => p.split(',').map(Number)).filter((p) => p.length === 2 && p.every(Number.isInteger));
+    const ans = await askWorld({ t: 'nature', tiles }, null, 5000);
+    return ans ? json(res, 200, { tiles: ans.tiles }) : json(res, 503, { error: 'World not ready' });
+  }
+  const f = GMAP_FILES[name];
+  if (!f) return json(res, 404, { error: 'No such file' });
+  const ans = await askWorld({ t: 'gmap' }, null, 120000);
+  if (!ans?.dir) return json(res, 503, { error: ans?.error || 'World not ready' });
+  fs.readFile(path.join(ans.dir, f[0]), (err, buf) => {
+    if (err) return json(res, 500, { error: 'Missing' });
+    res.writeHead(200, { 'Content-Type': f[1], ...(f[2] ? { 'Content-Encoding': 'gzip' } : {}), 'Cache-Control': 'no-cache', 'Content-Length': buf.length });
+    res.end(buf);
+  });
+}
 async function editorApi(req, res, url) {
   if (!process.env.EDITOR_KEY) return json(res, 404, { error: 'The map editor is switched off on this server (no EDITOR_KEY).' });
   if (!editorOk(req)) return json(res, 403, { error: 'Wrong editor key' });
@@ -375,6 +396,7 @@ async function editorApi(req, res, url) {
 
 const handler = (req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (url.startsWith('/gmap/')) { gmapApi(req, res, url).catch((e) => { console.error('Godot map:', e); json(res, 500, { error: 'Map error' }); }); return; }
   if (url.startsWith('/api/editor/')) { editorApi(req, res, url).catch((e) => { console.error('Map editor:', e); json(res, 500, { error: 'Editor error' }); }); return; }
   if (url === '/worlds') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
