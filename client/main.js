@@ -2993,7 +2993,7 @@ function drawMapCanvas() {
   for (const l of map.labels || []) if (l.kind === 'place' && ['prison', 'sheriff', 'hospital'].includes(l.place)) l.hidden = (state.sites || []).some((q) => Math.hypot(q.x - l.x, q.z - l.z) < 500);
   for (const st of state.sites || []) {
     const c = siteColor(st, Date.now()) || '#ff3b3b';
-    markers.push({ x: st.x, z: st.z, kind: 'diamond', color: c, size: st.kind === 'prison' ? 10 : 8, label: `${SITES.kinds[st.kind].icon} ${st.name.replace('Correctional Institution', 'CI')}${st.state === 'stocked' ? '' : st.state === 'alarm' ? ' · 🚨 ALARM' : ' · cleared'}`, labelMin: st.kind === 'prison' || st.kind === 'hospital' ? 0 : 0.08 });
+    markers.push({ x: st.x, z: st.z, kind: 'diamond', color: c, size: st.kind === 'prison' ? 10 : 8, label: `${SITES.kinds[st.kind].icon} ${st.name.replace('Correctional Institution', 'Prison')}${st.state === 'stocked' ? '' : st.state === 'alarm' ? ' · 🚨 ALARM' : ' · cleared'}`, labelMin: st.kind === 'prison' || st.kind === 'hospital' ? 0 : 0.08 });
   }
   for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: lzPick ? 6 : 4, highlight: lit.has(lz.id), label: lzPick ? lz.name.split(' (')[0] : '', labelMin: 0 });
   for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
