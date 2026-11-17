@@ -5143,6 +5143,9 @@ tset.autoPick = { ammo: true, heals: true, supplies: true, gear: false, ...(tset
 if (!tset.lf2) { tset.leftFire = false; tset.lf2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }   // the left FIRE button starts off once (turn it on in Settings)
 // Auto-fire starts on (once) for phones: aiming and holding FIRE with one thumb is the hard part on a
 // phone, so like the big phone shooters' simple mode the gun fires itself when the crosshair is on someone.
+// The buttons were laid out again (v3: the middle right kept clear for turning); positions moved by
+// hand on the old layout would land in the wrong places, so they start from the new one (once).
+if (!tset.lay3) { tset.pos = {}; tset.lay3 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }
 if (!tset.af2) { if (!tset.autoFire || tset.autoFire === 'off') tset.autoFire = 'always'; tset.af2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }
 const saveTset = () => { try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } markAutoFire(); };
 /** The FIRE buttons wear an AUTO badge while auto-fire is on. */

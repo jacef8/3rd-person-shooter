@@ -532,7 +532,7 @@ input { min-height: 44px; border-radius: 10px; }
 body.touchui .tbtn { background: rgba(20, 24, 30, 0.35); border: 1.5px solid rgba(255, 255, 255, 0.35); font-size: 12px; }
 body.touchui .tbtn.on { background: rgba(255, 138, 42, 0.55); border-color: var(--accent); }
 body.touchui .tbtn.fire { background: rgba(170, 30, 30, 0.42); }
-body.touchui .tbtn.fire.auto::after { content: 'AUTO'; position: absolute; top: -9px; left: 50%; transform: translateX(-50%); padding: 2px 7px; border-radius: 8px; background: #ffc53d; color: #111; font: 800 11px/1.2 var(--font-text); letter-spacing: 0.08em; pointer-events: none; }
+body.touchui .tbtn.fire.auto::after { content: 'AUTO'; position: absolute; top: 3px; left: 50%; transform: translateX(-50%); padding: 2px 7px; border-radius: 8px; background: #ffc53d; color: #111; font: 800 11px/1.2 var(--font-text); letter-spacing: 0.08em; pointer-events: none; }
 body.touchui .tbtn.big { width: 68px; height: 68px; right: calc(14px + env(safe-area-inset-right)); bottom: 16px; font-size: 13px; }
 body.touchui .tbtn.mid { width: 52px; height: 52px; }
 body.touchui .tbtn.sm { width: 48px; height: 48px; }
@@ -878,3 +878,17 @@ body.touchui #inventory { height: 96vh; }
 #nadecook { position: fixed; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); z-index: 6; padding: 4px 12px; border-radius: 999px; background: rgba(10, 12, 16, 0.75); color: #ffd23a; font: 800 18px/1.2 var(--font-text); font-variant-numeric: tabular-nums; pointer-events: none; }
 #nadecook.hot { color: #ff4a3a; }
 #nadecook[hidden] { display: none; }
+
+/* ---- Phone layout v3: the right thumb's middle of the screen is kept clear for turning and aiming.
+   FIRE in the corner; AIM, CROUCH and RELOAD along the bottom (clear of the gun strip); USE, JUMP and
+   NADE up the right edge; HEAL and TAG top left under the bag. */
+body.touchui .tbtn.big.fire { right: calc(12px + env(safe-area-inset-right)); bottom: 12px; }
+body.touchui .tbtn.aim { right: calc(100px + env(safe-area-inset-right)); bottom: 8px; width: 52px; height: 52px; top: auto; left: auto; }
+body.touchui .tbtn.r2 { right: calc(158px + env(safe-area-inset-right)); bottom: 8px; width: 48px; height: 48px; top: auto; left: auto; }    /* crouch (hold: prone) */
+body.touchui .tbtn.r1 { right: calc(212px + env(safe-area-inset-right)); bottom: 8px; width: 48px; height: 48px; top: auto; left: auto; }    /* reload */
+body.touchui .tbtn.jump { right: calc(18px + env(safe-area-inset-right)); bottom: 142px; width: 46px; height: 46px; top: auto; left: auto; }
+body.touchui .tbtn.r4 { right: calc(18px + env(safe-area-inset-right)); bottom: 190px; width: 46px; height: 46px; top: auto; left: auto; }   /* grenade */
+body.touchui .tbtn.use { right: calc(18px + env(safe-area-inset-right)); bottom: 92px; width: 46px; height: 46px; top: auto; left: auto; }
+body.touchui .tbtn.r6 { left: calc(14px + env(safe-area-inset-left)); top: calc(78px + env(safe-area-inset-top)); right: auto; bottom: auto; width: 48px; height: 48px; }   /* heal */
+body.touchui .tbtn.r5 { left: calc(70px + env(safe-area-inset-left)); top: calc(78px + env(safe-area-inset-top)); right: auto; bottom: auto; width: 48px; height: 48px; }   /* tag */
+body.touchui .tbtn.zoom { right: calc(100px + env(safe-area-inset-right)); bottom: 66px; top: auto; left: auto; width: 48px; height: 48px; }  /* only through a 2-zoom scope */
