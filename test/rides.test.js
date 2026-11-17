@@ -8,9 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
-import { generateMap } from '../shared/world.js';
+import { generateMap, moveWithCollision, circleOverlapsBox, PLAYER_RADIUS } from '../shared/world.js';
 import { makeWeapon, xpForLevel } from '../shared/items.js';
-import { stepBoat, seatPos, BOATS, RIDES, onRoad } from '../shared/boats.js';
+import { stepBoat, seatPos, BOATS, RIDES, onRoad, rideSolids } from '../shared/boats.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 8000) {
@@ -183,4 +183,29 @@ test('the county fills with rides; find one, hotwire it, drive it, get out; it s
     await a.toast(/wrecked/);
     await a.close(); await b.close();
   } finally { s.proc.kill(); }
+});
+
+// Parked cars are solid to people on foot (rideSolids).
+
+const flatGround = { height: () => 0 };
+const walk = (x, z, dx, dz, solids) => {
+  let inside = false;
+  for (let i = 0; i < 60; i++) { const p = moveWithCollision(x, z, dx / 60, dz / 60, PLAYER_RADIUS, solids, flatGround, 0); x = p.x; z = p.z; if (circleOverlapsBox(x, z, 0.1, solids[0])) inside = true; }
+  return { x, z, inside };
+};
+
+test('you walk round a parked car, not through it', () => {
+  for (const yaw of [0, Math.PI / 2, 0.7]) {
+    const car = { id: 'c1', type: 'car', x: 0, z: 0, yaw };
+    const solids = rideSolids([car], -4, 0, 6, () => 0);
+    assert.equal(solids.length, 1);
+    const p = walk(-4, 0, 8, 0, solids);   // straight at it
+    assert.ok(!p.inside, `never inside the car (yaw ${yaw})`);
+    if (yaw !== 0.7) assert.ok(p.x < -0.5, `stopped at the car (yaw ${yaw}): x=${p.x.toFixed(2)}`);   // square on: stopped; at an angle you slide round
+  }
+});
+
+test('one you are standing in (just got out) lets you step clear', () => {
+  const car = { id: 'c1', type: 'car', x: 0, z: 0, yaw: 0 };
+  assert.equal(rideSolids([car], 0.3, 0, 6, () => 0).length, 0);
 });

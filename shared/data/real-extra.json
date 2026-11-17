@@ -1,5 +1,5 @@
 {
-  "_about": "Real places the open map data is missing, placed by hand. Used only with the real-world map (data/real/infrastructure.json present).",
+  "_about": "Real places the open map data is missing, placed by hand. Used only with the real-world map (data/real/infrastructure.json present). fireTowers: Florida Forest Service fire lookout towers (USGS place names). The real ones stand just off the map, so each is drawn just inside the edge in its real direction (movedMi says how far; real is where it really is).",
   "landings": [
     {
       "_about": "Estiffanulga County Park boat ramp, east bank (Apalachicola Riverkeeper blueway guide).",
@@ -47,6 +47,41 @@
       "county": "Liberty",
       "lat": 30.5435,
       "lon": -84.9133
+    }
+  ],
+  "fireTowers": [
+    {
+      "name": "Mercer Fire Tower",
+      "lat": 30.308125,
+      "lon": -84.868519,
+      "real": {
+        "lat": 30.2824199,
+        "lon": -84.8685245
+      },
+      "movedMi": 1.8,
+      "heightM": 30
+    },
+    {
+      "name": "Hosford Lookout Tower",
+      "lat": 30.383526,
+      "lon": -84.77355,
+      "real": {
+        "lat": 30.3835296,
+        "lon": -84.726857
+      },
+      "movedMi": 2.8,
+      "heightM": 30
+    },
+    {
+      "name": "Hanna Lookout Tower",
+      "lat": 30.550473,
+      "lon": -85.076711,
+      "real": {
+        "lat": 30.5504721,
+        "lon": -85.1540887
+      },
+      "movedMi": 4.6,
+      "heightM": 30
     }
   ]
 }

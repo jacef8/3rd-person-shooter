@@ -21,11 +21,11 @@ import { biomeName, DEEP_WATER, parseElevation, parseLandcover, COVER, RELIEF } 
 import zlib from 'node:zlib';
 import { serveStatic } from './static.js';
 import webpush from 'web-push';
-import { BOATS, RIDES, RIDE_RULES, floats, seatPos, isLand, riderFeet } from '../shared/boats.js';
+import { BOATS, RIDES, RIDE_RULES, floats, seatPos, isLand, riderFeet, rideSolids } from '../shared/boats.js';
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
-  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB, LADDER, ladderAt,
+  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB, LADDER, ladderAt, drawMs,
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
@@ -3533,7 +3533,7 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1, opts = {}) {
     const F = COMBAT.falloff;
     const falloff = t <= s.range ? 1 : Math.max(F.minMul, 1 - (t - s.range) / (s.range * F.overRangeSpan) * F.maxDrop);
     let dmg = s.damage * falloff;
-    if (hit.headshot) dmg *= COMBAT.headshotMul;
+    if (hit.headshot && !isBot) dmg *= COMBAT.headshotMul;   // the AI aims centre mass: no headshot bonus
     if (!isBot && (shooter.buffUntil || 0) > Date.now()) dmg *= 1.2;
     if (hit.kind === 'player' && !isBot && sameSquad(shooter, hit.target)) continue;
     if (hit.kind === 'boat') { damageBoat(hit.target, dmg * 0.5, isBot ? null : shooter); continue; }
@@ -3746,8 +3746,8 @@ function updateBots(dt, now) {
       if (now >= b.nextShot && now >= (b.flinchUntil || 0) && bestD < BOT_AI.fireRange) {
         const dir = [foe.x - b.x, gy(foe) + (foe.crouch ? 0.8 : 1.2) - gy(b) - STAND_EYE, foe.z - b.z];
         fire(b, dir, true, Math.max(0.3, 1.2 - bestD / 30) * (b.crouch ? 1.15 : 1) / (b.kind === 'guard' ? COMBAT.bots.guard.aim : 1));
-        b.burst = (b.burst + 1) % 5;
-        b.nextShot = now + (b.burst === 0 ? 1100 + Math.random() * 600 : 60_000 / b.weapon.rpm * 1.3);
+        b.burst = (b.burst + 1) % 3;   // short bursts with a breather between, so there's time to answer
+        b.nextShot = now + (b.burst === 0 ? 1400 + Math.random() * 800 : 60_000 / b.weapon.rpm * 1.3);
       }
     } else if (b.aggro) {
       // Lost sight (or only heard it): go to where they were last, at a run.
@@ -5033,7 +5033,7 @@ function handleState(p, msg) {
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
   const y0 = standing(p);
-  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2), terrain, y0, p.hop ? p.hop.alt : 0);
+  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2).concat(rideSolids(db.boats, p.x, p.z, maxStep + 2, rideY, PLAYER_RADIUS)), terrain, y0, p.hop ? p.hop.alt : 0);
   if (p.hop && np.y !== y0) { p.hop.alt -= np.y - y0; if (p.hop.alt <= 0) p.hop = null; }   // landed on a top mid-climb
   if (p.hop?.hold && Math.hypot(p.x - p.hop.x0, p.z - p.hop.z0) > 3) p.hop.hold = 0;   // stepped away from the top of a ladder without landing: let go
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
@@ -5043,6 +5043,10 @@ function handleState(p, msg) {
   p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
   p.crouch = (!!msg.crouch && !p.prone) || !!p.downed;
   p.slide = !!msg.slide && p.crouch && !p.downed;   // (for how others draw you)
+  // Sprinting: the gun's put away. Stopping starts the draw; no shots till it's back up.
+  const sprinting = !!msg.sprint && !p.downed && !p.boat && !p.air;
+  if (p.sprint && !sprinting) p.drawnAt = Date.now() + drawMs(activeWeapon(p)?.archetype);
+  p.sprint = sprinting;
   p.aiming = !!msg.aim;
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
   p.y = np.y; p.yx = p.x; p.yz = p.z;
@@ -5101,6 +5105,7 @@ function handleShoot(p, msg) {
   const s = stats(p);
   const now = Date.now();
   if (now < p.reloadUntil) return;
+  if (p.sprint || now < (p.drawnAt || 0) - 150) return;   // gun on your back (a little slack for the network)
   if (now - p.lastShot < (60_000 / s.rpm) * 0.85) return;
   const mag = p.mags[w.id] ?? 0;
   if (mag <= 0) return;
@@ -5416,6 +5421,8 @@ const loop = setInterval(() => {
       if (now - (p.lastActive || 0) < XP.idleAfterMs && !inCamp(p.x, p.z) && !inFair(p.x, p.z)) p.aliveMs += 1000;
       if (p.aliveMs >= 60_000) { p.aliveMs -= 60_000; award(p, XP.survivalPerMinute, 'Survived another minute'); }
       if (now - (p.lastHit || 0) >= 6000 && p.armor < maxArmor(p) && p.food >= HUNGER.noRegenBelow) { p.armor = Math.min(maxArmor(p), p.armor + 3); dirty(p); }
+      const HR = COMBAT.healthRegen;   // and health, part of the way, once you're out of the fight
+      if (HR && !p.downed && now - (p.lastHit || 0) >= HR.afterMs && p.hp < HR.upTo && p.food >= HUNGER.noRegenBelow) { p.hp = Math.min(HR.upTo, p.hp + HR.perSec); dirty(p); }
       tickHunger(p, now);
       for (const c of [...p.contracts]) if (c.expires < now) { abandonContract(p, c.id); toast(p, `Contract expired: ${CONTRACT_TYPES[c.type].name}`); }
     }
@@ -5430,6 +5437,7 @@ const loop = setInterval(() => {
       air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : p.hop ? Math.round(p.hop.alt * 100) / 100 : undefined,
       y: !p.boat && standing(p) > terrain.height(p.x, p.z) + 0.8 ? +standing(p).toFixed(2) : undefined,   // up on a bridge deck
       aim: p.aiming && !p.dead ? 1 : 0,
+      ...(p.sprint && !p.dead ? { sp: 1 } : {}),   // sprinting: gun put away
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
       gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),

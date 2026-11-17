@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from '/addons/geometries/RoundedBoxGeometry.js';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy, LADDER, ladderAt } from '/shared/world.js';
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy, LADDER, ladderAt, drawMs } from '/shared/world.js';
 import {
   ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
@@ -27,7 +27,7 @@ import { distText, feet } from '/shared/units.js';
 import HELI from '/shared/data/activities.json' with { type: 'json' };
 import SITES from '/shared/data/sites.json' with { type: 'json' };
 import { SKY, airRates, nextMode, stepAir } from '/shared/skydive.js';
-import { BOATS, BOAT_RULES, RIDE_RULES, stepBoat, seatPos, riderFeet } from '/shared/boats.js';
+import { BOATS, BOAT_RULES, RIDE_RULES, stepBoat, seatPos, riderFeet, rideSolids } from '/shared/boats.js';
 import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
 import COMBAT_RULES from '/shared/data/combat.json' with { type: 'json' };
 import HOMESTEAD from '/shared/data/homestead.json' with { type: 'json' };
@@ -938,6 +938,7 @@ function buildBlockBody(g, kind, name, h) {
 function setCharacterStowed(g, list) {
   const key = JSON.stringify(list || []) + gunsReal();
   if (g.userData.stowedKey === key) return;
+  setHolstered(g, false);
   g.userData.stowedKey = key;
   for (const m of [...g.userData.sling, g.userData.holster]) m.clear();
   let back = 0;
@@ -1031,9 +1032,25 @@ function updateGunFx(dt) {
     }
   }
 }
+/**
+ * Sprinting: the gun in your hands goes over your back (or the pistol into its holster), and comes back
+ * to your hands when you stop. Moves the model itself, so nothing is rebuilt.
+ */
+function setHolstered(g, on) {
+  const u = g.userData, h = u.holstered;
+  if (!on) { if (h) { if (h.model.parent === h.to) { u.gun.add(h.model); h.model.position.copy(h.pos); h.model.quaternion.copy(h.q); } u.holstered = null; } return; }
+  if (h) return;
+  const model = u.gun.children[0];
+  if (!model) return;
+  const pistol = /sidearm/.test(u.gunKey || '');
+  const to = pistol ? (u.holster.children.length ? null : u.holster) : u.sling.find((sl) => !sl.children.length) || null;
+  u.holstered = { model, to, pos: model.position.clone(), q: model.quaternion.clone() };
+  if (to) to.add(model); else u.gun.remove(model);   // nowhere free on your back: out of sight
+}
 function setCharacterGun(g, gun) {
   const key = gunKey(gun);
   if (g.userData.gunKey === key) return;
+  setHolstered(g, false);
   g.userData.gunKey = key;
   g.userData.gun.clear();
   if (gun) g.userData.gun.add(buildGunModel(gun));
@@ -1780,6 +1797,7 @@ function handle(m) {
         if (rec.buf.length > 12) rec.buf.shift();
         setCharacterGun(rec.mesh, p.gun);
         setCharacterStowed(rec.mesh, p.stowed);
+        setHolstered(rec.mesh, !!p.sp && !p.boat);
         setLabel(rec.mesh.userData.label, `${p.sq ? '◆ ' : ''}${p.name}  [${p.level}]${p.sh ? ' 🛡' : ''}${p.hacking ? '  ⌁ hacking' : ''}`, p.sq ? '#7dff9a' : '#ffb27a');
         setCloak(rec.mesh, p.camo ? (p.sq ? 0.35 : 0.12) : 1);
         setGlint(rec.mesh, !!p.gl);
@@ -2933,9 +2951,10 @@ function renderMapScreen() {
     const pad = state.inputMode === 'pad';
     const touchy = document.body.classList.contains('touchui');
     list.append(Object.assign(document.createElement('div'), { className: 'mapnote', textContent: pad ? 'The cross in the middle is your pointer: slide the map with the right stick, zoom with LT / RT.' : touchy ? 'Tap to set a waypoint. Drag to move, pinch (or + and −) to zoom.' : 'Click the map to set a waypoint, right-click to ping your crew. Drag to move, wheel to zoom.' }));
-    const wb = btn(`Set waypoint here${pad ? ' (Ⓧ)' : ''}`, () => setWaypoint(mapView.cx, mapView.cz), 'gsweapon');
-    const pb = btn(`Ping crew here${pad ? ' (Ⓨ)' : ''}`, () => mapPing(mapView.cx, mapView.cz), 'gsweapon');
-    list.append(wb, pb);
+    // With a controller the cross in the middle is the pointer, so these buttons are how you mark it. With a
+    // mouse or a finger you just click or tap the map, so they'd only repeat that: a ping at the waypoint instead.
+    if (pad) list.append(btn('Set waypoint here (Ⓧ)', () => setWaypoint(mapView.cx, mapView.cz), 'gsweapon'), btn('Ping crew here (Ⓨ)', () => mapPing(mapView.cx, mapView.cz), 'gsweapon'));
+    else if (state.waypoint) list.append(btn('Ping crew at the waypoint', () => mapPing(state.waypoint.x, state.waypoint.z), 'gsweapon'));
     if (state.waypoint) list.append(btn('Clear waypoint', () => setWaypoint(null), 'gsweapon'), btn('Show waypoint', () => { mapView.cx = state.waypoint.x; mapView.cz = state.waypoint.z; drawMapCanvas(); }, 'gsweapon'));
   }
   if (state.mapMode === 'view' || state.mapMode === 'travel' || state.mapMode === 'taxi') list.append(btn('Close', closeMapScreen));
@@ -3442,15 +3461,26 @@ addEventListener('mousemove', (e) => {
   state.yaw -= e.movementX * sens; if (e.movementX) state.lookAt = performance.now();
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - e.movementY * sens));
 });
+/** Free look ends: the view swings back to the way you're going. */
+function endMouseLook() {
+  if (touch.freeLook?.id !== 'mouse') return;
+  state.yaw = touch.freeLook.yaw; state.pitch = touch.freeLook.pitch;
+  touch.freeLook = null;
+}
 addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== canvas) return;
+  // Hold the wheel (middle button) to look around while you keep running the way you were facing.
+  if (e.button === 1) { e.preventDefault(); if (!touch.freeLook && !state.aiming && state.me && !state.me.dead) touch.freeLook = { id: 'mouse', yaw: state.yaw, pitch: state.pitch }; return; }
+  if (e.button === 0 || e.button === 2) endMouseLook();   // shooting or aiming: back to where you face first
   if (e.button === 0) { state.mouseDown = true; state.firedThisPress = false; }
   if (e.button === 2) state.aiming = true;
 });
 addEventListener('mouseup', (e) => {
+  if (e.button === 1) endMouseLook();
   if (e.button === 0) state.mouseDown = false;
   if (e.button === 2) state.aiming = false;
 });
+addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
 addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('keydown', (e) => {
   // Build mode: X toggles, 1-5 pick a piece.
@@ -3663,6 +3693,7 @@ function tryFire(now) {
   if (!me || me.dead || state.invOpen) return;
   const w = me.inv[me.active];
   if (!w) return;
+  if (state.sprint || now < (state.drawUntil || 0)) return;   // gun on your back, or still coming up
   const s = weaponStats(w);
   const semi = s.semi;
   if (semi && state.firedThisPress) return;
@@ -5009,12 +5040,17 @@ function frame(now) {
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
     const pf = f + pad.moveY + touch.moveY, pr = r + pad.moveX + touch.moveX;
     const autoSprint = pad.settings.autoSprint && pad.moveY > 0.92;   // controller setting: stick all the way forward
-    state.sprint = (k.has('ShiftLeft') || pad.sprint || autoSprint || touch.sprint || touch.sprintOn) && pf > 0.3 && !state.aiming;
+    const wasSprint = state.sprint;
+    // Pulling the trigger or aiming while you sprint stops the sprint and brings the gun up (PUBG-style).
+    const trigger = (state.mouseDown || autoFireNow(me)) && !build.on && !state.nadeAim;   // (phones: auto-fire on a foe counts)
+    state.sprint = (k.has('ShiftLeft') || pad.sprint || autoSprint || touch.sprint || touch.sprintOn) && pf > 0.3 && !state.aiming && !trigger;
+    if (trigger && (pad.sprint || touch.sprintOn)) { pad.sprint = false; touch.sprintOn = false; }
     if (state.sprint) { state.crouch = false; state.prone = false; }
     // Mobility comes from the active weapon build and the armor you wear.
     const ws = weaponStats(me.inv[me.active]);
     const mobility = (ws ? ws.mobility : 1.05) + armorStats(me.inv.armor).mobility;
     if (me.downed || (me.food ?? 100) < HOMESTEAD.hunger.noSprintBelow) state.sprint = false;
+    if (wasSprint && !state.sprint) state.drawUntil = now + drawMs(me.inv[me.active]?.archetype);
     const stunnedNow = performance.now() < (state.stunnedUntil || 0);
     const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : state.prone ? PRONE_SPEED : (state.sprint ? SPRINT_SPEED : state.crouch ? CROUCH_SPEED : state.aiming ? ADS_SPEED : WALK_SPEED) * mobility;
     // Sliding: carried along the way you were sprinting, fast at first and slowing to a crouch; the
@@ -5058,7 +5094,8 @@ function frame(now) {
     v[0] += (want[0] - v[0]) * rate; v[1] += (want[1] - v[1]) * rate;
     if (Math.hypot(v[0], v[1]) > 0.05) {
       const y0 = myY();
-      const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3), state.map.terrain, y0, state.hop ? state.hop.alt : 0);
+      const rides = rideSolids([...boatVis.values()].map((bv) => bv.data), state.x, state.z, 3, (b) => b.y ?? state.map.terrain.height(b.x, b.z), PLAYER_RADIUS);
+      const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3).concat(rides), state.map.terrain, y0, state.hop ? state.hop.alt : 0);
       if (dt > 0 && Math.hypot(p.x - state.x - v[0] * dt, p.z - state.z - v[1] * dt) > 0.01 && !state.climbPush) { v[0] = (p.x - state.x) / dt; v[1] = (p.z - state.z) / dt; }   // walked into something: keep only the slide along it
       state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
       // Up onto a top in mid-jump: what's left of the jump is measured from there (you land on it).
@@ -5095,6 +5132,7 @@ function frame(now) {
   const nowP = performance.now();
   const myAct = state.hack ? { act: state.hack.kind, ap: Math.min(1, (nowP - state.hack.start) / state.hack.total) }
     : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) } : {};
+  setHolstered(selfMesh, !!state.me && !state.me.boat && (state.sprint || now < (state.drawUntil || 0) - 150));   // gun on your back at a sprint
   updateCharacterMesh(selfMesh, { ...myAct, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);

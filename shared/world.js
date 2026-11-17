@@ -28,6 +28,12 @@ export const CROUCH_SPEED = 3.6;
 export const ADS_SPEED = 4.4;   // walking while aiming down the sights
 /** Sprint, then crouch: a slide that starts faster than a sprint and runs out over `ms` (then you're crouched). */
 export const SLIDE = { speed: 12.5, ms: 750, cooldownMs: 1100, minSpeed: 7 };
+/**
+ * Sprinting puts the gun away (on your back, or the pistol in its holster): you're fast but can't shoot.
+ * Stop and it takes this long (ms) to bring it back up, by gun: a pistol is quick, a launcher is not.
+ */
+export const DRAW_MS = { sidearm: 200, smg: 300, carbine: 380, shotgun: 380, dmr: 430, lmg: 520, launcher: 600 };
+export const drawMs = (archetype) => DRAW_MS[archetype] ?? 380;
 export const INTERACT_RANGE = 2.4;
 
 export function mulberry32(seed) {
@@ -1095,6 +1101,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const infra = real.infrastructure || null;
   const powerLines = [], rails = [];
   const railGrid = new SpatialGrid(half + 4, 64);
+  const lookouts = [];   // fire lookout towers placed (for their names on the map)
   if (infra) {
     const P = (ll) => project(ll[0], ll[1], size);
     const onMap = (x, z, m = 30) => Math.abs(x) < half - m && Math.abs(z) < half - m;
@@ -1126,6 +1133,22 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       box(x - 0.4, z - 0.4, x + 0.4, z + 0.4, 31, 'tower', { y0: y });
       box(x - 5, z - 5, x + 5, z + 5, 8, 'tank', { y0: y + 30 });
       box(x + 5.05, z - 0.35, x + 5.3, z + 0.35, 38.15, 'ladder', { y0: y, ladderTop: y + 38, ladderIn: [-1, 0] });   // up the side to the top of the tank
+    }
+    // Fire lookout towers (shared/data/real-extra.json): a 100 ft steel tower on four legs, a cab platform
+    // with a railing and a roof over it, and a ladder up the east side. On the nearest open ground.
+    for (const ft of EXTRA.fireTowers || []) {
+      let { x, z } = P([ft.lat, ft.lon]), ok = open(x, z, 5);
+      for (let k = 1; k <= 40 && !ok; k++) { const a = k * 2.4, d = 12 * Math.ceil(k / 6); if (open(x + Math.cos(a) * d, z + Math.sin(a) * d, 5)) { x += Math.cos(a) * d; z += Math.sin(a) * d; ok = true; } }
+      if (!ok) continue;
+      const H = ft.heightM || 30, y = lowest(x, z, 3) - 0.3, top = y + H;
+      for (const [a, b] of [[-1.5, -1.5], [1.5, -1.5], [-1.5, 1.5], [1.5, 1.5]]) box(x + a - 0.15, z + b - 0.15, x + a + 0.15, z + b + 0.15, H, 'tower', { y0: y });
+      for (let k = 1; k < 5; k++) box(x - 1.55, z - 1.55, x + 1.55, z + 1.55, 0.12, 'tower', { y0: y + k * H / 5 - 0.06, brace: 1 });   // bracing rings (thin, not floors)
+      box(x - 1.75, z - 1.75, x + 1.75, z + 1.75, 0.3, 'tower', { y0: top });   // the cab floor
+      // The railing round it, open on the east where the ladder comes up.
+      for (const [a, b, c, d] of [[-1.75, -1.75, 1.75, -1.65], [-1.75, 1.65, 1.75, 1.75], [-1.75, -1.65, -1.65, 1.65], [1.65, -1.75, 1.75, -0.45], [1.65, 0.45, 1.75, 1.75]]) box(x + a, z + b, x + c, z + d, 1.1, 'fence', { y0: top + 0.3 });
+      box(x - 1.9, z - 1.9, x + 1.9, z + 1.9, 0.2, 'canopy', { y0: top + 2.6 });   // the cab roof
+      box(x + 1.8, z - 0.35, x + 2.05, z + 0.35, H + 0.45, 'ladder', { y0: y, ladderTop: top + 0.3, ladderIn: [-1, 0] });
+      lookouts.push({ name: ft.name, x, z });
     }
     for (const [lat, lon, dm] of infra.tanks || []) {
       const { x, z } = P([lat, lon]), r = dm / 2;
@@ -1360,6 +1383,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...geo.rivers.map(riverLabel).filter(Boolean),
     ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })).filter(onMap),
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
+    ...lookouts.map((t) => ({ text: t.name, x: t.x, z: t.z, kind: 'landmark' })),
     ...[...new Map(decks.filter((d) => d.name === 'Trammell Bridge').map((d) => [d.name, d])).values()].map((d) => ({ text: d.name, x: d.x, z: d.z + 120, kind: 'place', place: 'bridge' })),
     ...(infra?.places || []).filter(([lat, lon, kind]) => kind !== 'landing').map(([lat, lon, kind, text]) => ({ ...project(lat, lon, size), text, kind: 'place', place: kind })).filter(onMap),
     ...airstrips.map((a) => ({ text: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, kind: 'place', place: 'airstrip' })),

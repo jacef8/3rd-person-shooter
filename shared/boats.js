@@ -3,8 +3,24 @@
 // agree on where the bank is and what a car can drive through.
 import RIVER from './data/river.json' with { type: 'json' };
 import RIDE_DATA from './data/rides.json' with { type: 'json' };
-import { moveWithCollision, resolveCircle } from './world.js';
+import { moveWithCollision, resolveCircle, orientedBox, circleOverlapsBox } from './world.js';
 import { segDist } from './geography.js';
+
+/**
+ * Parked and moving land rides as solid boxes for people on foot: you walk round a car (or climb onto
+ * it), not through it. `rides` is any list of { x, z, yaw, type, y? }; `yAt(b)` gives a ride's ground
+ * height. One you're already overlapping (you just got out of it) is left out so you can step clear.
+ */
+export function rideSolids(rides, x, z, r, yAt, radius = 0.45) {
+  const out = [];
+  for (const b of rides) {
+    const def = BOATS[b?.type];
+    if (!def?.land || def.animal || b.gone || Math.abs(b.x - x) > r + 4 || Math.abs(b.z - z) > r + 4) continue;
+    const box = orientedBox(b.x, b.z, def.wid / 2, def.len / 2, -b.yaw, { type: 'ride', h: def.h, y0: yAt(b), rideId: b.id });
+    if (!circleOverlapsBox(x, z, radius, box)) out.push(box);
+  }
+  return out;
+}
 
 /** Land rides by type, each flagged `land`. */
 export const RIDES = Object.fromEntries(Object.entries(RIDE_DATA.types).map(([k, v]) => [k, { ...v, land: true }]));

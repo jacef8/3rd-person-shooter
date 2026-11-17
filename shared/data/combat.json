@@ -11,6 +11,7 @@
     "maxDrop": 0.6
   },
   "medkitHeal": 60,
+  "healthRegen": { "_about": "Out of the fight (not hit for afterMs) your health creeps back up to upTo, perSec a second, while you have food. Medkits heal the rest.", "afterMs": 8000, "upTo": 60, "perSec": 4 },
   "bots": {
     "weapons": [
       "carbine",
@@ -21,20 +22,20 @@
     "rogue": {
       "name": "Rogue",
       "hp": 140,
-      "damageMul": 0.55,
+      "damageMul": 0.35,
       "sightRange": 45
     },
     "hvt": {
       "name": "Rogue Lieutenant",
       "hp": 500,
-      "damageMul": 0.45,
+      "damageMul": 0.35,
       "sightRange": 45,
       "weapon": "dmr"
     },
     "guard": {
       "name": "Elite guard",
       "hp": 420,
-      "damageMul": 0.8,
+      "damageMul": 0.55,
       "sightRange": 55,
       "weapon": "carbine",
       "aim": 0.6

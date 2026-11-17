@@ -350,7 +350,12 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
       U.push(0, 0, 1, 0, 1, 1, 0, 1);
       if (flip) I.push(o, o + 2, o + 1, o, o + 3, o + 2); else I.push(o, o + 1, o + 2, o, o + 2, o + 3);
     };
-    quad(-0.5, 0, 0.5, 0, false);   // one picture; the shader turns it to face you (below)
+    // Three pictures crossed through the trunk (0°, 60°, 120°), fixed in the world: walk round a tree and
+    // it stays put, like a real one, instead of turning to follow you. Each has a face both ways.
+    for (let k = 0; k < 3; k++) {
+      const a = k * Math.PI / 3, cx = Math.cos(a) * 0.5, cz = Math.sin(a) * 0.5;
+      quad(-cx, -cz, cx, cz, false); quad(-cx, -cz, cx, cz, true);
+    }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
@@ -359,24 +364,10 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
     return g;
   })();
   /** Each tree's own part of the sheet, as an attribute per instance. */
-  // Each tree is one picture that always turns to face you round its trunk, so from wherever you
-  // stand it's a whole, round tree (never two flat cards crossed). Its shadow turns to the sun.
+  // Each tree's photo, from its own part of the sheet (the planes stay where they stand).
   const atlasUv = (sh) => {
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aTreeUv;\nvec3 bbWorld;')
-      .replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_MAP\n  vMapUv = vMapUv * aTreeUv.zw + aTreeUv.xy;\n#endif')
-      .replace('#include <project_vertex>', `
-  vec4 mvPosition;
-  {
-    vec3 c = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-    float w = length(instanceMatrix[0].xyz), h = length(instanceMatrix[1].xyz);
-    vec3 toCam = cameraPosition - c; toCam.y = 0.0;
-    float l = length(toCam); toCam = l > 1e-4 ? toCam / l : vec3(0.0, 0.0, 1.0);
-    vec3 side = vec3(toCam.z, 0.0, -toCam.x);
-    bbWorld = c + side * transformed.x * w + vec3(0.0, transformed.y * h, 0.0);
-    mvPosition = viewMatrix * vec4(bbWorld, 1.0);
-    gl_Position = projectionMatrix * mvPosition;
-  }`)
-      .replace('#include <worldpos_vertex>', 'vec4 worldPosition = vec4(bbWorld, 1.0);');
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aTreeUv;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_MAP\n  vMapUv = vMapUv * aTreeUv.zw + aTreeUv.xy;\n#endif');
   };
   const photoMat = new THREE.MeshStandardMaterial({ map: treeTex, alphaTest: 0.42, roughness: 1, metalness: 0, alphaToCoverage: true });
   photoMat.onBeforeCompile = atlasUv;
