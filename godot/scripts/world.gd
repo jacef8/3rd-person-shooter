@@ -1,7 +1,20 @@
-## The county, from the baked map (map/): ground heights and colours, every building and solid
-## object, every road. Detail is built in tiles around the player as they move; a coarse version of
-## the whole county sits underneath for the long view. Walls near the player get collision.
+## The county, from the game server (/gmap/, server/gmap.js: the very map the world runs on, map editor
+## fixes and all), cached on disk between runs; the copy baked into the game (map/) if the server can't
+## be reached. Ground heights and colours, every building and solid object, every road, and real 3D
+## trees streamed in around you. Detail is built in tiles around the player as they move; a coarse
+## version of the whole county sits underneath for the long view. Walls near the player get collision.
 extends Node3D
+
+const Trees = preload("res://scripts/trees.gd")
+const TREE_R := 520.0       # trees are drawn this far out
+const TREE_FULL := 90.0     # the full build of a tree within this distance, the light one beyond
+var loaded := false
+var base_http := ""
+var meta_sum := ""
+var nature_tile := 128.0
+var trees                    # the tree builds (trees.gd)
+var tree_tiles := {}         # tile key -> Node3D (or null while it's being fetched)
+var tree_busy := false
 
 const TILE := 320.0          # one detail tile, metres
 const NEAR_TILES := 4        # tiles in each direction drawn in detail (about 1.4 km)
@@ -42,19 +55,65 @@ const TYPE_COLOR := {
 }
 
 func _ready() -> void:
-	_load()
-	_materials()
-	_far_ground()
-	_water()
 	collider = StaticBody3D.new()
 	add_child(collider)
 
+## Load the map (from `base` = the server's http(s) address) and build the long view. Awaitable.
+func start(base: String) -> void:
+	base_http = base
+	trees = Trees.new()
+	await _load()
+	_materials()
+	_far_ground()
+	_water()
+	loaded = true
+
+## A file from the server (empty on failure).
+func _fetch(path: String) -> PackedByteArray:
+	var req := HTTPRequest.new()
+	req.accept_gzip = true
+	req.body_size_limit = 64 * 1024 * 1024
+	req.timeout = 180.0
+	add_child(req)
+	if req.request(base_http + path) != OK:
+		req.queue_free(); return PackedByteArray()
+	var res: Array = await req.request_completed
+	req.queue_free()
+	return res[3] if int(res[0]) == HTTPRequest.RESULT_SUCCESS and int(res[1]) == 200 else PackedByteArray()
+
 func _load() -> void:
-	var meta = JSON.parse_string(FileAccess.get_file_as_string("res://map/meta.json"))
+	# The server's map, cached: meta every time (it says which map it is), heights and colours only
+	# when the map has changed since last time.
+	var meta_txt := ""
+	var hraw := PackedByteArray(); var craw := PackedByteArray()
+	if base_http != "":
+		var mb := await _fetch("/gmap/meta.json")
+		if mb.size() > 0:
+			meta_txt = mb.get_string_from_utf8()
+	var cache := "user://gmap"
+	if meta_txt != "":
+		var m0 = JSON.parse_string(meta_txt)
+		var sum := str(m0.get("sum", ""))
+		DirAccess.make_dir_recursive_absolute(cache)
+		if sum != "" and FileAccess.get_file_as_string(cache + "/sum.txt") == sum:
+			hraw = FileAccess.get_file_as_bytes(cache + "/heights.d16.gz"); craw = FileAccess.get_file_as_bytes(cache + "/colors.rgb.gz")
+		if hraw.size() == 0 or craw.size() == 0:
+			hraw = await _fetch("/gmap/heights.d16.gz"); craw = await _fetch("/gmap/colors.rgb.gz")
+			if hraw.size() > 0 and craw.size() > 0:
+				var f := FileAccess.open(cache + "/heights.d16.gz", FileAccess.WRITE); f.store_buffer(hraw); f.close()
+				f = FileAccess.open(cache + "/colors.rgb.gz", FileAccess.WRITE); f.store_buffer(craw); f.close()
+				f = FileAccess.open(cache + "/sum.txt", FileAccess.WRITE); f.store_string(sum); f.close()
+		if hraw.size() == 0 or craw.size() == 0: meta_txt = ""
+	if meta_txt == "":   # no server: the copy that ships with the game
+		meta_txt = FileAccess.get_file_as_string("res://map/meta.json")
+		hraw = FileAccess.get_file_as_bytes("res://map/heights.d16.gz"); craw = FileAccess.get_file_as_bytes("res://map/colors.rgb.gz")
+		base_http = ""
+	var meta = JSON.parse_string(meta_txt)
 	size = meta.size; half = meta.half; step = meta.step; n = int(meta.n)
 	boxes = meta.boxes; roads = meta.roads; types = meta.types; towns = meta.towns
+	meta_sum = str(meta.get("sum", "")); nature_tile = float(meta.get("natureTile", 128))
 	# Heights: each row stored as differences from the point before, in 10 cm steps above -40 m.
-	var raw := FileAccess.get_file_as_bytes("res://map/heights.d16.gz").decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP)
+	var raw := hraw.decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP)
 	heights.resize(n * n)
 	for j in n:
 		var v := 0
@@ -63,7 +122,7 @@ func _load() -> void:
 			var d := raw.decode_s16(k * 2)
 			v = d + 32768 if i == 0 else v + d
 			heights[k] = v * meta.heightScale + meta.heightBase
-	var rgb := FileAccess.get_file_as_bytes("res://map/colors.rgb.gz").decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP)
+	var rgb := craw.decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP)
 	colors = Image.create_from_data(n, n, false, Image.FORMAT_RGB8, rgb)
 	for bi in boxes.size():
 		var b = boxes[bi]
@@ -88,12 +147,21 @@ func _cell_key(x: float, z: float) -> Vector2i:
 
 ## Ground height, the same 10 m grid the map was baked on, bilinear.
 func height(x: float, z: float) -> float:
+	if n < 2: return 0.0
 	var fx := (x + half) / step; var fz := (z + half) / step
 	var i := clampi(int(floor(fx)), 0, n - 2); var j := clampi(int(floor(fz)), 0, n - 2)
 	var u := clampf(fx - i, 0, 1); var v := clampf(fz - j, 0, 1)
 	var h00 := heights[j * n + i]; var h10 := heights[j * n + i + 1]
 	var h01 := heights[(j + 1) * n + i]; var h11 := heights[(j + 1) * n + i + 1]
 	return lerpf(lerpf(h00, h10, u), lerpf(h01, h11, u), v)
+
+## Which way the ground faces at (x, z): straight from the slope (always up-ish, whatever the winding).
+func _slope_normal(x: float, z: float, d := 10.0) -> Vector3:
+	return Vector3(height(x - d, z) - height(x + d, z), 2.0 * d, height(x, z - d) - height(x, z + d)).normalized()
+
+## The land-cover map's woods colour (60, 60, 34).
+func _is_woods(c: Color) -> bool:
+	return absf(c.r8 - 60) <= 6 and absf(c.g8 - 60) <= 6 and absf(c.b8 - 34) <= 6
 
 func ground_color(x: float, z: float) -> Color:
 	var i := clampi(int(round((x + half) / step)), 0, n - 1); var j := clampi(int(round((z + half) / step)), 0, n - 1)
@@ -105,6 +173,7 @@ func _materials() -> void:
 shader_type spatial;
 render_mode cull_back;
 uniform sampler2D grass : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D litter : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 varying vec3 wp;
 void vertex() { wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
 void fragment() {
@@ -120,12 +189,17 @@ void fragment() {
 	vec3 detail = base * mix(1.0, tl, 0.45);
 	vec3 real = base * mix(vec3(tl), rel, 0.55);
 	ALBEDO = mix(detail, real, grassy * 0.85);
+	// The woods floor (dark olive on the land-cover map): pine straw and leaves, a little brighter.
+	float wd = 1.0 - COLOR.a;   // woods (marked per vertex)
+	vec3 lit = texture(litter, wp.xz / 4.0).rgb * 0.62 + texture(litter, wp.xz / 13.0 + 0.41).rgb * 0.38;
+	ALBEDO = mix(ALBEDO, lit * vec3(0.7, 0.62, 0.5), wd);
 	ROUGHNESS = 1.0;
 }
 """
 	ground_mat = ShaderMaterial.new()
 	ground_mat.shader = sh
 	ground_mat.set_shader_parameter("grass", load("res://textures/grass.jpg"))
+	ground_mat.set_shader_parameter("litter", load("res://textures/forest.jpg"))
 	box_mat = StandardMaterial3D.new()
 	box_mat.vertex_color_use_as_albedo = true
 	box_mat.roughness = 0.9
@@ -142,14 +216,18 @@ func _build_tile(tx: int, tz: int) -> MeshInstance3D:
 	for j in q + 1:
 		for i in q + 1:
 			var x := x0 + i * step; var z := z0 + j * step
-			st.set_color(ground_color(x, z).srgb_to_linear())
+			var gc := ground_color(x, z)
+			var lc := gc.srgb_to_linear()
+			lc.a = 0.0 if _is_woods(gc) else 1.0   # alpha marks the woods floor for the ground shader
+			st.set_color(lc)
+			st.set_normal(_slope_normal(x, z))
 			st.add_vertex(Vector3(x, height(x, z), z))
 	for j in q:
 		for i in q:
 			var a := j * (q + 1) + i
 			st.add_index(a); st.add_index(a + 1); st.add_index(a + q + 1)
 			st.add_index(a + 1); st.add_index(a + q + 2); st.add_index(a + q + 1)
-	st.generate_normals()
+	# (normals from the slope, set per vertex above)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
 	mi.material_override = ground_mat
@@ -166,18 +244,32 @@ func _far_ground() -> void:
 		for i in m:
 			var x := -half + i * fs; var z := -half + j * fs
 			st.set_color(ground_color(x, z).srgb_to_linear())
+			st.set_normal(_slope_normal(x, z, fs))
 			st.add_vertex(Vector3(x, height(x, z) - 0.35, z))
 	for j in m - 1:
 		for i in m - 1:
 			var a := j * m + i
 			st.add_index(a); st.add_index(a + 1); st.add_index(a + m)
 			st.add_index(a + 1); st.add_index(a + m + 1); st.add_index(a + m)
-	st.generate_normals()
+	# (normals from the slope)
 	var mi := MeshInstance3D.new()
 	mi.mesh = st.commit()
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 1.0
+	# Only out past the detailed ground: close by, this coarse one (a point every 100 m) would poke up
+	# through it wherever the ground dips.
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode cull_back;
+varying vec3 wp;
+void vertex() { wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
+void fragment() {
+	if (distance(wp.xz, CAMERA_POSITION_WORLD.xz) < 1200.0) discard;
+	ALBEDO = COLOR.rgb;
+	ROUGHNESS = 1.0;
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
 	mi.material_override = mat
 	add_child(mi)
 
@@ -292,6 +384,8 @@ func _add_road(st: SurfaceTool, r, lo: Vector2) -> void:
 
 ## Called every frame with where the player is: builds what's near, drops what's far, a little at a time.
 func update(px: float, pz: float) -> void:
+	if not loaded: return
+	_update_trees(px, pz)
 	var tx := int(floor(px / TILE)); var tz := int(floor(pz / TILE))
 	var want := {}
 	var todo := []
@@ -357,3 +451,76 @@ func ray_ground(o: Vector3, d: Vector3, max_d: float) -> float:
 		if p.y < height(p.x, p.z): return t
 		t += 1.5
 	return INF
+
+# ---------------------------------------------------------------- trees
+## Trees in 128 m tiles around you, asked of the server a batch at a time; drawn as instanced meshes,
+## each build twice (full close by, light further out, by distance from the camera).
+func _update_trees(px: float, pz: float) -> void:
+	if base_http == "": return
+	var T := nature_tile
+	var r := int(ceil(TREE_R / T))
+	var cx := int(floor((px + half) / T)); var cz := int(floor((pz + half) / T))
+	var want := {}
+	var need := []
+	for dz in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var k := Vector2i(cx + dx, cz + dz)
+			var mx := -half + (k.x + 0.5) * T; var mz := -half + (k.y + 0.5) * T
+			if Vector2(mx - px, mz - pz).length() > TREE_R + T: continue
+			want[k] = true
+			if not tree_tiles.has(k): need.append(k)
+	for k in tree_tiles.keys():
+		if not want.has(k) and tree_tiles[k] != null:
+			tree_tiles[k].queue_free(); tree_tiles.erase(k)
+	if tree_busy or need.is_empty(): return
+	need.sort_custom(func(a, b): return (a - Vector2i(cx, cz)).length_squared() < (b - Vector2i(cx, cz)).length_squared())
+	_fetch_trees(need.slice(0, 24))
+
+func _fetch_trees(keys: Array) -> void:
+	tree_busy = true
+	for k in keys: tree_tiles[k] = null
+	var q := ";".join(keys.map(func(k): return "%d,%d" % [k.x, k.y]))
+	var body := await _fetch("/gmap/nature?t=" + q)
+	tree_busy = false
+	if body.size() == 0:
+		for k in keys: tree_tiles.erase(k)   # try again later
+		return
+	var got = JSON.parse_string(body.get_string_from_utf8())
+	var tiles: Dictionary = got.get("tiles", {}) if got is Dictionary else {}
+	for k in keys:
+		var list = tiles.get("%d,%d" % [k.x, k.y], [])
+		if not tree_tiles.has(k): continue   # walked away meanwhile
+		tree_tiles[k] = _build_trees(list)
+
+func _build_trees(list: Array) -> Node3D:
+	var node := Node3D.new()
+	add_child(node)
+	var groups := {}   # build -> [transform...]
+	for t in list:
+		if int(t[6]) == 1: continue   # cut down
+		var kind := "pine" if int(t[4]) == 1 else "tree"
+		var pk: Array = trees.pick(kind, int(t[5]), float(t[3]))
+		var v: Dictionary = pk[0]; var sx: float = pk[1]
+		var yaw := fmod(float(t[5]) * 2.399, TAU)
+		var xf := Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3(sx, float(t[3]), sx)), Vector3(t[0], float(t[2]) + 0.15, t[1]))
+		if not groups.has(v): groups[v] = []
+		groups[v].append(xf)
+	for v in groups:
+		var xfs: Array = groups[v]
+		for which in ["full", "lite"]:
+			for part in 2:
+				var mm := MultiMesh.new()
+				mm.transform_format = MultiMesh.TRANSFORM_3D
+				mm.mesh = v[which][part]
+				mm.instance_count = xfs.size()
+				for i in xfs.size(): mm.set_instance_transform(i, xfs[i])
+				var mi := MultiMeshInstance3D.new()
+				mi.multimesh = mm
+				mi.material_override = trees.wood_mat if part == 0 else trees.leaf_mat
+				if which == "full": mi.visibility_range_end = TREE_FULL
+				else: mi.visibility_range_begin = TREE_FULL
+				mi.visibility_range_end_margin = 10.0 if which == "full" else 0.0
+				mi.visibility_range_begin_margin = 10.0 if which == "lite" else 0.0
+				mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+				node.add_child(mi)
+	return node

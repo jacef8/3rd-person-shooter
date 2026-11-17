@@ -30,6 +30,11 @@ func _base_url() -> String:
 		return env
 	return "wss://" + DEFAULT_HOST
 
+## The same server over http(s), for the map (/gmap/).
+func http_base() -> String:
+	var b := _base_url()
+	return b.replace("wss://", "https://").replace("ws://", "http://")
+
 func send(m: Dictionary) -> void:
 	if ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		ws.send_text(JSON.stringify(m))

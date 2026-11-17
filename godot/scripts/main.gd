@@ -70,6 +70,7 @@ func _ready() -> void:
 	_player()
 	net = Net.new()
 	add_child(net)
+	world.start(net.http_base())   # loads the county from the server in the background
 	net.message.connect(_on_message)
 	net.opened.connect(_on_open)
 	net.closed.connect(func(): _status("Connection lost — reconnecting…"); in_game = false; await get_tree().create_timer(2.0).timeout; net.connect_to_world(1))
@@ -91,9 +92,23 @@ func _environment() -> void:
 	sky.sky_material = mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 1.25
+	env.ambient_light_energy = 1.3
+	env.ambient_light_sky_contribution = 0.55   # shade lit partly by the sky, partly warm bounce off the ground
+	env.ambient_light_color = Color(0.7, 0.64, 0.52)
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.15
+	env.tonemap_exposure = 1.1
+	# Light that behaves like light: contact shadows where things meet, bounce light, a soft bloom on
+	# bright sky, haze in the distance. (The phone renderer skips what it can't do.)
+	env.ssao_enabled = true
+	env.ssao_radius = 1.6
+	env.ssao_intensity = 2.2
+	env.ssil_enabled = true
+	env.glow_enabled = true
+	env.glow_intensity = 0.35
+	env.glow_bloom = 0.05
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 1.08
+	env.adjustment_contrast = 1.05
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.72, 0.8, 0.88)
 	env.fog_density = 0.00012
@@ -105,7 +120,10 @@ func _environment() -> void:
 	sun.rotation_degrees = Vector3(-42, -55, 0)
 	sun.light_energy = 1.6
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 120.0
+	sun.shadow_blur = 1.5
+	sun.shadow_opacity = 0.82   # dappled shade under the trees, not black
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = 260.0
 	add_child(sun)
 
 func _player() -> void:
@@ -187,6 +205,7 @@ func _on_message(m: Dictionary) -> void:
 			my_id = m.id
 			player.position = Vector3(m.x, world.height(m.x, m.z), m.z)
 			yaw = m.get("yaw", 0.0)
+			_test_shot.call_deferred()
 			if m.get("firstDeploy", false):
 				net.send({ "t": "deploy", "kind": "lz", "id": randi() % 25 })
 			elif m.get("deploy") != null:
@@ -510,6 +529,9 @@ func _on_play() -> void:
 	if nm.length() < 2: nm = _profile().name
 	_save_profile(nm)
 	start_panel.visible = false
+	if not world.loaded:
+		_status("Loading the county…")
+		while not world.loaded: await get_tree().create_timer(0.2).timeout
 	_set_hud(true)
 	_status("Connecting…")
 	net.connect_to_world(1)
@@ -523,3 +545,21 @@ func _status(t: String) -> void:
 func _toast(t: String) -> void:
 	toast_label.text = t
 	toast_until = Time.get_ticks_msec() + 3500
+
+## Tests: DEADZONE_SHOT=path.png [DEADZONE_SHOT_AT="x,z,yaw"] goes there (dev servers), waits for the
+## trees to come in, saves what's on screen and quits.
+func _test_shot() -> void:
+	var path := OS.get_environment("DEADZONE_SHOT")
+	if path == "": return
+	var at := OS.get_environment("DEADZONE_SHOT_AT").split(",")
+	await get_tree().create_timer(3.0).timeout
+	if at.size() >= 2:
+		net.send({ "t": "dev", "x": float(at[0]), "z": float(at[1]) })
+		await get_tree().create_timer(2.0).timeout
+		player.position = Vector3(float(at[0]), world.height(float(at[0]), float(at[1])), float(at[1]))
+		if at.size() >= 3: yaw = float(at[2])
+		pitch = 0.08
+	await get_tree().create_timer(float(OS.get_environment("DEADZONE_SHOT_WAIT") if OS.get_environment("DEADZONE_SHOT_WAIT") != "" else "20")).timeout
+	get_viewport().get_texture().get_image().save_png(path)
+	print("SHOT saved ", path)
+	get_tree().quit()
