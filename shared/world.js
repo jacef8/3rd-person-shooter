@@ -331,7 +331,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     if (lx1 - lx0 < 5 || lz1 - lz0 < 5) { for (const [x0, z0, x1, z1] of rects) obox(x0, z0, x1, z1, total, y0); return null; }
     const oneStorey = total < storey + 1;
     const wallH = oneStorey ? total - 0.3 : storey;
-    const rec = { ...bb, cx, cz, ang, rects, type, floor: y0, pad: base, doors: [], top: y0 + (oneStorey ? wallH + 0.3 : total), roof: opts.roof || null, bldg, real: 1, ...(opts.name ? { name: opts.name } : {}) };
+    const rec = { ...bb, cx, cz, ang, rects, type, floor: y0, pad: base, doors: [], top: y0 + (oneStorey ? wallH + 0.3 : total), roof: opts.roof || null, bldg, real: 1, ...(opts.name ? { name: opts.name } : {}), ...(opts.si != null ? { si: opts.si } : {}) };
     buildings.push(rec);
     // Outside walls: each piece's edges, minus where another piece carries on past them.
     const EPS = 0.05, runs = [];
@@ -482,6 +482,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   const realPads = [];
   if (realStructs) {
     for (const row of real.structures) {
+      if (!row) { realPads.push(null); continue; }   // taken out in the map editor (shared/edits.js)
       const [lat, lon, w0, d0] = row;
       const { x, z } = project(lat, lon, size);
       const w = Math.max(3, Math.min(120, w0 || 10)), d = Math.max(3, Math.min(120, d0 || 10));
@@ -810,7 +811,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const pitched = type === 'home' || type === 'farmhouse' || type === 'barn' || (type === 'civic' && area < 1200);
       // Pieces in the building's own frame (one rectangle, or the L / T / wings of the real outline).
       const rects = pad.rects || [[-w / 2, -d / 2, w / 2, d / 2]];
-      realShell(x, z, pad.ang, rects, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, name: name || undefined, sink: 0.6 });
+      realShell(x, z, pad.ang, rects, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, name: name || undefined, sink: 0.6, si });
       realBuildings.push(1);
     }
   }

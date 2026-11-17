@@ -12,6 +12,7 @@ import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
 import { createTownDressing } from '/towns.js';
 import { withCounty } from '/shared/county.js';
+import { withEdits } from '/shared/edits.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { ACT_POSE, updateAction } from '/actions.js';
@@ -163,7 +164,7 @@ async function loadRealData(info) {
     info.elevation ? elevation() : undefined, info.landcover ? landcover() : undefined, info.infrastructure ? whole('infrastructure.json') : undefined,
     get('businesses.json')]);   // (signs only: not part of the map, so it's fetched whatever the server says)
   const county = info.county ? await whole('county.json') : null;   // the county's own GIS, merged as the server does
-  return { ...withCounty({ structures, roads }, county), elevation: elev, landcover: cover, infrastructure, businesses, hydrants: county?.hydrants };
+  return { ...withEdits(withCounty({ structures, roads }, county), info.edits), elevation: elev, landcover: cover, infrastructure, businesses, hydrants: county?.hydrants };
 }
 
 /** A loaded tree or rock by its id (nature boxes sit in the grid near where they grow). */
@@ -173,6 +174,7 @@ function findNatureBox(id) {
 function initWorld(m) {
   const map = generateMap(m.seed, m.size, m.realData || {});
   for (const id of m.felled || []) map.felled.add(id);
+  state.mapSum = m.mapSum;
   if (mapChecksum(map) !== m.mapSum) toast('⚠ World mismatch with server — update your client');
   state.map = map;
   // One coarse pass over the whole county, shared by the far landscape and the map screen.
@@ -1694,6 +1696,8 @@ function connect(name, world = 1, ticket = null) {
     const m = JSON.parse(ev.data);
     // While real-world map data downloads, hold everything else until the world exists.
     if (state.loadingWorld) return state.loadingWorld.push(m);
+    // Back from a world restart built differently (the map editor's fixes): start over with the new map.
+    if (m.t === 'welcome' && state.map && state.mapSum != null && m.mapSum !== state.mapSum) { toast('The map was updated: reloading'); setTimeout(() => location.reload(), 800); return; }
     if (m.t === 'welcome' && !state.map && m.real) {
       state.loadingWorld = [];
       joinStatus('Downloading the county…', 'Real roads, buildings, woods and terrain: about 4 MB. Only slow the first time.');

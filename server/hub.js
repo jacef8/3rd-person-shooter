@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { serveStatic } from './static.js';
+import { cleanEdits } from '../shared/edits.js';
 import webpush from 'web-push';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -62,6 +63,7 @@ function startWorld(w) {
     stdio: ['ignore', 'pipe', 'inherit', 'ipc'],   // the IPC channel lets a world notice if the hub dies
   });
   w.proc = proc;
+  w.startedAt = Date.now();
   proc.stdout.on('data', (d) => {
     const text = String(d);
     if (text.includes('Deadzone server')) w.up = true;
@@ -303,8 +305,77 @@ const STATIC = [
   ['/data/real/', process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real')],
   ['/', path.join(ROOT, 'client')],
 ];
+// ---------------------------------------------------------------- the map editor (client/editor.html)
+// Hand fixes to the real buildings, saved beside the worlds' saves (map-edits.json) and read by each
+// world when it starts. Only with the editor key (EDITOR_KEY): there's no editing without one.
+const EDITS_FILE = process.env.MAP_EDITS_FILE || path.join(DATA_DIR, 'map-edits.json');
+const REAL_DIR = process.env.REAL_DATA_DIR || path.join(ROOT, 'data', 'real');
+let buildingCount = null;
+const countBuildings = () => {
+  if (buildingCount == null) {
+    const n = (f, k) => { try { return JSON.parse(fs.readFileSync(path.join(REAL_DIR, f), 'utf8'))[k]?.length || 0; } catch { return 0; } };
+    buildingCount = n('structures.json', 'rows') + n('county.json', 'structures');
+  }
+  return buildingCount;
+};
+const editorOk = (req) => {
+  const key = process.env.EDITOR_KEY || '', got = String(req.headers['x-editor-key'] || '');
+  return key.length >= 12 && got.length === key.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(key));
+};
+const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); };
+/** Ask the first world something (its answer has the same `t`), or `fallback` if it can't say. */
+function askWorld(msg, fallback) {
+  const w = WORLDS[0];
+  if (!w.proc?.connected || !w.up) return Promise.resolve(fallback);
+  return new Promise((resolve) => {
+    const id = crypto.randomBytes(4).toString('hex');
+    const on = (m) => { if (m?.t === msg.t && m.id === id) { w.proc.off('message', on); clearTimeout(t); resolve(m); } };
+    const t = setTimeout(() => { w.proc.off('message', on); resolve(fallback); }, 2500);
+    w.proc.on('message', on);
+    w.proc.send({ ...msg, id });
+  });
+}
+/** Which buildings are someone's stash house right now, and which edits the world couldn't build. */
+const worldStatus = () => askWorld({ t: 'claims' }, { list: [], missing: [] });
+const claimedBuildings = async () => (await worldStatus()).list || [];
+async function editorApi(req, res, url) {
+  if (!process.env.EDITOR_KEY) return json(res, 404, { error: 'The map editor is switched off on this server (no EDITOR_KEY).' });
+  if (!editorOk(req)) return json(res, 403, { error: 'Wrong editor key' });
+  const read = () => { try { return JSON.parse(fs.readFileSync(EDITS_FILE, 'utf8')); } catch { return { v: 1, b: {} }; } };
+  if (url === '/api/editor/edits' && req.method === 'GET') return json(res, 200, { edits: read(), ...(await worldStatus().then((st) => ({ claims: st.list || [], missing: st.missing || [] }))), started: WORLDS[0].startedAt || 0, savedAt: (() => { try { return fs.statSync(EDITS_FILE).mtimeMs; } catch { return 0; } })() });
+  if (url === '/api/editor/edits' && req.method === 'PUT') {
+    let body = '';
+    for await (const c of req) { body += c; if (body.length > 2e6) return json(res, 413, { error: 'Too big' }); }
+    let raw; try { raw = JSON.parse(body); } catch { return json(res, 400, { error: 'Not JSON' }); }
+    const edits = cleanEdits(raw, countBuildings());
+    if (!edits) return json(res, 400, { error: 'Not map edits' });
+    // A stash house can't be taken out from under its owner.
+    const claimed = new Map(await claimedBuildings());
+    for (const [k, e] of Object.entries(edits.b)) if (e.gone && claimed.has(Number(k))) return json(res, 409, { error: `Building ${k} is ${claimed.get(Number(k)) || 'someone'}'s stash house: it can be moved, not removed` });
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(EDITS_FILE + '.tmp', JSON.stringify(edits));
+    fs.renameSync(EDITS_FILE + '.tmp', EDITS_FILE);
+    console.log(`Map editor: saved ${Object.keys(edits.b).length} building edits`);
+    return json(res, 200, { ok: true, count: Object.keys(edits.b).length });
+  }
+  if (url === '/api/editor/check' && req.method === 'POST') {
+    let body = '';
+    for await (const c of req) { body += c; if (body.length > 1e4) return json(res, 413, { error: 'Too big' }); }
+    let m; try { m = JSON.parse(body); } catch { return json(res, 400, { error: 'Not JSON' }); }
+    return json(res, 200, await askWorld({ t: 'check', si: Number(m.si), e: m.e || {} }, { ok: true, unknown: true }));
+  }
+  if (url === '/api/editor/apply' && req.method === 'POST') {
+    // Each world saves, stops and comes straight back up (the exit handler restarts it) built with the edits.
+    for (const w of WORLDS) if (w.proc && w.proc.exitCode === null) w.proc.kill('SIGTERM');
+    console.log('Map editor: worlds restarting to take the edits');
+    return json(res, 200, { ok: true });
+  }
+  return json(res, 404, { error: 'No such editor call' });
+}
+
 const handler = (req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
+  if (url.startsWith('/api/editor/')) { editorApi(req, res, url).catch((e) => { console.error('Map editor:', e); json(res, 500, { error: 'Editor error' }); }); return; }
   if (url === '/worlds') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(WORLDS.map((w) => ({ id: w.id, name: w.name, online: w.online, up: w.up }))));

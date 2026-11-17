@@ -7,6 +7,7 @@
 //   near players, which is what lets one server host a PUBG-sized map.
 
 import { withCounty } from '../shared/county.js';
+import { withEdits, placement } from '../shared/edits.js';
 import { SITES, findSites } from '../shared/sites.js';
 import { project } from '../shared/geography.js';
 import http from 'node:http';
@@ -16,7 +17,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { biomeName, DEEP_WATER, parseElevation, parseLandcover, COVER } from '../shared/terrain.js';
+import { biomeName, DEEP_WATER, parseElevation, parseLandcover, COVER, RELIEF } from '../shared/terrain.js';
 import zlib from 'node:zlib';
 import { serveStatic } from './static.js';
 import webpush from 'web-push';
@@ -88,9 +89,14 @@ const readElevation = () => { try { return parseElevation(zlib.gunzipSync(fs.rea
 const readLandcover = () => { try { return parseLandcover(zlib.gunzipSync(fs.readFileSync(path.join(REAL_DIR, 'landcover.bin.gz')))); } catch { return null; } };
 const realFiles = process.env.REAL_DATA === '0' ? {} : { structures: readReal('structures.json'), roads: readReal('roads.json'), elevation: readElevation(), landcover: readLandcover(), infrastructure: readReal('infrastructure.json') };
 const COUNTY = process.env.REAL_DATA === '0' || process.env.COUNTY_DATA === '0' ? null : readReal('county.json');   // Liberty County's own GIS (shared/county.js)
-const map = generateMap(SEED, WORLD_SIZE, withCounty({ structures: realFiles.structures?.rows, roads: realFiles.roads?.rows, elevation: realFiles.elevation, landcover: realFiles.landcover, infrastructure: realFiles.infrastructure }, COUNTY));
+const MERGED = withCounty({ structures: realFiles.structures?.rows, roads: realFiles.roads?.rows, elevation: realFiles.elevation, landcover: realFiles.landcover, infrastructure: realFiles.infrastructure }, COUNTY);
+// Hand fixes from the map editor (client/editor.html, saved by the hub beside the world's save):
+// read once at start, so the world and everyone in it are built from the same ones.
+const EDITS_FILE = process.env.MAP_EDITS_FILE || path.join(path.dirname(DATA_FILE), 'map-edits.json');
+const EDITS = (() => { if (process.env.REAL_DATA === '0') return null; try { const e = JSON.parse(fs.readFileSync(EDITS_FILE, 'utf8')); return e?.b && Object.keys(e.b).length ? e : null; } catch { return null; } })();
+const map = generateMap(SEED, WORLD_SIZE, withEdits(MERGED, EDITS));
 // Clients fetch the same files so they generate the identical world.
-const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { county: !!COUNTY, structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation, landcover: !!realFiles.landcover, infrastructure: !!realFiles.infrastructure } : null;
+const REAL_INFO = (realFiles.structures || realFiles.roads || realFiles.elevation) ? { ...(EDITS ? { edits: EDITS } : {}), county: !!COUNTY, structures: !!realFiles.structures, roads: !!realFiles.roads, elevation: !!realFiles.elevation, landcover: !!realFiles.landcover, infrastructure: !!realFiles.infrastructure } : null;
 const grid = map.grid;
 const terrain = map.terrain;
 /** Look something up by a key a client sent: only the table's own entries count (never 'constructor'
@@ -128,6 +134,80 @@ function loadDb() {
 }
 const db = loadDb();
 Object.assign(db, { seed: SEED, version: DB_VERSION, size: WORLD_SIZE });
+moveWithEdits();
+/**
+ * A building moved or turned in the map editor takes what's inside it along: a claimed building's stash
+ * locker and everything players built in and around it (within a metre of its walls) keeps its place in
+ * the building. Compared with the edits the world last ran with (db.appliedEdits).
+ */
+function moveWithEdits() {
+  const rows = MERGED?.structures;
+  if (!rows) return;
+  const prev = db.appliedEdits?.b || {}, next = EDITS?.b || {};
+  const at = (i, e) => (e && !e.gone ? { ...placement(rows[i]), ...e } : e?.gone ? null : placement(rows[i]));
+  let moved = 0;
+  for (const k of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+    const i = Number(k);
+    if (!rows[i]) continue;
+    const a = at(i, prev[k]), b = at(i, next[k]);
+    if (!a || !b || (a.lat === b.lat && a.lon === b.lon && a.ang === b.ang)) continue;
+    const pa = project(a.lat, a.lon, map.size), pb = project(b.lat, b.lon, map.size);
+    const ra = a.ang * Math.PI / 180, rb = b.ang * Math.PI / 180, turn = rb - ra;
+    for (const st of db.structures) {
+      const dx = st.x - pa.x, dz = st.z - pa.z;
+      const lx = dx * Math.cos(ra) + dz * Math.sin(ra), lz = -dx * Math.sin(ra) + dz * Math.cos(ra);
+      if (Math.abs(lx) > a.w / 2 + 1 || Math.abs(lz) > a.d / 2 + 1) continue;
+      st.x = pb.x + dx * Math.cos(turn) - dz * Math.sin(turn);
+      st.z = pb.z + dx * Math.sin(turn) + dz * Math.cos(turn);
+      if (Math.round(Math.abs(turn) / (Math.PI / 2)) % 2) st.rot = st.rot ? 0 : 1;
+      st.y0 = terrain.height(st.x, st.z) - 0.05;
+      moved++;
+    }
+  }
+  if (moved) console.log(`Map edits: ${moved} stash lockers and built pieces moved along with their buildings`);
+  db.appliedEdits = EDITS || null;
+}
+// The map editor (via the hub) asks which buildings are someone's stash house (so they aren't taken out),
+// which of its fixes the world couldn't build, and whether a building would stand where it's being put.
+if (process.send) process.on('message', (m) => {
+  if (m?.t === 'claims') {
+    const out = [];
+    for (const st of structs.values()) if (PIECES[st.type].claim && st.building != null && map.buildings[st.building]?.si != null) out.push([map.buildings[st.building].si, st.ownerName || '']);
+    const built = new Set(map.buildings.map((b) => b.si).filter((v) => v != null));
+    const missing = Object.entries(EDITS?.b || {}).filter(([k, e]) => !e.gone && !built.has(Number(k))).map(([k]) => Number(k));
+    process.send({ t: 'claims', id: m.id, list: out, missing });
+  } else if (m?.t === 'check') process.send({ t: 'check', id: m.id, ...checkPlacement(Number(m.si), m.e || {}) });
+});
+/** Would the world build building `si` where the editor's putting it? The same tests the world makes
+ *  when it lays the county out (shared/world.js): on the map, on dry ground, not too steep, nothing in the way. */
+const NATURE = new Set(['tree', 'pine', 'rock', 'boulder', 'bush', 'scrub', 'cactus', 'canopy', 'caveroof', 'cover', 'border']);
+function checkPlacement(si, e) {
+  const row = MERGED?.structures?.[si];
+  if (!row) return { ok: false, why: 'There\'s no such building' };
+  const p = { ...placement(row), ...e };
+  if (![p.lat, p.lon, p.w, p.d, p.ang].every(Number.isFinite)) return { ok: false, why: 'Not a place' };
+  const { x, z } = project(p.lat, p.lon, map.size);
+  const w = Math.max(3, Math.min(120, p.w)), d = Math.max(3, Math.min(120, p.d)), a = p.ang * Math.PI / 180;
+  const ex = (Math.abs(Math.cos(a)) * w + Math.abs(Math.sin(a)) * d) / 2, ez = (Math.abs(Math.sin(a)) * w + Math.abs(Math.cos(a)) * d) / 2;
+  const minX = x - ex, maxX = x + ex, minZ = z - ez, maxZ = z + ez, half = map.size / 2;
+  if (minX < -half + 30 || maxX > half - 30 || minZ < -half + 30 || maxZ > half - 30) return { ok: false, why: 'Too near the edge of the map' };
+  const H = terrain.raw || terrain.exact;
+  const hs = [H(minX, minZ), H(maxX, minZ), H(minX, maxZ), H(maxX, maxZ), H(x, z)];
+  const lo = Math.min(...hs), hi = Math.max(...hs);
+  if (lo <= 0.3) return { ok: false, why: 'It would be standing in water' };
+  if (hi - lo >= 4 * RELIEF + 0.15 * Math.max(w, d)) return { ok: false, why: 'The ground there is too steep for it' };
+  const self = map.buildings.find((b) => b.si === si);
+  // (what's inside it now, its counter or its shelves, is made with it, so it doesn't count)
+  const ownInside = (b) => self && (b.minX + b.maxX) / 2 > self.minX && (b.minX + b.maxX) / 2 < self.maxX && (b.minZ + b.maxZ) / 2 > self.minZ && (b.minZ + b.maxZ) / 2 < self.maxZ;
+  const inWay = map.grid.rect(minX - 0.5, minZ - 0.5, maxX + 0.5, maxZ + 0.5, [], true).find((b) => !NATURE.has(b.type) && !(self && b.bldg === self.bldg) && !ownInside(b) && !(b.houseId == null && b.type === 'door'));
+  if (inWay) {
+    const other = map.buildings.find((q) => q.bldg === inWay.bldg);
+    return { ok: false, why: other ? `It overlaps ${other.name || 'another building'}: the game would leave one of them out` : `It overlaps a ${inWay.type}` };
+  }
+  const home = map.houses.find((h) => Math.abs(h.x - x) < ex + 16 && Math.abs(h.z - z) < ez + 16);
+  if (home) return { ok: false, why: 'Too close to one of the game\'s stash-house spots' };
+  return { ok: true };
+}
 remapHouseClaims(db);
 for (const h of map.houses) {
   db.houses[h.id] = { ...freshHouse(), ...(db.houses[h.id] || {}) };

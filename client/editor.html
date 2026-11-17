@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Deadzone map editor</title>
+<script type="importmap">{ "imports": { "three": "/vendor/three.module.js" } }</script>
+<style>
+  @font-face { font-family: 'Atkinson'; src: url('/fonts/atkinson-hyperlegible-latin-400-normal.woff2') format('woff2'); font-weight: 400; }
+  @font-face { font-family: 'Atkinson'; src: url('/fonts/atkinson-hyperlegible-latin-700-normal.woff2') format('woff2'); font-weight: 700; }
+  :root {
+    --bg: #12161b; --panel: #1b2128; --panel2: #232b34; --line: #36414d; --ink: #f2f4f6; --ink2: #b9c2cc;
+    --accent: #ff8a2a; --ok: #49c36b; --warn: #ffc53d; --bad: #ff5a5a; --sel: #ffd84a; --claim: #5aa8ff;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 400 16px/1.35 'Atkinson', system-ui, sans-serif; }
+  #app { position: fixed; inset: 0; display: grid; grid-template-columns: 1fr 340px; grid-template-rows: auto 1fr; }
+  header { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header b { font-size: 17px; margin-right: 6px; }
+  #map { position: relative; min-height: 0; overflow: hidden; touch-action: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); padding: 14px; overflow: auto; min-height: 0; }
+  button, input, select { font: 700 15px/1 'Atkinson', system-ui, sans-serif; color: var(--ink); background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; min-height: 44px; padding: 0 14px; }
+  button:hover { border-color: #5a6876; } button:active { background: #2c3641; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button:disabled { opacity: 0.45; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #141414; }
+  button.danger { border-color: var(--bad); color: #ffb3b3; }
+  input { font-weight: 400; min-width: 0; }
+  #search { width: 220px; }
+  .grow { flex: 1; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  .row button { flex: 1 1 auto; }
+  h2 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--ink2); font-size: 15px; margin: 0 0 10px; }
+  .lbl { color: var(--ink2); font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; margin: 14px 0 2px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; padding: 3px 8px; border-radius: 8px; font-size: 13px; font-weight: 700; }
+  .chip.edit { background: #4a2e10; color: #ffc48a; } .chip.claim { background: #12304f; color: #a9d0ff; } .chip.gone { background: #4a1414; color: #ffb3b3; }
+  #status { color: var(--ink2); font-size: 14px; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; max-width: 90vw; z-index: 9; }
+  #toast[hidden], [hidden] { display: none !important; }
+  #results { position: absolute; top: 8px; left: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; max-height: 50%; overflow: auto; z-index: 3; min-width: 260px; }
+  #results button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; font-weight: 400; }
+  #keybox { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 10; }
+  #keybox div { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; width: min(420px, 92vw); }
+  #keybox input { width: 100%; margin: 10px 0; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; color: var(--ink2); font-size: 13px; margin-top: 16px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+  @media (max-width: 800px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+    aside { border-left: 0; border-top: 1px solid var(--line); max-height: 46vh; }
+    #search { width: 140px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <b>Map editor</b>
+    <input id="search" placeholder="Find a business…" autocomplete="off">
+    <select id="town" aria-label="Go to a town"><option value="">Go to…</option></select>
+    <span class="grow"></span>
+    <span id="status">Loading…</span>
+    <button id="undo" disabled>Undo</button>
+    <button id="save" disabled>Save</button>
+    <button id="apply" class="primary">Put in the game</button>
+  </header>
+  <div id="map"><canvas id="cv"></canvas><div id="results" hidden></div></div>
+  <aside id="side">
+    <h2>Fix a building</h2>
+    <p class="sub">Tap a building to pick it. Drag it to move it. Drag the empty map to look around; pinch or scroll to zoom.</p>
+    <div class="legend"><span><i style="background:#8a96a3"></i>Building</span><span><i style="background:var(--accent)"></i>Changed</span><span><i style="background:var(--claim)"></i>Someone's stash house</span><span><i style="background:var(--sel)"></i>Picked</span></div>
+  </aside>
+</div>
+<div id="keybox" hidden><div>
+  <h2>Editor key</h2>
+  <p class="sub">The map editor needs the key that goes with this server. You only need to enter it once on this device.</p>
+  <input id="keyin" type="password" autocomplete="off" placeholder="Editor key">
+  <button id="keygo" class="primary" style="width:100%">Open the editor</button>
+  <p id="keyerr" class="sub" style="color:var(--bad)" hidden></p>
+</div></div>
+<div id="toast" hidden></div>
+<script type="module" src="/editor.js"></script>
+</body>
+</html>
