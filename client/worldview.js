@@ -240,6 +240,95 @@ export function pushStorefront(buf, r, toward) {
     for (let i = 0; i < m; i++) at(-((m - 1) * 3) / 2 + i * 3, 0.04, fy + 0.3, 1.4, 1.2, 0.05, GLASS);
   }
 }
+/**
+ * A house's outside, so it reads as a house and not a box: a block foundation, white corner boards,
+ * windows along every wall (a white frame, the glass, a sill and, on some houses, shutters), a frame
+ * and a concrete stoop at each door, a porch roof on two posts over the door that faces the road, and
+ * an air conditioner by a side wall. All drawing only (the walls are what's solid). `glass` gets the
+ * window panes (a shiny material that shows the sky).
+ */
+const TRIM = [0.93, 0.92, 0.88], SILL = [0.86, 0.85, 0.8], STOOP = [0.62, 0.61, 0.58], FOUND = [0.46, 0.45, 0.43], PANE = [0.06, 0.08, 0.1];
+const SHUTTERS = [[0.13, 0.22, 0.16], [0.1, 0.11, 0.12], [0.14, 0.2, 0.34], [0.42, 0.13, 0.1], [0.36, 0.33, 0.28]];
+const DOORS = [[0.42, 0.13, 0.1], [0.1, 0.11, 0.12], [0.14, 0.2, 0.34], [0.93, 0.92, 0.88], [0.4, 0.28, 0.16], [0.13, 0.3, 0.2]];
+export function pushHouseDetail(buf, glass, r, roofColor) {
+  const rects = r.rects || [[r.minX, r.minZ, r.maxX, r.maxZ]];
+  const turned = !!r.rects, ca = turned ? Math.cos(r.ang) : 1, sa = turned ? Math.sin(r.ang) : 0, ox = turned ? r.cx : 0, oz = turned ? r.cz : 0;
+  const seed = hash(r.bldg ?? 7), floor = r.floor ?? 0, wallTop = r.top - (r.roof ? 0 : 0.3), wallH = wallTop - floor;
+  if (wallH < 2.2) return;
+  const box = (b, lx, lz, hw, hd, y0, h, c) => pushBox(b, { ang: r.ang || 0, ca, sa, cx: ox + lx * ca - lz * sa, cz: oz + lx * sa + lz * ca, hw, hd, y0, h }, c, 0);
+  // Outside wall runs: each piece's sides, minus where another piece carries on past them.
+  const runs = [];
+  rects.forEach(([x0, z0, x1, z1], i) => {
+    for (const sd of [{ nx: 0, nz: -1, at: z0, a: x0, b: x1 }, { nx: 0, nz: 1, at: z1, a: x0, b: x1 }, { nx: -1, nz: 0, at: x0, a: z0, b: z1 }, { nx: 1, nz: 0, at: x1, a: z0, b: z1 }]) {
+      let parts = [[sd.a, sd.b]];
+      const out = sd.at + (sd.nx || sd.nz) * 0.05;
+      rects.forEach(([qx0, qz0, qx1, qz1], j) => {
+        if (j === i) return;
+        const crosses = sd.nz ? qz0 < out && qz1 > out : qx0 < out && qx1 > out;
+        if (!crosses) return;
+        const c0 = sd.nz ? qx0 : qz0, c1 = sd.nz ? qx1 : qz1;
+        parts = parts.flatMap(([a, b]) => (c1 <= a || c0 >= b ? [[a, b]] : [[a, Math.max(a, c0)], [Math.min(b, c1), b]].filter(([p, q]) => q - p > 0.3)));
+      });
+      for (const [a, b] of parts) runs.push({ ...sd, a, b, len: b - a });
+    }
+  });
+  // A box `w` wide along a run, `d` deep out from it, centred `u` along it and `out` in front.
+  const onRun = (b, run, u, out, y0, h, w, d, c) => {
+    const lx = run.nz ? u : run.at + run.nx * out, lz = run.nz ? run.at + run.nz * out : u;
+    box(b, lx, lz, run.nz ? w / 2 : d / 2, run.nz ? d / 2 : w / 2, y0, h, c);
+  };
+  const local = (x, z) => { const dx = x - ox, dz = z - oz; return [dx * ca + dz * sa, -dx * sa + dz * ca]; };
+  const doors = (r.doors || []).map((d) => local(d.x, d.z));
+  const shutters = seed % 3 !== 0 ? SHUTTERS[(seed >> 3) % SHUTTERS.length] : null, doorC = DOORS[(seed >> 6) % DOORS.length];
+  const storeys = Math.max(1, Math.round(wallH / 3.2));
+  for (const run of runs) {
+    // Foundation: block skirting under the wall, down into the ground a little.
+    onRun(buf, run, (run.a + run.b) / 2, 0.06, floor - 0.7, 0.85, run.len + 0.12, 0.12, FOUND);
+    // Corner boards at the ends.
+    for (const u of [run.a + 0.06, run.b - 0.06]) onRun(buf, run, u, 0.05, floor + 0.1, wallH - 0.1, 0.16, 0.06, TRIM);
+    // A frieze board under the eaves.
+    onRun(buf, run, (run.a + run.b) / 2, 0.05, wallTop - 0.28, 0.22, run.len, 0.05, TRIM);
+    // The doors on this run: their trim and a stoop.
+    const onThis = doors.filter(([lx, lz]) => (run.nz ? Math.abs(lz - run.at) < 0.5 && lx > run.a && lx < run.b : Math.abs(lx - run.at) < 0.5 && lz > run.a && lz < run.b)).map(([lx, lz]) => (run.nz ? lx : lz));
+    for (const u of onThis) {
+      for (const s of [-1, 1]) onRun(buf, run, u + s * 0.86, 0.06, floor, 2.5, 0.14, 0.08, TRIM);
+      onRun(buf, run, u, 0.06, floor + 2.42, 0.16, 1.86, 0.08, TRIM);
+      onRun(buf, run, u, 0.75, floor - 0.6, 0.6, 2.1, 1.5, STOOP);
+    }
+    // Windows every ~3.2 m, kept clear of the doors and the corners.
+    const n = Math.floor((run.len - 1.4) / 3.2);
+    for (let k = 0; k < n; k++) {
+      const u = run.a + (run.len - (n - 1) * 3.2) / 2 + k * 3.2;
+      if (onThis.some((du) => Math.abs(du - u) < 1.9)) continue;
+      for (let f = 0; f < storeys; f++) {
+        const y = floor + 0.95 + f * 3.2;
+        if (y + 1.3 > wallTop - 0.3) break;
+        onRun(buf, run, u, 0.03, y - 0.1, 1.5, 1.24, 0.06, TRIM);          // frame
+        onRun(glass, run, u, 0.07, y, 1.3, 1.0, 0.03, PANE);               // glass
+        onRun(buf, run, u, 0.07, y + 0.62, 0.06, 1.0, 0.035, TRIM);          // the sash bar
+        onRun(buf, run, u, 0.1, y - 0.16, 0.08, 1.4, 0.16, SILL);          // sill
+        if (shutters) for (const s of [-1, 1]) onRun(buf, run, u + s * 0.86, 0.06, y - 0.05, 1.4, 0.42, 0.05, shutters);
+      }
+    }
+  }
+  // The front door (the first one): a porch roof on two posts, and the door itself shut in its frame.
+  const front = (r.doors || [])[0];
+  if (front) {
+    const [lx, lz] = local(front.x, front.z), run = runs.find((q) => (q.nz ? Math.abs(lz - q.at) < 0.5 : Math.abs(lx - q.at) < 0.5));
+    if (run) {
+      const u = run.nz ? lx : lz, pw = Math.min(run.len - 0.4, 4.2), py = floor + 2.75;
+      onRun(buf, run, u, 1.25, py, 0.14, pw, 2.5, roofColor);                 // the porch roof
+      onRun(buf, run, u, 2.46, py - 0.12, 0.14, pw, 0.08, TRIM);              // its fascia
+      for (const s of [-1, 1]) onRun(buf, run, u + s * (pw / 2 - 0.15), 2.35, floor - 0.1, py - floor + 0.1, 0.16, 0.16, TRIM);   // posts
+    }
+  }
+  // An air conditioner against a side wall.
+  const side = runs.filter((q) => q.len > 3)[(seed >> 9) % Math.max(1, runs.length)];
+  if (side) {
+    const u = side.a + side.len * 0.3;
+    onRun(buf, side, u, 0.55, floor - 0.6, 0.95, 0.9, 0.85, [0.72, 0.73, 0.72]);
+  }
+}
 function roofPiece(buf, minX, minZ, maxX, maxZ, top, color, wall, ca, sa, cx, cz, low = false) {
   const o = low ? 0.5 : 0.4, x0 = minX - o, x1 = maxX + o, z0 = minZ - o, z1 = maxZ + o, y = top;
   // (low: the shallow metal roof of a warehouse or big shed)
@@ -296,6 +385,8 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   }
 
   const texturedMat = new THREE.MeshStandardMaterial({ map: windowTexture(), vertexColors: true, roughness: 0.9 });
+  // House windows: dark glass that catches the sky.
+  const paneMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.06, metalness: 0, envMapIntensity: 1.2 });
   // Walls in photo-scanned materials (Poly Haven, CC0): real brick, corrugated metal, weathered planks,
   // each with its normal map. The building's own colour tints them (a red barn, a white shed), half way.
   const wallTex = (name, rep) => { const t = new THREE.TextureLoader().load(`/textures/pbr/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = mobile ? 2 : 4; return t; };
@@ -886,7 +977,7 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
       // Real buildings dress by type: brick storefronts and halls, lap-sided houses, metal barns and warehouses.
       case 'building': { if (b.real) { const k = hash(id) % 6; return k < 3 ? [pick(BRICK_COLORS, id), 'brick'] : k < 5 ? [pick(STUCCO_COLORS, id), 'stucco'] : [pick(BLOCK_COLORS, id), 'block']; } const c = COLORS.building, v = hash(id) / 4294967296; return [[c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 'office']; }
       case 'civic': return [pick(CIVIC_COLORS, id), b.real ? (hash(id) % 3 ? 'brick' : 'stucco') : 'office'];
-      case 'home': return [pick(HOME_COLORS, id), 'siding'];
+      case 'home': return b.real && hash(id) % 4 === 1 ? [pick(BRICK_COLORS, id), 'brick'] : [pick(HOME_COLORS, id), 'siding'];   // a brick ranch house now and then
       case 'barn': return [b.real ? pick(BARN_COLORS, id) : COLORS.barn, b.real ? (hash(id) % 5 < 2 ? 'planks' : 'metal') : 'planks'];   // old wooden barns and metal ones
       case 'warehouse': return [b.real ? pick(WAREHOUSE_COLORS, id) : COLORS.warehouse, b.real ? 'metal' : null];
       case 'car': return [CAR_COLORS[b.id % CAR_COLORS.length], null];
@@ -1035,7 +1126,7 @@ vBlade = position.y;
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
     const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), planks = newBuf(true), plain = newBuf(false), roof = newBuf(false);
-    const stucco = newBuf(true), block = newBuf(true), shingles = newBuf(false);
+    const stucco = newBuf(true), block = newBuf(true), shingles = newBuf(false), panes = newBuf(false);
     const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
@@ -1051,6 +1142,7 @@ vBlade = position.y;
     }
     for (const r of buildingsIn.get(key(cx, cz)) || []) {
       if (r.roof) pushRoof(r.type === 'barn' ? roof : shingles, r, pick(r.type === 'barn' ? METAL_ROOFS : ROOF_COLORS, r.bldg), wallColor(r));
+      if (r.type === 'home') pushHouseDetail(plain, panes, r, pick(ROOF_COLORS, r.bldg).map((v) => v * 0.8));
       else if (r.type === 'warehouse') pushRoof(roof, r, pick(METAL_ROOFS, r.bldg), wallColor(r), true);
       else if (r.type === 'building' || r.type === 'civic') pushFlatRoof(plain, r, wallColor(r));
       if ((r.type === 'building' || r.type === 'civic') && r.top - (r.floor ?? 0) > 2.8) {
@@ -1078,7 +1170,7 @@ vBlade = position.y;
     const roads = map.roadGrid && buildRoads(x0, z0);
     if (roads) group.add(roads);
     if (ground.wet) { const w = new THREE.Mesh(waterGeo, waterMat); w.position.set(x0 + CHUNK / 2, 0, z0 + CHUNK / 2); group.add(w); }
-    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [stucco, stuccoMat], [block, blockMat], [metal, metalMat], [planks, plankMat], [plain, plainMat], [roof, roofMat], [shingles, shingleMat]]) {
+    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [stucco, stuccoMat], [block, blockMat], [metal, metalMat], [planks, plankMat], [plain, plainMat], [roof, roofMat], [shingles, shingleMat], [panes, paneMat]]) {
       if (!buf.idx.length) continue;
       const m = new THREE.Mesh(toGeometry(buf), mat);
       m.castShadow = true;
