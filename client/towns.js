@@ -13,7 +13,7 @@ import { buildWreck } from '/ridemodels.js';
 import { BOATS } from '/shared/boats.js';
 import { orientedBox } from '/shared/world.js';
 
-const CELL = 160, RANGE = 420;
+const CELL = 160, RANGE = 420, CAR_SEE = 190;
 // Colours for well-known names (background, text, a stripe), else by kind of business.
 const BRANDS = [
   [/dollar general/i, '#ffd200', '#111111', null],
@@ -123,6 +123,7 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
     biz.get(k).push({ x: p.x, z: p.z, cat, name });
   }
   const cells = new Map();
+  let carsAt = null;   // where parked cars were last shown or hidden by distance
   // Real fire hydrants (Liberty County's own), by cell; made-up ones only well away from any of them.
   const hyd = new Map(), hydFar = (x, z) => !(realHydrants || []).length || !(realHydrants._grid ??= (() => { const g = new Set(); for (const [la, lo] of realHydrants) { const p = project(la, lo, size); g.add(`${Math.floor(p.x / 3000)},${Math.floor(p.z / 3000)}`); } return g; })()).has(`${Math.floor(x / 3000)},${Math.floor(z / 3000)}`);
   for (const [la, lo] of realHydrants || []) { const p = project(la, lo, size); const k = `${Math.floor(p.x / CELL)},${Math.floor(p.z / CELL)}`; if (!hyd.has(k)) hyd.set(k, []); hyd.get(k).push([p.x, p.z]); }
@@ -147,12 +148,12 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
     const lot = { pos: [], uv: [], idx: [] }, walk = { pos: [], uv: [], idx: [] }, paved = [];   // paved: [corner x, z, along x, z, across x, z, a0, a1, b0, b1], for the grass
     const add = (o) => { grp.add(o); return o; };
     let cars = 0;
-    const solids = [];
+    const solids = [], carList = [];
     const park = (x, z, yaw, seed) => {
       if (cars >= 16 || solidAt(x, z, 1.2)) return;
       const car = buildWreck(Math.abs(seed) % 1000003);
       car.position.set(x, ground(x, z), z); car.rotation.y = yaw;
-      add(car); cars++;
+      add(car); cars++; carList.push(car);
       const def = BOATS[car.userData.wreckType];
       solids.push(orientedBox(x, z, def.wid / 2, def.len / 2, -yaw, { type: 'wreck', h: def.h - 0.15, y0: ground(x, z) }));
     };
@@ -287,6 +288,7 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
     grp.userData.mats = mats;
     grp.userData.paved = paved;
     grp.userData.solids = solids;
+    grp.userData.cars = carList;
     scene.add(grp);
     onPaved?.();
     return grp;
@@ -305,11 +307,16 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
         if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
         const k = `${i},${j}`;
         if (cells.has(k)) continue;
-        cells.set(k, buildCell(i, j)); built = true;
+        cells.set(k, buildCell(i, j)); built = true; carsAt = null;
       }
       for (const [k, g] of cells) {
         const [i, j] = k.split(',').map(Number);
         if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) > n + 1) { dispose(g); cells.delete(k); }
+      }
+      // Parked cars only near you (a car a quarter mile off is a few pixels, and each is a draw).
+      if (!carsAt || Math.hypot(px - carsAt.x, pz - carsAt.z) > 8) {
+        carsAt = { x: px, z: pz };
+        for (const g of cells.values()) for (const c of g.userData.cars || []) c.visible = Math.hypot(c.position.x - px, c.position.z - pz) < CAR_SEE;
       }
     },
     /** The abandoned cars near (x, z): solid, so you walk round them, not through. */

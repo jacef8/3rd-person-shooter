@@ -3,6 +3,7 @@
 // drive, and by the world view for the wrecks and vehicle homes that are part of the map.
 import * as THREE from 'three';
 import { GLTFLoader } from '/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from '/addons/utils/BufferGeometryUtils.js';
 import { BOATS } from '/shared/boats.js';
 
 // Real models (client/models/vehicles, tools/build_vehicles.mjs): each is one unit long, front at +Z,
@@ -12,10 +13,38 @@ const REAL = { car: ['sedan', 'suv', 'classic'], pickup: ['pickup'], motorcycle:
 const gltf = new GLTFLoader(), realCache = new Map();
 function realModel(name) {
   if (!realCache.has(name)) realCache.set(name, gltf.loadAsync(`/models/vehicles/${name}.glb`).then((g) => {
-    g.scene.traverse((o) => { if (o.isMesh) { o.geometry.userData.shared = true; o.castShadow = true; } });
-    return g.scene;
+    const m = mergeByMaterial(g.scene);
+    m.traverse((o) => { if (o.isMesh) { o.geometry.userData.shared = true; o.castShadow = true; } });
+    return m;
   }).catch((e) => { console.warn('vehicle', name, e); return null; }));
   return realCache.get(name);
+}
+/**
+ * One mesh per material instead of the model's dozens of parts: each part is a separate draw for the
+ * graphics chip, and with a street full of cars that was thousands a frame (the lag). Same look.
+ */
+function mergeByMaterial(root) {
+  root.updateMatrixWorld(true);
+  const byMat = new Map();
+  root.traverse((o) => {
+    if (!o.isMesh || o.isSkinnedMesh || Array.isArray(o.material)) return;
+    let g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+    if (o.matrixWorld.determinant() < 0) {   // a mirrored part: turn its faces back the right way out
+      if (!g.index) g = g.toNonIndexed();
+      if (g.index) { const a = g.index.array; for (let i = 0; i < a.length; i += 3) { const t = a[i + 1]; a[i + 1] = a[i + 2]; a[i + 2] = t; } }
+    }
+    (byMat.get(o.material) || byMat.set(o.material, []).get(o.material)).push(g);
+  });
+  const out = new THREE.Group();
+  for (const [mat, list] of byMat) {
+    const keep = ['position', 'normal', 'uv', 'color', 'tangent'].filter((a) => list.every((g) => g.attributes[a]));
+    const allIdx = list.every((g) => g.index);
+    const parts = list.map((g) => { const src = allIdx ? g : g.index ? g.toNonIndexed() : g; const n = new THREE.BufferGeometry(); for (const a of keep) n.setAttribute(a, src.attributes[a]); if (allIdx) n.setIndex(src.index); return n; });
+    const merged = parts.length === 1 ? parts[0] : mergeGeometries(parts, false);
+    if (!merged) { for (const g of list) out.add(new THREE.Mesh(g, mat)); continue; }
+    out.add(new THREE.Mesh(merged, mat));
+  }
+  return out;
 }
 const fadedCache = new Map();
 /** A weathered copy of a model's materials (sun-faded, dusty, no shine), shared by every wreck of it. */

@@ -55,7 +55,11 @@ const ground = (x, z) => (state.map ? state.map.terrain.height(x, z) : 0);
 const canvas = $('game');
 // Phones/tablets (touch-first devices) get a lighter render profile.
 const MOBILE = matchMedia('(pointer: coarse)').matches;
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+// Which graphics chip the browser is drawing with (shown with the frame rate; see gpuCheck).
+const GPU_NAME = (() => { try { const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info'); return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || ''); } catch { return ''; } })();
+const GPU_SOFTWARE = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(GPU_NAME);
+const GPU_BUILTIN = /intel|uhd|iris|radeon\(tm\) graphics|radeon graphics|vega \d|adreno|mali/i.test(GPU_NAME) && !/arc/i.test(GPU_NAME);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // soft-edged shadows
@@ -4046,8 +4050,10 @@ function marker(key, cls, text, pos) {
   const v = pos.clone().project(camera);
   const behind = v.z > 1;
   el.style.display = behind ? 'none' : '';
-  el.style.left = `${Math.max(16, Math.min(innerWidth - 16, (v.x * 0.5 + 0.5) * innerWidth))}px`;
-  el.style.top = `${Math.max(16, Math.min(innerHeight - 16, (-v.y * 0.5 + 0.5) * innerHeight))}px`;
+  // Held on screen whole (it's centred on the spot): a long label at the edge isn't cut off.
+  const hw = Math.max(16, (el.offsetWidth || 32) / 2 + 8), hh = Math.max(16, (el.offsetHeight || 20) / 2 + 8);
+  el.style.left = `${Math.max(hw, Math.min(innerWidth - hw, (v.x * 0.5 + 0.5) * innerWidth))}px`;
+  el.style.top = `${Math.max(hh, Math.min(innerHeight - hh, (-v.y * 0.5 + 0.5) * innerHeight))}px`;
   el.dataset.seen = '1';
 }
 
@@ -5176,13 +5182,32 @@ let last = performance.now();
 // then screen sharpness, then grass. Says so on screen. Also feeds the frame-rate readout (Settings).
 const fpsEl = Object.assign(document.createElement('div'), { id: 'fps', hidden: true });
 document.body.append(fpsEl);
+/**
+ * If the browser is drawing without the graphics card (hardware acceleration off: everything done
+ * slowly in software) or on a laptop's built-in chip when it's slow, say so and how to fix it. Fortnite
+ * and the like use the card directly; a browser game only gets it if the browser does.
+ */
+function gpuCheck(slow) {
+  if (perf.gpuSaid) return;
+  const chrome = /Edg\//.test(navigator.userAgent) ? 'Edge: Settings → System and performance → turn on "Use graphics acceleration when available", then restart Edge.' : 'Chrome: Settings → System → turn on "Use graphics acceleration when available", then restart Chrome.';
+  let text = '';
+  if (GPU_SOFTWARE) text = `Your browser is drawing the game without your graphics card (hardware acceleration is off), so it runs slowly. ${chrome}`;
+  else if (slow && GPU_BUILTIN) text = `Your browser is using the computer's built-in graphics (${GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 50)}), not the graphics card. Windows: Settings → System → Display → Graphics → add your browser → High performance, then restart the browser.`;
+  else if (slow) text = 'Still running slowly. Turn on Settings → Frame rate on screen and send what it says.';
+  if (!text) return;
+  perf.gpuSaid = true;
+  const el = Object.assign(document.createElement('div'), { id: 'gpuwarn', textContent: text });
+  el.append(Object.assign(document.createElement('button'), { textContent: 'OK', onclick: () => el.remove() }));
+  document.body.append(el);
+}
 function perfWatch(now, ms) {
   perf.recent = (perf.recent || []).concat(ms).slice(-60);
   fpsEl.hidden = !tset.showFps;
   if (tset.showFps && now - (perf.shownAt || 0) > 500) {
     perf.shownAt = now;
     const r = [...perf.recent].sort((x, y) => x - y), md = r[r.length >> 1] || 16.7, worst = r[Math.floor(r.length * 0.95)] || md;
-    fpsEl.textContent = `${Math.round(1000 / md)} fps · ${md.toFixed(0)} ms · worst ${worst.toFixed(0)} ms · ${GFX[gfxMode].label}${perf.eased ? ' (eased)' : ''}`;
+    const mid = (a) => { const v = [...(a || [])].sort((x, y) => x - y); return v[v.length >> 1] || 0; };
+    fpsEl.textContent = `${Math.round(1000 / md)} fps · ${md.toFixed(0)} ms (game ${mid(perf.cpu).toFixed(1)} · draw ${mid(perf.draw).toFixed(1)}) · worst ${worst.toFixed(0)} ms · ${GFX[gfxMode].label}${perf.eased ? ' (eased)' : ''} · ${GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 60) || 'unknown chip'}`;
   }
   if (document.hidden || now - perf.since < 5000) { perf.frames.length = 0; perf.at = now; return; }
   perf.frames.push(ms);
@@ -5191,24 +5216,25 @@ function perfWatch(now, ms) {
   const f = perf.frames.sort((x, y) => x - y), mid = f[f.length >> 1] || 0, p90 = f[Math.floor(f.length * 0.9)] || 0;
   perf.frames.length = 0;
   if (mid < 20 && p90 < 45) return;
-  const g = GFX[gfxMode], cur = POST_STEPS.indexOf(postQuality(gfxMode));
+  const cur = POST_STEPS.indexOf(postQuality(gfxMode));
   let what = '';
   if (cur > 0) { perf.cap = cur - 1; what = cur === 2 ? 'corner shading off' : 'glow and smoothing off'; }
   else if (renderer.getPixelRatio() > 1) { perf.ratioCap = Math.max(1, renderer.getPixelRatio() - 0.5); what = 'screen sharpness down'; }
-  else if ((g.grass || 0) > 0.6 && !perf.grassCut) { perf.grassCut = true; what = 'less grass'; }
-  else if (g.shadows && !perf.noShadows) { perf.noShadows = true; what = 'shadows off'; }
-  else return;
+  else { gpuCheck(true); return; }   // past that, easing only makes it look worse: say what's wrong instead
   perf.eased = true;
   applyGfx(gfxMode);
   perf.since = now - 2000;   // let it settle before judging again
   toast(`Running slow: graphics eased (${what})`);
 }
+let frameT0 = 0;
 function frame(now) {
   requestAnimationFrame(frame);
+  frameT0 = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000), rawMs = now - last;
   last = now;
   pollPad(dt, now);   // also drives the login and death screens
   if (!state.map) { renderWorld(); perf.since = now; return; }
+  if (GPU_SOFTWARE && !/[?&]debug\b/.test(location.search)) gpuCheck(false);
   perfWatch(now, rawMs);
   const me = state.me;
   const alive = me && !me.dead;
@@ -5509,7 +5535,10 @@ function frame(now) {
   updateWhere(now);
   if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }
   updateScopeView(aimNow());
+  const r0 = performance.now();
   renderWorld();
+  perf.cpu = (perf.cpu || []).concat(r0 - frameT0).slice(-60);   // the game's own work this frame, before the draw
+  perf.draw = (perf.draw || []).concat(performance.now() - r0).slice(-60);   // handing the draw to the graphics chip
   drawGunsmith(dt);
   drawMarkers();
   updateBuildGhost();
@@ -5975,7 +6004,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction, mapView });   // debug/test hook
+Object.assign(window.__dz, { perf, touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, renderer, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction, mapView });   // debug/test hook
 function closeTopPanel() {
   if (state.rideOpen) return closeRidePicker();
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
