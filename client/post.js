@@ -75,7 +75,11 @@ export function createPost(renderer, scene, camera, draw) {
       ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
       composer.addPass(ao);
     }
-    bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.18, 0.4, 2.2);   // only what's really bright: glints, lamps, flashes (not the whole sky)
+    // Cap the brightest pixels first: the sun in the sky is thousands of times brighter than anything
+    // else, and left alone its glow would wash out half the screen whenever you face it.
+    composer.addPass(new ShaderPass({ uniforms: { tDiffuse: { value: null } }, vertexShader: GradeShader.vertexShader,
+      fragmentShader: 'uniform sampler2D tDiffuse; varying vec2 vUv; void main() { vec4 c = texture2D(tDiffuse, vUv); float m = max(c.r, max(c.g, c.b)); gl_FragColor = vec4(c.rgb * min(1.0, 3.0 / max(m, 1e-4)), c.a); }' }));
+    bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.16, 0.4, 2.6);   // only what's really bright: glints, lamps, flashes (not the whole sky)
     composer.addPass(bloom);
     composer.addPass(new OutputPass());   // tone mapping and sRGB, as the plain render did
     composer.addPass(new ShaderPass(GradeShader));

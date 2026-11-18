@@ -1,5 +1,7 @@
 # Builds client/textures/foliage.png: three 512 px cells (broad leaves, pine needles, Spanish moss)
 # from Poly Haven photo scans (CC0): tree_small_02 leaf sprays and pine_tree_01 needle sprigs.
+# Also client/textures/grasstuft.png (beside it): four grass tufts from grass_medium_01, 2 x 2.
+# Usage: python3 tools/build_foliage.py <folder with the Poly Haven 1k jpgs> client/textures/foliage.png
 import sys, math, random
 from PIL import Image, ImageFilter
 src, out = sys.argv[1], sys.argv[2]
@@ -51,3 +53,21 @@ fill = Image.composite(rgb, blur.filter(ImageFilter.MaxFilter(9)), a.point(lambd
 final = fill.convert('RGBA'); final.putalpha(a)
 final.save(out, optimize=True)
 print('ok', final.size)
+
+# Grass tufts: four clumps from grass_medium_01, each in a 256 px cell, standing on the cell's bottom edge.
+G = 256
+tufts = [(0.2, 0.74, 0.48, 0.875), (0.59, 0.755, 0.79, 0.865), (0.25, 0.892, 0.5, 1.0), (0.57, 0.875, 0.78, 1.0)]
+gsheet = Image.new('RGBA', (G * 2, G * 2), (0, 0, 0, 0))
+for i, box in enumerate(tufts):
+    t = cut('grass_medium_01', 'Diffuse', 'Alpha', box)
+    k = min((G - 8) / t.size[0], (G - 8) / t.size[1])
+    t = t.resize((int(t.size[0] * k), int(t.size[1] * k)), Image.LANCZOS)
+    cx, cy = (i % 2) * G, (i // 2) * G
+    gsheet.alpha_composite(t, (cx + (G - t.size[0]) // 2, cy + G - t.size[1]))
+rgb = gsheet.convert('RGB'); a = gsheet.split()[3]
+blur = Image.composite(rgb, rgb.filter(ImageFilter.GaussianBlur(4)), a)
+fill = Image.composite(rgb, blur.filter(ImageFilter.MaxFilter(7)), a.point(lambda v: 255 if v > 0 else 0))
+g2 = fill.convert('RGBA'); g2.putalpha(a)
+import os
+g2.save(os.path.join(os.path.dirname(out), 'grasstuft.png'), optimize=True)
+print('grass ok', g2.size)

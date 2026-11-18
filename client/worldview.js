@@ -575,7 +575,9 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
   sky.renderOrder = -10;
   sky.material.fog = false;
   // The scattering model is tuned for a darker exposure than the game's: scale it to sit with the land.
-  sky.material.fragmentShader = sky.material.fragmentShader.replace('gl_FragColor = vec4( texColor, 1.0 );', 'gl_FragColor = vec4( texColor * 0.55, 1.0 );');
+  // Capped below the glow threshold (client/post.js): the bright sky round the sun covers a quarter of the
+  // screen, and left uncapped its glow washed the whole view white whenever you faced it.
+  sky.material.fragmentShader = sky.material.fragmentShader.replace('gl_FragColor = vec4( texColor, 1.0 );', 'gl_FragColor = vec4( min( texColor * 0.55, vec3( 1.9 ) ), 1.0 );');
   Object.assign(sky.material.uniforms.turbidity, { value: 3.2 });
   Object.assign(sky.material.uniforms.rayleigh, { value: 1.35 });
   Object.assign(sky.material.uniforms.mieCoefficient, { value: 0.004 });
@@ -921,24 +923,34 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
     trunks.instanceMatrix.needsUpdate = true;
   }
   // ---------------------------------------------------------------- grass around you
-  // Blades fixed in the world (each 1 m square of grassy ground gets its own few, always the same), laid
-  // out again as you move. Only on grass: not roads, towns, sand, water or inside anything. They sway in
-  // a breeze. How many depends on the graphics setting (none on Low).
-  const GRASS_R = 30;
+  // Tufts of real grass (photo scans, Poly Haven grass_medium_01, CC0: tools/build_foliage.py), two
+  // crossed pictures each, fixed in the world (each 1 m square of grassy ground gets its own few, always
+  // the same), laid out again as you move. Only on grass: not roads, towns, sand, water, the woods floor
+  // or inside anything. They sway in a breeze. How many depends on the graphics setting (none on Low).
+  const GRASS_R = 30, TUFTS_PER_BLADE = 0.55;   // (the setting counts blades; a tuft is a clump of them)
   const bladeGeo = (() => {
-    const pos = [], nor = [], idx = [], W = 0.06, segs = 3;
-    for (let i = 0; i <= segs; i++) { const t = i / segs, w = W * (1 - t * 0.9) / 2; pos.push(-w, t, 0, w, t, 0); nor.push(0, 1, 0.25, 0, 1, 0.25); }
-    for (let i = 0; i < segs; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    const pos = [], nor = [], uv = [], idx = [];
+    for (const [ax, az] of [[1, 0], [0, 1]]) {
+      const o = pos.length / 3;
+      pos.push(-0.5 * ax, 0, -0.5 * az, 0.5 * ax, 0, 0.5 * az, 0.5 * ax, 1, 0.5 * az, -0.5 * ax, 1, -0.5 * az);
+      for (let k = 0; k < 4; k++) nor.push(0, 1, 0);
+      uv.push(0, 0, 1, 0, 1, 1, 0, 1);
+      idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+    }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     g.setIndex(idx);
     return g;
   })();
-  const grassMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, side: THREE.DoubleSide });
+  const tuftTex = new THREE.TextureLoader().load('/textures/grasstuft.png');
+  tuftTex.colorSpace = THREE.SRGBColorSpace; tuftTex.anisotropy = mobile ? 2 : 4;
+  const grassMat = new THREE.MeshStandardMaterial({ map: tuftTex, alphaTest: 0.5, roughness: 1, side: THREE.DoubleSide });
   grassMat.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = waterTime;
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\nvarying float vBlade;')
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\nvarying float vBlade;\nattribute float aCell;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_MAP\n  vMapUv = vMapUv * 0.5 + vec2(mod(aCell, 2.0) * 0.5, aCell < 1.5 ? 0.5 : 0.0);\n#endif')   // (one of the four tufts)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
 vBlade = position.y;
 { vec4 wp = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
@@ -946,7 +958,7 @@ vBlade = position.y;
   float bend = position.y * position.y;
   transformed.x += sway * bend * 0.22; transformed.z += sway * bend * 0.12; }`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vBlade;')
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix(0.6, 1.15, vBlade);')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix(0.72, 1.06, vBlade);')
       // Lit as the ground is (from above), whichever side of the blade you see: no black backs.
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);');
   };
@@ -958,7 +970,9 @@ vBlade = position.y;
     if (grassMesh) { scene.remove(grassMesh); grassMesh.dispose(); grassMesh = null; }
     grassAt = null;
     if (!density) return;
-    grassMesh = new THREE.InstancedMesh(bladeGeo, grassMat, Math.ceil(Math.PI * GRASS_R * GRASS_R * density * 1.05));
+    const cap = Math.ceil(Math.PI * GRASS_R * GRASS_R * density * TUFTS_PER_BLADE * 1.05) + 64;
+    grassMesh = new THREE.InstancedMesh(bladeGeo.clone(), grassMat, cap);
+    grassMesh.geometry.setAttribute('aCell', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
     grassMesh.count = 0;
     grassMesh.frustumCulled = false;
     grassMesh.receiveShadow = !mobile;
@@ -986,7 +1000,7 @@ vBlade = position.y;
     for (let j = -GRASS_R; j <= GRASS_R && n < cap; j++) for (let i = -GRASS_R; i <= GRASS_R && n < cap; i++) {
       if (i * i + j * j > GRASS_R * GRASS_R || blocked[(j + GRASS_R) * N + (i + GRASS_R)]) continue;
       const gx = cx + i, gz = cz + j;
-      const kmax = Math.floor(grassDensity) + (ghash(gx, gz, 99) < grassDensity % 1 ? 1 : 0);
+      const td = grassDensity * TUFTS_PER_BLADE, kmax = Math.floor(td) + (ghash(gx, gz, 99) < td % 1 ? 1 : 0);
       if (!kmax) continue;
       const ck = `${gx >> 2},${gz >> 2}`;   // ground colour, sampled every 4 m
       let c = colorAt.get(ck);
@@ -1000,16 +1014,19 @@ vBlade = position.y;
       if (terrain.hasCover && terrain.cover(gx + 0.5, gz + 0.5) === COVER.woods) continue;   // the woods floor is pine straw and leaves, not grass
       for (let k = 0; k < kmax && n < cap; k++) {
         const x = gx + ghash(gx, gz, k * 3 + 1), z = gz + ghash(gx, gz, k * 3 + 2), r = ghash(gx, gz, k * 3 + 3);
-        const hgt = 0.18 + r * 0.38;
-        e2.set((r - 0.5) * 0.35, r * 6.283, (ghash(gz, gx, k) - 0.5) * 0.35);
-        tm2.compose(p2.set(x, meshHeight(x, z) - 0.02, z), q2.setFromEuler(e2), s2.set(1, hgt, 1));
+        const hgt = 0.34 + r * 0.38, wid = 0.75 + ghash(gz, gx, k + 7) * 0.5;
+        e2.set((r - 0.5) * 0.12, r * 6.283, (ghash(gz, gx, k) - 0.5) * 0.12);
+        tm2.compose(p2.set(x, meshHeight(x, z) - 0.03, z), q2.setFromEuler(e2), s2.set(wid, hgt, wid));
         grassMesh.setMatrixAt(n, tm2);
-        const v = 0.95 + r * 0.4;
-        grassMesh.setColorAt(n, tint.setRGB(Math.min(1, c[0] * v * 0.95), Math.min(1, c[1] * v * 1.12), Math.min(1, c[2] * v * 0.85)));
+        grassMesh.geometry.attributes.aCell.array[n] = Math.floor(ghash(gx, gz, k * 3 + 5) * 4);
+        // The photo has its own green: lean it a little toward this ground's colour (drier, greener).
+        const l = Math.max(0.05, c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11), v = 1.05 + r * 0.25;
+        grassMesh.setColorAt(n, tint.setRGB(v * (0.65 + 0.35 * c[0] / l), v * (0.65 + 0.35 * c[1] / l), v * (0.65 + 0.35 * c[2] / l)));
         n++;
       }
     }
     grassMesh.count = n;
+    grassMesh.geometry.attributes.aCell.needsUpdate = true;
     grassMesh.instanceMatrix.needsUpdate = true;
     if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true;
     grassAt = { x: px, z: pz };

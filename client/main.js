@@ -86,7 +86,7 @@ function applyGfx(mode = gfxMode) {
   gfxMode = mode;
   try { localStorage.setItem('dz_gfx', mode); } catch { /* private mode */ }
   const g = GFX[mode];
-  renderer.setPixelRatio(Math.min(devicePixelRatio, g.pixel));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9));
   sun.castShadow = g.shadows;
   if (sun.shadow.mapSize.x !== g.shadowMap) { sun.shadow.mapSize.set(g.shadowMap, g.shadowMap); sun.shadow.map?.dispose(); sun.shadow.map = null; }
   const reach = mode === 'ultra' ? 110 : 70;
@@ -103,7 +103,14 @@ const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 800);
 const farCamera = new THREE.PerspectiveCamera(70, 1, 20, 130000);
 // The finish (client/post.js): smooth edges, shade where things meet, glow, grade. Follows the
 // graphics setting (Low draws plainly); phones skip the shading on High, as it's the heaviest part.
-const postQuality = (mode) => (/[?&]nopost\b/.test(location.search) || mode === 'fast' ? 'off' : mode === 'balanced' ? 'medium' : mode === 'full' ? (MOBILE ? 'medium' : 'high') : (MOBILE ? 'high' : 'ultra'));
+// The corner shading (AO) is the heaviest part by far: Ultra on a computer only. And if frames still run
+// slow once you're playing, the finish steps down by itself (perfWatch below), for this visit only.
+const POST_STEPS = ['off', 'medium', 'high'];
+const perf = { cap: 2, ratioCap: 0, frames: [], at: 0, since: 0 };
+const postQuality = (mode) => {
+  const want = /[?&]nopost\b/.test(location.search) || mode === 'fast' ? 0 : mode === 'ultra' && !MOBILE ? 2 : 1;
+  return POST_STEPS[Math.min(want, perf.cap)];
+};
 let post = null;
 function renderWorld() {
   post ??= createPost(renderer, scene, camera, drawWorld);
@@ -5108,12 +5115,34 @@ function dismantleAimed() {
 
 // ------------------------------------------------------------------ main loop
 let last = performance.now();
+// Keeps it smooth: every 3 s, if the middle frame took longer than 1/40 s (a hitch or two doesn't count),
+// ease one thing off: the corner shading, then the glow and smoothing, then screen sharpness, then grass.
+function perfWatch(now) {
+  if (document.hidden || now - perf.since < 5000) { perf.frames.length = 0; perf.at = now; return; }
+  perf.frames.push(now - last);
+  if (now - perf.at < 3000) return;
+  perf.at = now;
+  const f = perf.frames.sort((a, b) => a - b), mid = f[f.length >> 1] || 0;
+  perf.frames.length = 0;
+  if (mid < 25 || f.length < 20) return;
+  const g = GFX[gfxMode], cur = POST_STEPS.indexOf(postQuality(gfxMode));
+  let what = '';
+  if (cur > 0) { perf.cap = cur - 1; what = cur === 2 ? 'corner shading off' : 'glow off'; }
+  else if (renderer.getPixelRatio() > 1) { perf.ratioCap = Math.max(1, renderer.getPixelRatio() - 0.5); what = 'screen sharpness down'; }
+  else if ((g.grass || 0) > 0.6 && !perf.grassCut) { perf.grassCut = true; state.view?.setGrass((g.grass || 0) / 2); what = 'less grass'; }
+  else return;
+  applyGfx(gfxMode);
+  if (perf.grassCut) state.view?.setGrass((g.grass || 0) / 2);
+  perf.since = now - 2000;   // let it settle before judging again
+  console.info(`[gfx] ${mid.toFixed(1)} ms frames: ${what}`);
+}
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   pollPad(dt, now);   // also drives the login and death screens
-  if (!state.map) { renderWorld(); return; }
+  if (!state.map) { renderWorld(); perf.since = now; return; }
+  perfWatch(now);
   const me = state.me;
   const alive = me && !me.dead;
 
