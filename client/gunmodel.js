@@ -138,6 +138,17 @@ export function buildGunModel(gun) {
     Object.assign(g.userData, { muzzle: new THREE.Vector3(0, 0, 0.9), back: new THREE.Vector3(0, 0, -0.38), eject: null, mag: null, archetype: a, grip: new THREE.Vector3(0, -0.15, 0.05), fore: new THREE.Vector3(0, -0.07, 0.38) });
     return g;
   }
+  if (a === 'taser') {
+    // The stun gun: a stubby yellow-and-black pistol shape with the dart cartridge on the front.
+    const yellow = new THREE.MeshStandardMaterial({ color: 0xf2c418, roughness: 0.5 }), black = metal(0x1b1c1e);
+    const body = box(0.045, 0.06, 0.17, yellow); body.position.set(0, 0.02, 0.06); g.add(body);
+    const cart = box(0.05, 0.055, 0.045, black); cart.position.set(0, 0.02, 0.165); g.add(cart);
+    const grip = box(0.04, 0.11, 0.05, black); grip.position.set(0, -0.05, 0); grip.rotation.x = -0.25; g.add(grip);
+    const guard = box(0.012, 0.035, 0.05, black); guard.position.set(0, -0.025, 0.045); g.add(guard);
+    g.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.userData.explode = new THREE.Vector3(); c.userData.home = c.position.clone(); } });
+    Object.assign(g.userData, { muzzle: new THREE.Vector3(0, 0.02, 0.19), back: new THREE.Vector3(0, 0.02, -0.03), eject: null, mag: null, archetype: 'sidearm', grip: new THREE.Vector3(0, -0.06, 0), fore: new THREE.Vector3(0, -0.04, 0.05) });
+    return g;
+  }
   if (realReady && REAL[a]) return buildRealGun(g, gun, a, parts);   // (gun.m: which real gun, for classes with several)
   const [L, B, H] = SIZE[a] || SIZE.carbine;
   const paint = skinMaterial(gun.paint);

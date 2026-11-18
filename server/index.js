@@ -592,7 +592,7 @@ function privateState(p) {
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
     hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })), hideoutsAllowed: hideoutAllowance(p).allowed, hideoutNext: hideoutAllowance(p).next,
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
-    camoOn: !!p.camoOn, camoActive: camoActive(p), camoUntil: p.camoOn ? p.camoUntil || 0 : 0, camoReadyAt: p.camoReadyAt || 0, sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
+    taserOut: !!p.taserOut, taserReadyAt: p.taserReadyAt || 0, camoOn: !!p.camoOn, camoActive: camoActive(p), camoUntil: p.camoOn ? p.camoUntil || 0 : 0, camoReadyAt: p.camoReadyAt || 0, sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying, hotLoose: !!p.hotLoose,
     food: Math.round(p.food ?? 0), foodMax: HOMESTEAD.hunger.max,
     boat: p.boat ? { id: p.boat, seat: p.seat } : null,
@@ -2900,7 +2900,7 @@ function trade(p, msg) {
 // ---- stuns and data hacking (Future Soldier-style)
 // Stun an enemy (stun grenade, or a takedown from behind) or down them, then data-hack them: their
 // whole crew lights up for your crew and you learn where their stash house is.
-const STUN = GADGET_DATA.stun, TAKEDOWN = GADGET_DATA.takedown, DATAHACK = GADGET_DATA.dataHack;
+const STUN = GADGET_DATA.stun, TAKEDOWN = GADGET_DATA.takedown, DATAHACK = GADGET_DATA.dataHack, TASER = GADGET_DATA.taser;
 const stunBlasts = [];   // pending grenades: { x, z, y, at, owner }
 const isStunned = (c, now = Date.now()) => (c.stunnedUntil || 0) > now;
 function stun(c, ms, by) {
@@ -3002,6 +3002,42 @@ function behind(p, t) {
   const fx = Math.sin(t.yaw || 0), fz = Math.cos(t.yaw || 0);
   const dx = p.x - t.x, dz = p.z - t.z, l = Math.hypot(dx, dz) || 1;
   return (fx * dx + fz * dz) / l < -0.35;
+}
+/**
+ * The stun gun: everyone carries one. `msg.draw` pulls it out or puts it away (others see it in your
+ * hand); `msg.dir` fires: the first enemy along your aim within range, in sight, is stunned (no damage),
+ * ready to be data-hacked. Then it recharges.
+ */
+function handleTaser(p, msg) {
+  const now = Date.now();
+  if (p.dead || p.downed) return;
+  if (msg.draw !== undefined) { p.taserOut = !!msg.draw && !p.boat; dirty(p); return; }
+  if (!p.taserOut || p.boat || isStunned(p, now)) return;
+  if (now < (p.taserReadyAt || 0)) return toast(p, `Stun gun recharging: ${Math.ceil((p.taserReadyAt - now) / 1000)}s`);
+  const d = msg.dir;
+  if (!Array.isArray(d) || d.length !== 3 || !d.every(Number.isFinite)) return;
+  const l = Math.hypot(d[0], d[1], d[2]) || 1, dx = d[0] / l, dy = d[1] / l, dz = d[2] / l;
+  const eye = gy(p) + (p.prone ? 0.4 : p.crouch ? CROUCH_EYE : STAND_EYE);
+  p.taserReadyAt = now + TASER.cooldown;
+  breakCamo(p, 2000); p.protectedUntil = 0;
+  let best = null, bt = Infinity, by = 0;
+  for (const c of [...players.values(), ...bots.values()]) {
+    if (c === p || c.dead || c.animal || c.npc || (c.dog && tokenInSquadWith(p, c.owner)) || (!c.isBot && sameSquad(c, p))) continue;
+    const cy = gy(c) + (c.prone ? 0.3 : c.crouch ? 0.8 : 1.15);
+    const vx = c.x - p.x, vy = cy - eye, vz = c.z - p.z, t = vx * dx + vy * dy + vz * dz;
+    if (t < 0.2 || t > TASER.range || t >= bt) continue;
+    if (Math.hypot(vx - dx * t, vy - dy * t, vz - dz * t) > TASER.aimTolerance) continue;
+    if (!lineOfSight(p.x, eye, p.z, c.x, cy, c.z)) continue;
+    best = c; bt = t; by = cy;
+  }
+  const to = best ? [best.x, by, best.z] : [p.x + dx * TASER.range, eye + dy * TASER.range, p.z + dz * TASER.range];
+  for (const r of players.values()) if (Math.hypot(r.x - p.x, r.z - p.z) < 150) send(r.ws, { t: 'zap', from: [p.x, eye - 0.15, p.z], to, hit: best ? 1 : 0, by: p.id });
+  dirty(p);
+  if (!best) return toast(p, `Missed: the stun gun reaches about ${Math.round(TASER.range * 3.28 / 5) * 5} ft`);
+  if (!best.isBot && !pvpAllowed(p, best)) return toast(p, `Can't stun ${best.name} here`);
+  if (!stun(best, TASER.stunMs, p)) return toast(p, `${best.name} just deployed: spawn protection for a few more seconds`);
+  botsHear(p, 15);   // (a stun gun's crack carries a little way)
+  toast(p, `⚡ ${best.name} is stunned: data-hack them now (hold USE)`);
 }
 function takedown(p, t) {
   if (!pvpAllowed(p, t)) return;
@@ -5153,7 +5189,7 @@ function tickAir(p, dt) {
   if (p.air.alt <= 0) landAir(p);
 }
 function handleShoot(p, msg) {
-  if (p.dead) return;
+  if (p.dead || p.taserOut) return;
   const w = activeWeapon(p);
   if (!w) return;
   const s = stats(p);
@@ -5283,15 +5319,17 @@ wss.on('connection', (ws) => {
         return;
       }
       case 'shoot': return handleShoot(p, msg);
+      case 'taser': return handleTaser(p, msg);
       case 'reload': return handleReload(p);
       case 'swap': {   // next gun you're carrying: main gun 1, main gun 2, sidearm, round again
         if (p.dead || p.reloadUntil >= Date.now()) return;
+        if (p.taserOut) { p.taserOut = false; dirty(p); return; }   // stun gun away: back to the gun you had
         const at = GUN_SLOTS.indexOf(p.active);
         for (let k = 1; k <= 3; k++) { const s2 = GUN_SLOTS[(at + k) % 3]; if (p.inv[s2]) { p.active = s2; break; } }
         dirty(p); return;
       }
       case 'weapon':   // straight to one slot (keys 1, 2, 3)
-        if (!p.dead && p.reloadUntil < Date.now() && GUN_SLOTS.includes(msg.slot) && p.inv[msg.slot]) { p.active = msg.slot; dirty(p); }
+        if (!p.dead && p.reloadUntil < Date.now() && GUN_SLOTS.includes(msg.slot) && p.inv[msg.slot]) { p.active = msg.slot; p.taserOut = false; dirty(p); }
         return;
       case 'interact': p.buildIntent = !!msg.build; return !p.dead && interact(p);
       case 'pushSub': return pushSubscribe(p, msg);
@@ -5504,7 +5542,7 @@ const loop = setInterval(() => {
       aim: p.aiming && !p.dead ? 1 : 0,
       ...(p.sprint && !p.dead ? { sp: 1 } : {}),   // sprinting: gun put away
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
-      gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, m: modelOf(activeWeapon(p)) || undefined, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
+      gun: p.taserOut ? { a: 'taser' } : activeWeapon(p) ? { a: activeWeapon(p).archetype, m: modelOf(activeWeapon(p)) || undefined, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),
       rl: p.reloadUntil > now ? Math.round(p.reloadUntil - now) : undefined,   // reloading: ms left
       ...actionView(p, now),   // doing something that takes a while (client/actions.js poses it)

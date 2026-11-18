@@ -52,6 +52,13 @@
       "key": "G",
       "desc": "Thrown flashbang: enemies within 20 ft who can see the blast are stunned for up to 4 s, ready to be data-hacked. Z switches grenade."
     },
+    "taser": {
+      "name": "Stun Gun",
+      "level": 1,
+      "cost": 0,
+      "key": "4",
+      "desc": "Carried by everyone. Pull it (4 on the weapon bar), aim at someone within about 30 ft and fire: they're stunned for 3.5 s, ready to data-hack. Recharges in 12 s. Doesn't hurt anyone."
+    },
     "takedown": {
       "name": "Takedown",
       "level": 1,
@@ -81,6 +88,13 @@
     "minDurationMs": 2000,
     "throwRange": 30,
     "cooldown": 15000
+  },
+  "taser": {
+    "range": 9,
+    "aimTolerance": 0.75,
+    "stunMs": 3500,
+    "cooldown": 12000,
+    "_about": "range in metres; aimTolerance: how far (m) the darts may pass from someone and still hit."
   },
   "takedown": {
     "range": 1.6,

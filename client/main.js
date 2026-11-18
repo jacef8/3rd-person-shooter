@@ -1398,6 +1398,22 @@ const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1), PUFF_GEO = new THREE.SphereGeom
 function reserveFor(me) { const w = me?.inv?.[me.active]; return w && weaponStats(w)?.explosive ? (me.rockets || 0) : (me?.ammo || 0); }
 const ROCKET_MAT = new THREE.MeshBasicMaterial({ color: 0xffb060 });
 const SMOKE_MAT = new THREE.MeshBasicMaterial({ color: 0xb8b8b0, transparent: true, opacity: 0.45, depthWrite: false });
+/** A stun gun's shot: two thin crackling wires out to where the darts landed, gone in a blink. */
+const ZAP_MAT = new THREE.LineBasicMaterial({ color: 0x9fdcff, transparent: true, opacity: 0.95 });
+function drawZap(from, to, hit) {
+  const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to), pts = [];
+  for (const side of [-0.06, 0.06]) {
+    const seg = [];
+    for (let i = 0; i <= 10; i++) {
+      const t = i / 10, j = i && i < 10 ? 0.07 : 0;
+      seg.push(new THREE.Vector3().lerpVectors(a, b, t).add(new THREE.Vector3((Math.random() - 0.5) * j, side * (1 - t) + (Math.random() - 0.5) * j, (Math.random() - 0.5) * j)));
+    }
+    for (let i = 0; i < seg.length - 1; i++) pts.push(seg[i], seg[i + 1]);
+  }
+  const line = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), ZAP_MAT);
+  scene.add(line);
+  tracers.push({ obj: line, life: hit ? 0.5 : 0.25 });
+}
 function addTracer(o, p, hit) {
   if (hit === 3) {
     // A rocket: a hot streak and a trail of smoke puffs that hang and spread.
@@ -1963,7 +1979,7 @@ function handle(m) {
       if (build.on) renderBuildBar();
       document.body.classList.toggle('cloaked', !!m.camoActive);
       updateGadgetBar();
-      setCharacterGun(selfMesh, m.inv[m.active] ? { a: m.inv[m.active].archetype, m: m.inv[m.active].model, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
+      setCharacterGun(selfMesh, m.taserOut ? { a: 'taser' } : m.inv[m.active] ? { a: m.inv[m.active].archetype, m: m.inv[m.active].model, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
       setCharacterStowed(selfMesh, stowedOf(m));
       break;
     }
@@ -2046,6 +2062,7 @@ function handle(m) {
       stunThrowFx(m, m.kind === 'frag' ? 0xd7e08a : 0xff9b21);
       break;
     case 'stunBlast': stunBlastFx(m.x, m.y, m.z); break;
+    case 'zap': drawZap(m.from, m.to, m.hit); break;
     case 'stunned':
       state.stunnedUntil = performance.now() + (m.until - Date.now());
       $('stunfx').style.opacity = 1;
@@ -2182,6 +2199,7 @@ function stanceNote() {
   if ($('rotate').hidden === upright) $('rotate').hidden = !upright;
 }
 setInterval(stanceNote, 250);
+setInterval(() => { if (state.me && (state.me.taserReadyAt || 0) > Date.now() - 1500) updateHud(); }, 1000);   // the stun gun's recharge counting down
 function updateHud() {
   const me = state.me;
   if (!me) return;
@@ -2193,11 +2211,13 @@ function updateHud() {
   $('foodtext').textContent = `FOOD ${me.food}${me.food < HOMESTEAD.hunger.noRegenBelow ? ' · HUNGRY (H to eat)' : ''}`;
   $('foodbar').parentElement.classList.toggle('low', me.food < HOMESTEAD.hunger.noRegenBelow);
   const w = me.inv[me.active];
-  $('wname').textContent = w ? `${w.name}${w.parts?.muzzle === 'suppressor' ? ' · suppressed' : ''}` : 'Unarmed';
-  const slotsHtml = ['primary', 'primary2', 'secondary'].map((sl, i) => { const it = me.inv[sl]; return `<span data-slot="${sl}" class="${sl === me.active ? 'on' : it ? '' : 'none'}">${i + 1} ${it ? esc(shortGun(it)) : '—'}</span>`; }).join('');
+  $('wname').textContent = me.taserOut ? 'Stun gun' : w ? `${w.name}${w.parts?.muzzle === 'suppressor' ? ' · suppressed' : ''}` : 'Unarmed';
+  const tzLeft = Math.ceil(((me.taserReadyAt || 0) - Date.now()) / 1000);
+  const slotsHtml = ['primary', 'primary2', 'secondary'].map((sl, i) => { const it = me.inv[sl]; return `<span data-slot="${sl}" class="${sl === me.active && !me.taserOut ? 'on' : it ? '' : 'none'}">${i + 1} ${it ? esc(shortGun(it)) : '—'}</span>`; }).join('')
+    + `<span data-slot="taser" class="${me.taserOut ? 'on' : ''}">4 Stun gun${tzLeft > 0 ? ` ${tzLeft}s` : ''}</span>`;
   if ($('wslots').innerHTML !== slotsHtml) $('wslots').innerHTML = slotsHtml;
-  $('mag').textContent = me.mag;
-  $('reserve').textContent = reserveFor(me);
+  $('mag').textContent = me.taserOut ? '⚡' : me.mag;
+  $('reserve').textContent = me.taserOut ? (tzLeft > 0 ? `${tzLeft}s` : 'ready') : reserveFor(me);
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
   $('housestatus').textContent = (me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}${me.claim.ruined ? ' · RUIN: rebuild it at the stash' : ''}` : 'No stash house — plant a claim marker')
@@ -2281,7 +2301,7 @@ const shortGun = (it) => String(it.name || it.archetype || '').replace(/ Rifle$/
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // Tap (or click) a gun in the weapon strip to take it in hand.
 $('minimap').addEventListener('click', () => doAction('map'));
-$('wslots').addEventListener('pointerdown', (e) => { const sl = e.target.closest('[data-slot]')?.dataset.slot; if (sl && state.me?.inv[sl]) { e.stopPropagation(); send({ t: 'weapon', slot: sl }); } });
+$('wslots').addEventListener('pointerdown', (e) => { const sl = e.target.closest('[data-slot]')?.dataset.slot; if (sl === 'taser') { e.stopPropagation(); doAction('slot4'); } else if (sl && state.me?.inv[sl]) { e.stopPropagation(); send({ t: 'weapon', slot: sl }); } });
 function equippedFor(item) {
   const inv = state.me.inv;
   if (item.kind === 'armor') return inv.armor;
@@ -3575,6 +3595,11 @@ function doAction(a) {
     case 'slot1': send({ t: 'weapon', slot: 'primary' }); break;
     case 'slot2': send({ t: 'weapon', slot: 'primary2' }); break;
     case 'slot3': send({ t: 'weapon', slot: 'secondary' }); break;
+    case 'slot4':   // the stun gun: pull it, or put it away (back to your gun)
+      if (state.me.boat) break;
+      send({ t: 'taser', draw: !state.me.taserOut });
+      if (!state.me.taserOut && !localStorage.getItem('dz_tip_taser')) { localStorage.setItem('dz_tip_taser', '1'); toast('Stun gun: aim at someone within 30 ft and fire to stun them, then hold USE beside them to data-hack'); }
+      break;
     case 'heal': send({ t: 'inv', action: 'use' }); break;
     case 'crouch': {
       // Crouch at a sprint: slide.
@@ -3600,7 +3625,7 @@ $('name').value = localStorage.getItem('dz_name') || '';
     hint.innerHTML = '<b class="accent">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
   } else {
     hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<span class="more"><br />'
-      + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm) · <b>L3</b> sprint<br />'
+      + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm), hold for the stun gun · <b>L3</b> sprint<br />'
       + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
       + 'The two small buttons: <b>⧉</b> (left) bag (Crew & settings are in it), hold to accept an invite · <b>☰</b> (right) map · <b>Ⓑ</b> always goes back</span>';
   }
@@ -3661,7 +3686,7 @@ addEventListener('wheel', (e) => {
 });
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
-  KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', KeyH: 'heal', ControlLeft: 'crouch', Space: 'jump',
+  KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', Digit4: 'slot4', KeyH: 'heal', Space: 'jump',
 };
 addEventListener('keydown', (e) => {
   if (document.activeElement?.tagName === 'INPUT') return;
@@ -3851,6 +3876,16 @@ function tryFire(now) {
   if (state.nadeAim) return;
   const me = state.me;
   if (!me || me.dead || state.invOpen) return;
+  if (me.taserOut) {   // the stun gun: one shot a pull of the trigger, then it recharges
+    if (state.firedThisPress || state.sprint) return;
+    state.firedThisPress = true;
+    if ((me.taserReadyAt || 0) > Date.now()) { sfx.empty(); return; }
+    const target = aimPoint(), eye = new THREE.Vector3(state.x, eyeHeight(), state.z), dir = target.sub(eye).normalize();
+    send({ t: 'taser', dir: [dir.x, dir.y, dir.z] });
+    sfx.shot(0, 0, 0, 'sidearm', 2, true);
+    me.taserReadyAt = Date.now() + 12000;   // predicted; the server confirms
+    return;
+  }
   const w = me.inv[me.active];
   if (!w) return;
   if (state.sprint || now < (state.drawUntil || 0)) return;   // gun on your back, or still coming up
@@ -4722,7 +4757,12 @@ function pollPad(dt, now) {
       if (firing && !state.mouseDown) state.firedThisPress = false;
       state.mouseDown = firing;
     }
-    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B].includes(Number(i)) && just(Number(i))) doAction(action);
+    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B, BTN.Y].includes(Number(i)) && just(Number(i))) doAction(action);
+    // Ⓨ: tap for your next gun (or to put the stun gun away), hold to pull the stun gun.
+    const yb = b(BTN.Y);
+    if (yb && !pad.prev[BTN.Y]) { pad.yAt = now; pad.yHeld = false; }
+    if (yb && !pad.yHeld && now - (pad.yAt || now) > 400) { pad.yHeld = true; if (!state.me?.taserOut) doAction('slot4'); }
+    if (!yb && pad.prev[BTN.Y] && !pad.yHeld) doAction('swap');
     // Ⓑ: tap to crouch, hold to go prone (while downed, Ⓑ does nothing).
     const bb = b(BTN.B);
     if (bb && !pad.prev[BTN.B] && !pad.bEat) { pad.bAt = now; pad.bHeld = false; }
@@ -5718,7 +5758,7 @@ function buildTouchUI() {
     // A tap on a gun in the weapon strip (drawn under this layer) takes that gun in hand.
     for (const chip of $('wslots').children) {
       const r = chip.getBoundingClientRect();
-      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { if (state.me?.inv[chip.dataset.slot]) send({ t: 'weapon', slot: chip.dataset.slot }); e.preventDefault(); return; }
+      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { if (chip.dataset.slot === 'taser') doAction('slot4'); else if (state.me?.inv[chip.dataset.slot]) send({ t: 'weapon', slot: chip.dataset.slot }); e.preventDefault(); return; }
     }
     e.preventDefault();
     ui.setPointerCapture(e.pointerId);
