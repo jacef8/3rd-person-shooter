@@ -1510,6 +1510,9 @@ const mmTerrain = { canvas: null, x: 0, z: 0, span: 1 };
 function drawMinimap() {
   const c = $('minimap'), g = c.getContext('2d');
   const R = 100, view = 80;   // metres shown radius
+  // Text sized for how big the minimap is on screen (it's drawn at 200 px and shown smaller on a
+  // phone): road names come out about 12 px however it's shown.
+  const fs = Math.min(2, Math.max(1, 200 / (c.clientWidth || 200)));
   const k = R / view;
   g.clearRect(0, 0, 200, 200);
   g.save();
@@ -1602,10 +1605,10 @@ function drawMinimap() {
     g.restore();
     crewChips.push({ text: `${m.name.slice(0, 8)} ${distText(d)}`, x: R + ux * (R - 40), y: R + uz * (R - 34) });
   }
-  g.font = "700 11px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `700 ${Math.round(11 * fs)}px 'Atkinson Hyperlegible', Segoe UI, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
   const chipBoxes = [];
   for (const cc of crewChips) {
-    const w = g.measureText(cc.text).width + 10, h = 16;
+    const w = g.measureText(cc.text).width + 10 * fs, h = 16 * fs;
     let y0 = Math.max(14, Math.min(200 - 14 - h, cc.y - h / 2));
     for (let n = 0; n < 4 && chipBoxes.some((b) => cc.x - w / 2 < b[0] + b[2] && cc.x + w / 2 > b[0] && y0 < b[1] + b[3] && y0 + h > b[1]); n++) y0 += y0 > R ? -h - 2 : h + 2;   // step clear of another chip
     // Kept whole inside the round minimap: as wide as the circle allows at that height.
@@ -1623,10 +1626,10 @@ function drawMinimap() {
     const d = distToSeg(state.x, state.z, r);
     if (!named.has(r.name) || d < named.get(r.name).d) named.set(r.name, { d, r });
   }
-  g.font = "700 12px 'Atkinson Hyperlegible', Segoe UI, sans-serif";
+  g.font = `700 ${Math.round(12 * fs)}px 'Atkinson Hyperlegible', Segoe UI, sans-serif`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
   const placed = [];   // chips already drawn: [x, y, w, h]
-  const H = 20, PAD = 5, top = 42;   // (the N marker sits above `top`)
+  const H = Math.round(20 * fs), PAD = 5, top = 30 + 12 * fs;   // (the N marker sits above `top`)
   /** Half the width the circle has across a chip whose middle is at y (its corners must stay inside). */
   const halfAt = (y) => { const far = Math.max(Math.abs(y - H / 2 - R), Math.abs(y + H / 2 - R)); return Math.sqrt(Math.max(0, (R - PAD) ** 2 - far * far)); };
   const hits = (x, y, w) => placed.some(([px, py, pw]) => Math.abs(py - y) < H + 3 && x < px + pw + 4 && px < x + w + 4);
@@ -1636,10 +1639,10 @@ function drawMinimap() {
     const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
     const t = Math.max(0.1, Math.min(0.9, ((state.x - r.x1) * dx + (state.z - r.z1) * dz) / l2));
     const lx0 = X(r.x1 + dx * t), ly0 = Math.max(top, Math.min(2 * R - PAD - H / 2, Z(r.z1 + dz * t)));
-    let text = name, w = g.measureText(text).width + 14, spot = null;
+    let text = name, w = g.measureText(text).width + 14 * fs, spot = null;
     const tryAt = () => {
       for (let k = 0; k < 16 && !spot; k++) {
-        const step = Math.ceil(k / 2) * 12 * (k % 2 ? 1 : -1) * Math.sign(R - ly0 || 1);
+        const step = Math.ceil(k / 2) * 12 * fs * (k % 2 ? 1 : -1) * Math.sign(R - ly0 || 1);
         const y = ly0 + step;
         if (y < top || y > 2 * R - PAD - H / 2) continue;
         const half = halfAt(y);
@@ -1650,7 +1653,7 @@ function drawMinimap() {
     };
     tryAt();
     // Still no room (a long name near the edge): shorten it until it fits.
-    while (!spot && text.length > 4) { text = text.slice(0, -2).trimEnd() + '…'; w = g.measureText(text).width + 14; tryAt(); }
+    while (!spot && text.length > 4) { text = text.slice(0, -2).trimEnd() + '…'; w = g.measureText(text).width + 14 * fs; tryAt(); }
     if (!spot) continue;
     const [x, y] = spot;
     placed.push([x, y, w]);
@@ -1664,10 +1667,11 @@ function drawMinimap() {
   g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 6); g.lineTo(-5, 6); g.closePath(); g.fill();
   g.restore();
   // North is always straight up (the map never turns; your arrow does): a red N pointer on the rim.
-  g.fillStyle = '#161a22'; g.beginPath(); g.arc(R, 17, 13, 0, Math.PI * 2); g.fill();
+  const nr = 13 * Math.min(fs, 1.5), ny = 4 + nr;
+  g.fillStyle = '#161a22'; g.beginPath(); g.arc(R, ny, nr, 0, Math.PI * 2); g.fill();
   g.fillStyle = '#ff4a3a'; g.beginPath(); g.moveTo(R, 0); g.lineTo(R + 6, 8); g.lineTo(R - 6, 8); g.closePath(); g.fill();
-  g.fillStyle = '#ffffff'; g.font = '800 16px "Archivo", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText('N', R, 19);
+  g.fillStyle = '#ffffff'; g.font = `800 ${Math.round(16 * Math.min(fs, 1.5))}px "Archivo", sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('N', R, ny + 2);
   g.textBaseline = 'alphabetic';
 }
 

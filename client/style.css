@@ -216,7 +216,7 @@ input { -webkit-user-select: text; user-select: text; }
 
 /* Phone in landscape (e.g. iPhone in a Backbone One): shrink the HUD and let panels fill the screen. */
 @media (max-height: 520px) {
-  #minimap { width: 110px; height: 110px; top: 8px; right: calc(8px + env(safe-area-inset-right)); }
+  #minimap { width: 120px; height: 120px; top: 8px; right: calc(8px + env(safe-area-inset-right)); }
   #where { top: 122px; right: calc(8px + env(safe-area-inset-right)); width: 170px; padding: 5px 8px; }
   #where b { font-size: 14px; }
   #housestatus { top: 190px; right: calc(8px + env(safe-area-inset-right)); width: 170px; font-size: 12px; }
@@ -557,7 +557,7 @@ body.touchui #where span:not(:empty)::before { content: ' · '; }
 body.touchui #stance { top: 44px; bottom: auto; padding: 3px 9px; }
 body.touchui #stance.standing, body.touchui #stance span { display: none; }
 body.touchui #housestatus, body.touchui #resources { display: none; }   /* in the bag instead */
-body.touchui #minimap { width: 100px; height: 100px; top: 6px; }
+body.touchui #minimap { width: 120px; height: 120px; top: 6px; }
 body.touchui #weapon { bottom: 6px; padding: 3px 6px; gap: 6px; }
 body.touchui #wslots span { padding: 0 9px; }
 /* Held upright in the game: ask to turn it sideways. */
