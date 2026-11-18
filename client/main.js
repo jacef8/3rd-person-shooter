@@ -241,7 +241,7 @@ function initWorld(m) {
   state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: MOBILE, land });
   state.towns = createTownDressing(scene, map, m.realData?.businesses, ground, m.realData?.hydrants, () => state.view?.setPaved((x, z) => state.towns.pavedAt(x, z)));
   try { state.places = createPlaces(scene, map, ground); } catch (e) { console.warn('places', e); }   // town signs, parks (client/places.js)
-  state.env = createEnvironment({ scene, far: state.view.far, sky: state.view.sky, sun, hemi, renderer, camera, towns: state.towns, thunder: (x, y, z) => sfx.boom(x, y, z) });
+  state.env = createEnvironment({ scene, far: state.view.far, sky: state.view.sky, sun, hemi, renderer, camera, towns: state.towns, thunder: (x, y, z) => sfx.thunder(x, y, z) });
   applyGfx();
   state.view.setOwnHouse(m.houseId);
   state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000, land);
@@ -746,6 +746,40 @@ function syncBoats(list) {
     else setLabel(v.mesh.userData.label, `${b.mine ? '◆ ' : ''}${b.owner ? `${b.owner}'s ${name}` : `Abandoned ${name}`}  ${b.hp}/${b.max}`, b.mine ? '#7dff9a' : '#ffd27a');
   }
   for (const [id, v] of boatVis) if (!seen.has(id)) { scene.remove(v.mesh); boatVis.delete(id); }
+}
+/** What's underfoot at a spot, for footsteps: water, a paved or dirt road, a floor, or grass. */
+function surfaceAt(x, z, y) {
+  const gh = ground(x, z), r = state.map.roadsNear(x, z, 8).find((r) => distToSeg(x, z, r) < (r.width || 12) / 2);
+  if (r) return r.dirt ? 'dirt' : 'road';   // (a bridge deck is a road too)
+  if (y != null && y > Math.max(gh, 0) + 0.3) return 'wood';
+  return gh < 0.2 ? 'water' : 'grass';
+}
+/** Other people's footsteps, from where they are: you can hear someone coming. */
+function remoteSteps(r, dt) {
+  const d = r.data, g = r.mesh.position;
+  if (!d || d.dead || d.boat || d.air || d.prone || d.downed) { r.stepPrev = null; return; }
+  if (Math.abs(g.x - state.x) > 40 || Math.abs(g.z - state.z) > 40) { r.stepPrev = null; return; }
+  if (r.stepPrev) {
+    const moved = Math.hypot(g.x - r.stepPrev.x, g.z - r.stepPrev.z);
+    if (moved < 3) r.stepAcc = (r.stepAcc || 0) + moved;
+    const stride = d.sp ? 2.3 : d.crouch ? 1.2 : 1.7;
+    if (r.stepAcc > stride) { r.stepAcc = 0; sfx.step(surfaceAt(g.x, g.z, d.y), !!d.crouch, [g.x, g.y, g.z], !!d.sp); }
+  }
+  r.stepPrev = { x: g.x, z: g.z };
+}
+/** Engines, tires and hooves for every ride in earshot (sound.js mixes the closest few). */
+function rideSounds(dt) {
+  const me = state.me;
+  for (const [id, v] of boatVis) {
+    const g = v.mesh.position, def = BOATS[v.data.type];
+    const mine = !!(me?.boat && me.boat.id === id), local = state.boat && state.boat.id === id ? state.boat : null;
+    let speed;
+    if (local) speed = Math.abs(local.speed || 0);
+    else { speed = v.sndPrev && dt > 0 ? Math.hypot(g.x - v.sndPrev.x, g.z - v.sndPrev.z) / dt : 0; v.sndSp = (v.sndSp || 0) + (speed - (v.sndSp || 0)) * Math.min(1, dt * 6); speed = v.sndSp; }
+    v.sndPrev = { x: g.x, z: g.z };
+    if (def.land && ((v.sndN = (v.sndN || 0) + 1) % 15 === 1)) v.sndRoad = state.map.roadsNear(g.x, g.z, 8).some((r) => !r.dirt && distToSeg(g.x, g.z, r) < (r.width || 12) / 2);
+    sfx.ride(id, v.data.type, { x: g.x, y: g.y + 0.8, z: g.z, speed, top: def.speed, on: !!(local || v.data.seats?.[0]), own: mine, throttle: local ? state.boatThrottle || 0 : null, road: def.land ? !!v.sndRoad : true, dt });
+  }
 }
 const rideEnv = () => ({ solids: (x, z, r) => solidsNear(x, z, r), roadsNear: state.map.roadsNear });
 function animateBoats(dt, now) {
@@ -1999,6 +2033,11 @@ function handle(m) {
         const haul = (x) => x.inv.pack.length + RES_UI.reduce((a, r) => a + (r === 'ammo' ? 0 : x[r] || 0), 0);
         if (haul(m) > haul(state.me) && m.inv.pack.length >= state.me.inv.pack.length) sfx.pickup();
       }
+      if (state.me && !m.dead) {
+        if (m.active !== state.me.active || (m.taserOut && !state.me.taserOut)) sfx.equip();   // switched guns
+        const rideId = (x) => x?.boat?.id || null, landRide = (x) => { const v = rideId(x) && boatVis.get(rideId(x)); return v && BOATS[v.data.type].land && BOATS[v.data.type].grip === 'wheel'; };
+        if (rideId(m) !== rideId(state.me) && (landRide(m) || landRide(state.me))) sfx.door();   // in or out of a car
+      }
       if (m.boat && !state.me?.boat) state.crouch = false;
       if (!m.boat || m.boat.seat !== 0 || (state.boat && state.boat.id !== m.boat.id)) state.boat = null;
       state.me = m;
@@ -2039,6 +2078,13 @@ function handle(m) {
       const near = Math.hypot(m.o[0] - state.x, m.o[2] - state.z) < (m.sup === 2 ? 8 : 25);
       if (m.sup && m.from !== state.id && !near) break;
       for (const h of m.hits) addTracer(m.from === state.id ? muzzlePoint(m.o) : m.o, h, h[3]);
+      if (m.from !== state.id && !state.me?.dead) for (const h of m.hits) {
+        // A round past your head snaps; one landing near you thuds or pings.
+        const ox = m.o[0], oz = m.o[2], vx = h[0] - ox, vz = h[2] - oz, L2 = vx * vx + vz * vz || 1;
+        const k = Math.max(0, Math.min(1, ((state.x - ox) * vx + (state.z - oz) * vz) / L2)), px = ox + vx * k - state.x, pz = oz + vz * k - state.z, miss = Math.hypot(px, pz);
+        if (miss < 5 && k > 0.05 && k < 0.98) sfx.whiz(-Math.sin(Math.atan2(px, pz) - state.yaw), 1 - miss / 6);
+        sfx.impact(h[0], h[1], h[2], h[3] ? 'body' : 'ground');
+      }
       break;
     }
     case 'xp':
@@ -3627,7 +3673,7 @@ function doAction(a) {
       break;
     case 'rally': send({ t: 'rally' }); break;
     case 'ping': { const p = aimPoint(); send({ t: 'squad', action: 'ping', x: p.x, z: p.z }); break; }
-    case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && reserveFor(state.me) > 0) { sfx.reload(); startReloadFx(); } send({ t: 'reload' }); break;
+    case 'reload': if (state.me.mag < (weaponStats(state.me.inv[state.me.active])?.mag || 0) && reserveFor(state.me) > 0) { sfx.reload(state.me.inv[state.me.active]?.archetype, weaponStats(state.me.inv[state.me.active])?.reloadMs); startReloadFx(); } send({ t: 'reload' }); break;
     case 'swap': send({ t: 'swap' }); break;
     case 'slot1': send({ t: 'weapon', slot: 'primary' }); break;
     case 'slot2': send({ t: 'weapon', slot: 'primary2' }); break;
@@ -3967,7 +4013,7 @@ function tryFire(now) {
   if (me.reloading) return;
   if (me.mag <= 0) {
     if (!state.firedThisPress) { sfx.empty(); state.firedThisPress = true; }
-    if (reserveFor(me) > 0 && !state.autoReloadSent) { send({ t: 'reload' }); sfx.reload(); startReloadFx(); state.autoReloadSent = now; }
+    if (reserveFor(me) > 0 && !state.autoReloadSent) { send({ t: 'reload' }); sfx.reload(state.me.inv[state.me.active]?.archetype, weaponStats(state.me.inv[state.me.active])?.reloadMs); startReloadFx(); state.autoReloadSent = now; }
     return;
   }
   state.autoReloadSent = 0;
@@ -5384,6 +5430,7 @@ function frame(now) {
         const n = stepBoat(state.map.terrain, state.boat, free ? { throttle: f + pad.moveY + touch.moveY, steer: r + pad.moveX + touch.moveX } : {}, dt, rideEnv());
         if (n.hit) { state.boat.crash = Math.max(state.boat.crash || 0, n.hit); sfx.hurt?.(); }
         Object.assign(state.boat, n);
+        state.boatThrottle = free ? Math.max(-1, Math.min(1, f + pad.moveY + touch.moveY)) : 0;
       }
     }
     const seat = boatSeat(me);
@@ -5464,8 +5511,7 @@ function frame(now) {
       if (state.stepAcc > stride) {
         state.stepAcc = 0;
         const gh = ground(state.x, state.z);
-        const onRoad = state.map.roadsNear(state.x, state.z, 8).some((r) => !r.dirt && distToSeg(state.x, state.z, r) < (r.width || 12) / 2);
-        sfx.step(gh < 0.2 ? 'water' : onRoad ? 'road' : 'grass', state.crouch);
+        sfx.step(surfaceAt(state.x, state.z, myY()), state.crouch, null, state.sprint);
       }
     }
     // Momentum: you reach full speed in well under a tenth of a second and stop almost as fast:
@@ -5546,7 +5592,9 @@ function frame(now) {
   updateCharacterMesh(selfMesh, { ...myAct, hp: state.me?.hp, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
-  for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
+  rideSounds(dt);
+  sfx.tick();
+  for (const [, r] of state.players) { updateCharacterMesh(r.mesh, smoothed(r), dt); remoteSteps(r, dt); }
   updateGunFx(dt);
   for (const [, r] of state.bots) {
     if (!r.animal) { updateCharacterMesh(r.mesh, r.data, dt); continue; }
@@ -5642,6 +5690,8 @@ function frame(now) {
   // Day and night, and the weather: the sun or moon, the sky, fog, rain and lightning (client/daynight.js).
   if (state.env) {
     state.env.update(new THREE.Vector3(state.x, gy0, state.z), dt);
+    { const es = state.env.state, fall = state.air ? (state.air.mode === 'chute' ? 0.15 : 0.45) : 0, fast = state.boat ? Math.min(0.12, Math.abs(state.boat.speed || 0) / 250) : 0;
+      sfx.ambience({ night: es.night, rain: es.rain || 0, storm: es.storm || 0, wind: fall + fast }); }
     updateSkyLight(now);
     // The sky light now does much of what the flat fill light did: turn that down, sky light up
     // with the day (none at night: the sky model has no moon).

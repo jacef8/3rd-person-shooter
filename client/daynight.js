@@ -101,7 +101,7 @@ export function createEnvironment(o) {
       const el = dir.y, day = smooth(-0.1, 0.16, el), dusk = smooth(-0.12, 0.02, el) * (1 - smooth(0.05, 0.3, el));
       state.night = 1 - day;
       const clouds = mix(c, 1), dens = mix(c, 2), sunK = mix(c, 3), skyK = mix(c, 4), rainK = Math.min(1, mix(c, 5)), storm = Math.max(0, mix(c, 5) - 1), fog = mix(c, 6);
-      state.clouds = clouds; state.fog = fog;
+      state.clouds = clouds; state.fog = fog; state.rain = rainK; state.storm = storm;
       // Sunlight by day, moonlight by night (the shadows follow whichever is up).
       const up = el > -0.04 ? dir : moonDir;
       sun.position.set(target.x + up.x * 90, target.y + up.y * 90, target.z + up.z * 90);

@@ -1,0 +1,3 @@
+{
+  "_about": "Optional real recordings. Add a line per sound: \"shot_carbine\": \"carbine.mp3\" (file in this folder). Names: shot_<sidearm|smg|carbine|dmr|shotgun|lmg|launcher>[_sup], reload_<same>, step_<grass|road|dirt|wood|water|metal>, boom. Add a 2 or 3 to the name for variations (shot_carbine2). Only CC0 or commercial-use sounds; credit them in CREDITS.md."
+}
