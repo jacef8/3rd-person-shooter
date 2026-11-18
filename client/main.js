@@ -2484,7 +2484,8 @@ function buildInvColumns() {
     if (it.kind === 'weapon' && it.archetype !== 'sidearm') {
       // Two main guns: Ⓐ into the empty slot (or swapped for the one in hand), Ⓨ into the other.
       const first = !inv.primary ? 'primary' : !inv.primary2 ? 'primary2' : me.active === 'primary2' ? 'primary2' : 'primary', other = first === 'primary' ? 'primary2' : 'primary';
-      const lab = (slot) => (inv[slot] ? `Swap for ${shortGun(inv[slot])} (${SLOT_LABEL[slot]})` : `Carry as ${SLOT_LABEL[slot].toLowerCase()}`);
+      // Says which slot it goes in and, plainly, which gun of yours it puts back in the bag.
+      const lab = (slot) => (inv[slot] ? `Use as ${SLOT_LABEL[slot].toLowerCase()} · ${inv[slot].name} to bag` : `Use as ${SLOT_LABEL[slot].toLowerCase()}`);
       acts.a = [lab(first), () => send({ t: 'inv', action: 'equip', itemId: it.id, slot: first })];
       acts.y = [lab(other), () => send({ t: 'inv', action: 'equip', itemId: it.id, slot: other })];
     } else if (it.kind === 'weapon' || it.kind === 'armor') acts.a = ['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })];
