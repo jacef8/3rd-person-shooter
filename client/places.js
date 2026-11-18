@@ -147,6 +147,21 @@ export function createPlaces(scene, map, ground) {
             for (const s of [-1, 1]) part(BOX, MAT.wood, x + s * 0.75, y + 0.37, z, 0.08, 0.74, 1.4);   // legs
           }
         } }
+      // A ball field (Liberty County Recreation's diamonds are here): the infield dirt, the bases, the
+      // pitcher's mound and the backstop behind home.
+      { const p = at(-88, 0, 3);
+        if (p) {
+          const home = [p.x, p.z + 12], b = 13;   // home plate, the diamond opening north (-z)
+          const bases = [[0, 0], [b * 0.707, -b * 0.707], [0, -b * 1.414], [-b * 0.707, -b * 0.707]];
+          const dirt = new THREE.Mesh(new THREE.PlaneGeometry(b + 5, b + 5), M(0xa0714a, { roughness: 1 }));
+          dirt.rotation.set(-Math.PI / 2, 0, Math.PI / 4); dirt.position.set(home[0], p.y + 0.04, home[1] - b * 0.707); dirt.receiveShadow = true; root.add(dirt);
+          for (const [a, c2] of bases) part(BOX, MAT.white, home[0] + a, p.y + 0.06, home[1] + c2, 0.4, 0.08, 0.4);
+          part(CYL, M(0xa0714a, { roughness: 1 }), home[0], p.y + 0.1, home[1] - b * 0.707, 2.4, 0.2, 2.4);   // the mound
+          for (const [dx, w, ang] of [[0, 8, 0], [-4.8, 4, 0.9], [4.8, 4, -0.9]]) {   // the backstop
+            const f = part(BOX, M(0x9aa0a6, { metalness: 0.4, roughness: 0.6, transparent: true, opacity: 0.55 }), home[0] + dx, p.y + 2.2, home[1] + 4 - Math.abs(dx) * 0.4, w, 4.4, 0.08);
+            f.rotation.y = ang; f.castShadow = false;
+          }
+        } }
       // The railroad: a loop of track and the little engine and its cars on it.
       { const p = at(20, 25, 2);
         if (p) {
@@ -178,6 +193,26 @@ export function createPlaces(scene, map, ground) {
             part(BOX, MAT.wood, 0, 0.72, zc, 0.55, 0.06, 1.6, train);   // the bench
           }
         } }
+    }
+  }
+
+  // Estiffanulga County Park: the county's boat ramp on the river's east bank (the landing there is a
+  // river stop in the game: map.docks). A concrete ramp down into the water, a short wooden dock beside
+  // it, and the park's sign.
+  {
+    const d = (map.docks || []).find((q) => /Estiffanulga/i.test(q.real || '') || /^Estiffanulga Landing$/.test(q.name));
+    if (d) {
+      const tx = d.wx - d.x, tz = d.wz - d.z, l = Math.hypot(tx, tz) || 1, ux = tx / l, uz = tz / l;   // toward the water
+      const yaw = Math.atan2(ux, uz), len = Math.min(26, l + 10), y0 = ground(d.x, d.z);
+      const ramp = new THREE.Mesh(new THREE.BoxGeometry(5, 0.25, len), M(0xa9a59b, { roughness: 0.95 }));
+      const drop = Math.max(1.2, y0 - Math.min(0, ground(d.wx, d.wz)) + 0.6);
+      ramp.position.set(d.x + ux * len / 2 - uz * 4, y0 - drop / 2, d.z + uz * len / 2 + ux * 4);
+      ramp.rotation.set(0, yaw, 0); ramp.rotateX(Math.atan2(drop, len)); ramp.receiveShadow = true; root.add(ramp);
+      const deck = new THREE.Group(); deck.position.set(d.x + ux * 4 + uz * 1, y0 + 0.15, d.z + uz * 4 - ux * 1); deck.rotation.y = yaw; root.add(deck);
+      part(BOX, MAT.wood, 0, 0, len / 2 - 2, 2, 0.15, len - 2, deck);
+      for (let k = 0; k < len - 2; k += 4) for (const s of [-1, 1]) part(CYL, MAT.wood, s * 1, -0.8, k, 0.12, 2.2, 0.12, deck);
+      parkSign(d.x - ux * 25, d.z - uz * 25, signFace([['ESTIFFANULGA', 170], ['COUNTY PARK', 130], ['Boat Ramp', 80]], '#1e4d2b', 1024, 560), 3.4, 1.9);
+      places.push({ name: 'Estiffanulga County Park', x: d.x, z: d.z, r: 70 });
     }
   }
 

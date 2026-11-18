@@ -730,6 +730,20 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       addRoadSeg(q[i][0], q[i][1], q[i + 1][0], q[i + 1][1], name || '', w, cls === 'track' ? { cls, dirt: 1 } : { cls });
     }
   }
+  // Extra crossings of the Apalachicola, made up for the game (the real river has only the Trammell
+  // Bridge here), so the far bank is in reach: a road from a real road on one bank to one on the other,
+  // and a bridge over the river and its swamp (built below like any other). Real-world map only.
+  if (realHighways.length && size === 30000) {
+    for (const xb of [
+      { name: 'Parrish Lake Bridge Road', ends: [[-8990, -7225], [-6084, -7261]] },
+      { name: 'Estiffanulga Bridge Road', ends: [[-13762, 10591], [-8449, 13567]] },
+    ]) {
+      const [[x1, z1], [x2, z2]] = xb.ends, n = Math.ceil(Math.hypot(x2 - x1, z2 - z1) / 200), pts = [];
+      for (let i = 0; i <= n; i++) pts.push([x1 + (x2 - x1) * i / n, z1 + (z2 - z1) * i / n]);
+      for (let i = 0; i < n; i++) addRoadSeg(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], xb.name, 9, { cls: 'secondary', madeUp: 1 });
+      realHighways.push({ name: xb.name, pts });
+    }
+  }
 
   // ---- bridges: each highway line that crosses a river carries its own deck from bank to bank, a level
   // above the ground. With the real roads the SR 20 crossing is the Trammell Bridge: two spans (the 1938
@@ -785,7 +799,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       y[0] = Math.max(g[a], y[1] - 0.45); y[y.length - 1] = Math.max(g[b], y[y.length - 2] - 0.45);
       const deckPts = y.map((h, k) => [sample[a + k][0], sample[a + k][1], +h.toFixed(2)]);
       decks.push({
-        name: big && line.name === 'SR 20' ? 'Trammell Bridge' : `${line.name} bridge`, span: style === 'truss' ? '1938 span (westbound)' : big ? '1998 span (eastbound)' : '',
+        name: big && line.name === 'SR 20' ? 'Trammell Bridge' : / Bridge Road$/.test(line.name) ? line.name.replace(/ Road$/, '') : `${line.name} bridge`, span: style === 'truss' ? '1938 span (westbound)' : big ? '1998 span (eastbound)' : '',
         road: line.name, river: river.name, style, crest, x: cx, z: cz, sC: iC - a, pts: deckPts, path: deckPts.map((q) => [q[0], q[1]]),
         len: Math.max(...deckPts.map((q) => Math.hypot(q[0] - cx, q[1] - cz))) + 10,
       });
@@ -1371,7 +1385,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   }
   // Bristol's Veterans Memorial Park is open lawn (its pavilion, flag and railroad loop: client/places.js);
   // the land cover has it as woods, so keep the trees off it.
-  if (realStructs) { const vp = project(30.4214, -84.9789, size); reserve({ minX: vp.x - 48, minZ: vp.z - 48, maxX: vp.x + 62, maxZ: vp.z + 50 }); }
+  if (realStructs) { const vp = project(30.4214, -84.9789, size); reserve({ minX: vp.x - 120, minZ: vp.z - 48, maxX: vp.x + 62, maxZ: vp.z + 50 }); }
   grid.setLoader(NATURE_TILE, (tx, tz) => { for (const b of natureTile(tx, tz)) grid.insert(b); });
 
   // Labels for the map screen (only what's on this map).
@@ -1390,7 +1404,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...geo.lakes.map((l) => ({ text: l.name, x: (l.caps[0][0][0] + l.caps[0][1][0]) / 2, z: (l.caps[0][0][1] + l.caps[0][1][1]) / 2, kind: 'water' })).filter(onMap),
     ...landmarks.map((l) => ({ text: l.name, x: l.x, z: l.z, kind: 'landmark' })),
     ...lookouts.map((t) => ({ text: t.name, x: t.x, z: t.z, kind: 'landmark' })),
-    ...[...new Map(decks.filter((d) => d.name === 'Trammell Bridge').map((d) => [d.name, d])).values()].map((d) => ({ text: d.name, x: d.x, z: d.z + 120, kind: 'place', place: 'bridge' })),
+    ...[...new Map(decks.filter((d) => /^(Trammell|Parrish Lake|Estiffanulga) Bridge$/.test(d.name)).map((d) => [d.name, d])).values()].map((d) => ({ text: d.name, x: d.x, z: d.z + 120, kind: 'place', place: 'bridge' })),
     ...(infra?.places || []).filter(([lat, lon, kind]) => kind !== 'landing').map(([lat, lon, kind, text]) => ({ ...project(lat, lon, size), text, kind: 'place', place: kind })).filter(onMap),
     ...airstrips.map((a) => ({ text: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, kind: 'place', place: 'airstrip' })),
     ...shops.map((sh) => ({ text: sh.name, x: sh.x, z: sh.z, kind: 'place', place: sh.kind })),
