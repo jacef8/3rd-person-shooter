@@ -15,23 +15,6 @@ import * as THREE from 'three';
 // ---------------------------------------------------------------- textures, drawn once
 function rng(seed) { let s = seed >>> 0 || 1; return () => { s = Math.imul(s ^ (s >>> 15), 2246822519) + 0x9e3779b9 >>> 0; s ^= s >>> 13; return (s >>> 0) / 4294967296; }; }
 
-/** Bark: grey (tinted per tree by vertex colour), with furrows running up it and plates between. */
-function barkTexture() {
-  const c = document.createElement('canvas'); c.width = 128; c.height = 256;
-  const x = c.getContext('2d'), r = rng(7);
-  x.fillStyle = '#8a8a8a'; x.fillRect(0, 0, 128, 256);
-  for (let i = 0; i < 900; i++) { const v = 100 + r() * 70 | 0; x.fillStyle = `rgb(${v},${v},${v})`; x.fillRect(r() * 128, r() * 256, 2 + r() * 10, 2 + r() * 14); }
-  x.strokeStyle = 'rgba(25,25,25,0.85)';
-  for (let i = 0; i < 16; i++) {   // furrows, wrapping round
-    let px = r() * 128; x.lineWidth = 1.5 + r() * 3; x.beginPath(); x.moveTo(px, 0);
-    for (let y = 0; y <= 256; y += 16) { px += (r() - 0.5) * 10; x.lineTo(px, y); }
-    x.stroke();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-  return t;
-}
-
 /**
  * Foliage, three cells side by side: broad leaves (left), pine needle tufts (middle), Spanish moss
  * (right). Each is a clump with ragged gaps, so the sky shows through.
@@ -137,7 +120,8 @@ function clump(b, r, at, size, cell, centre, tint, planes = 3, hang = false) {
   }
 }
 
-const BARK = { pine: [0.62, 0.42, 0.32], oak: [0.42, 0.38, 0.34], gum: [0.5, 0.46, 0.42] };
+// Bark colour comes from the photos now (pine bark, oak bark): this only shades each kind a little.
+const BARK = { pine: [1, 0.97, 0.94], oak: [0.95, 0.95, 0.95], gum: [0.85, 0.87, 0.9] };
 const GREEN = { pine: [0.86, 0.9, 0.7], oak: [0.9, 0.95, 0.8], live: [0.8, 0.88, 0.7] };
 
 /** A point partway up a polyline of [x, y, z, r]. */
@@ -265,8 +249,16 @@ const VARIANTS = { longleaf: 2, slash: 2, liveOak: 1, roundOak: 1 };   // pines 
  * leaves, and the two materials (bark, and alpha-cut foliage) with their shadow-casting versions.
  */
 export function makeTreeKit() {
-  const bark = barkTexture(), fol = foliageTexture();
-  const woodMat = new THREE.MeshStandardMaterial({ map: bark, vertexColors: true, roughness: 0.95, metalness: 0 });
+  const fol = foliageTexture();
+  // Bark: photo scans (Poly Haven, CC0): plated red-brown pine bark, furrowed grey-brown oak bark.
+  const barkPhoto = (name) => {
+    const ld = new THREE.TextureLoader();
+    const t = ld.load(`/textures/pbr/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+    const n = ld.load(`/textures/pbr/${name}_n.jpg`); n.wrapS = n.wrapT = THREE.RepeatWrapping;
+    return new THREE.MeshStandardMaterial({ map: t, normalMap: n, vertexColors: true, roughness: 0.95, metalness: 0 });
+  };
+  const pineBarkMat = barkPhoto('pinebark'), oakBarkMat = barkPhoto('oakbark');
+  const woodMat = pineBarkMat;
   const leafMat = new THREE.MeshStandardMaterial({ map: fol, vertexColors: true, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.9, metalness: 0, alphaToCoverage: true });
   // A breath of wind in the leaves: the outer ends of the crown move a little.
   const windT = { value: 0 };
@@ -292,6 +284,8 @@ export function makeTreeKit() {
   }
   return {
     kinds, woodMat, leafMat, leafDepth,
+    /** The bark for a build: pine bark on the pines, oak bark on the broadleaves. */
+    barkFor: (v) => (v.name === 'longleaf' || v.name === 'slash' ? pineBarkMat : oakBarkMat),
     tick(t) { windT.value = t; },
     /** Triangles in each build, for a check. */
     tris() { const o = {}; for (const [k, list] of Object.entries(kinds)) o[k] = list.map((v) => ({ name: v.name, full: (v.full.wood.index.count + v.full.leaves.index.count) / 3, lite: (v.lite.wood.index.count + v.lite.leaves.index.count) / 3 })); return o; },

@@ -31,6 +31,8 @@ const HOME_COLORS = [[0.9, 0.88, 0.82], [0.82, 0.8, 0.72], [0.74, 0.79, 0.82], [
 const BARN_COLORS = [[0.55, 0.22, 0.18], [0.46, 0.4, 0.34], [0.62, 0.62, 0.6], [0.5, 0.2, 0.16], [0.38, 0.44, 0.38]];
 const WAREHOUSE_COLORS = [[0.5, 0.47, 0.42], [0.6, 0.6, 0.58], [0.45, 0.5, 0.54], [0.66, 0.6, 0.48]];
 const BRICK_COLORS = [[0.64, 0.31, 0.24], [0.56, 0.27, 0.21], [0.72, 0.43, 0.32], [0.8, 0.68, 0.54], [0.5, 0.33, 0.27], [0.62, 0.38, 0.3]];
+const STUCCO_COLORS = [[0.86, 0.84, 0.78], [0.9, 0.86, 0.74], [0.82, 0.76, 0.66], [0.78, 0.82, 0.8], [0.88, 0.8, 0.7], [0.92, 0.9, 0.86]];   // Florida stucco: whites, creams, tans, a pale green
+const BLOCK_COLORS = [[0.84, 0.83, 0.8], [0.78, 0.76, 0.7], [0.86, 0.82, 0.7], [0.7, 0.72, 0.72]];   // painted concrete block
 const CIVIC_COLORS = [[0.62, 0.36, 0.28], [0.7, 0.44, 0.33], [0.8, 0.76, 0.68], [0.56, 0.33, 0.27]];
 const ROOF_COLORS = [[0.3, 0.28, 0.27], [0.42, 0.24, 0.18], [0.36, 0.37, 0.39], [0.5, 0.5, 0.48], [0.26, 0.3, 0.34]];
 const METAL_ROOFS = [[0.62, 0.63, 0.64], [0.55, 0.57, 0.58], [0.3, 0.36, 0.44], [0.45, 0.22, 0.18]];   // galvanised, faded blue, barn red
@@ -294,7 +296,6 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   }
 
   const texturedMat = new THREE.MeshStandardMaterial({ map: windowTexture(), vertexColors: true, roughness: 0.9 });
-  const sidingMat = new THREE.MeshStandardMaterial({ map: sidingTexture(), vertexColors: true, roughness: 0.95 });
   // Walls in photo-scanned materials (Poly Haven, CC0): real brick, corrugated metal, weathered planks,
   // each with its normal map. The building's own colour tints them (a red barn, a white shed), half way.
   const wallTex = (name, rep) => { const t = new THREE.TextureLoader().load(`/textures/pbr/${name}.jpg`); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = mobile ? 2 : 4; return t; };
@@ -311,18 +312,40 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   const brickMat = photoWall('brick', 2.4, 0.25);
   const metalMat = photoWall('metal', 2, 0.65, { roughness: 0.55, metalness: 0.3 });
   const plankMat = photoWall('planks', 2, 0.35, { color: new THREE.Color(1.8, 1.7, 1.6) });   // the plank photo is dark weathered wood: lift it
+  // Painted walls (Poly Haven photo scans, CC0): the photo gives the surface (the laps of the siding,
+  // the trowel marks in stucco, the courses of block), the building its colour. `avg` is the photo's
+  // own mean brightness (linear), so a white house stays white and a green one green.
+  const paintWall = (name, rep, avg, extra = {}) => {
+    const m = new THREE.MeshStandardMaterial({ map: wallTex(name, rep), normalMap: wallNor(name, rep), vertexColors: true, roughness: 0.9, ...extra });
+    m.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#if defined( USE_COLOR )
+  { float l = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) / ${avg.toFixed(4)}; diffuseColor.rgb = vColor.rgb * 0.9 * clamp(mix(1.0, l, 0.7), 0.4, 1.3); }   // (capped: white walls in full sun mustn't blow out)
+#endif`);
+    };
+    return m;
+  };
+  const sidingMat = paintWall('siding', 2.2, 0.0538);
+  const stuccoMat = paintWall('stucco', 1.5, 0.4194, { roughness: 0.95 });
+  const blockMat = paintWall('block', 2.0, 0.0517, { roughness: 0.95 });
   const plainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
   // Roofs: corrugated metal (as on most of rural Florida), laid in world space down the slopes, in the
   // roof's own colour.
-  const roofTex = wallTex('metal', 1), roofNor = wallNor('metal', 1);
-  const roofMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.25, side: THREE.DoubleSide });
-  roofMat.onBeforeCompile = (sh) => {
-    sh.uniforms.uRoof = { value: roofTex };
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRoofP;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvRoofP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uRoof;\nvarying vec3 vRoofP;')
-      .replace('#include <color_fragment>', `#include <color_fragment>
-  { vec3 t = texture2D(uRoof, vRoofP.xz / 1.8).rgb; float tl = dot(t, vec3(0.3, 0.59, 0.11)) / 0.18; diffuseColor.rgb *= mix(1.0, tl, 0.85); }`);
+  // Roofs, laid in world space down the slopes in the roof's own colour: asphalt shingles on houses and
+  // shops, corrugated metal on barns, sheds and warehouses (as on most of rural Florida's).
+  const roofOf = (name, scale, avg, extra) => {
+    const tex = wallTex(name, 1);
+    const m = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, ...extra });
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.uRoof = { value: tex };
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vRoofP;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvRoofP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uRoof;\nvarying vec3 vRoofP;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+  { vec3 t = texture2D(uRoof, vRoofP.xz / ${scale.toFixed(2)}).rgb; float tl = dot(t, vec3(0.3, 0.59, 0.11)) / ${avg.toFixed(4)}; diffuseColor.rgb *= mix(1.0, tl, 0.85); }`);
+    };
+    return m;
   };
+  const roofMat = roofOf('metal', 1.8, 0.18, { roughness: 0.6, metalness: 0.25 });
+  const shingleMat = roofOf('shingles', 3.2, 0.1062, { roughness: 0.92, metalness: 0 });
   const trunkGeo = new THREE.CylinderGeometry(0.22, 0.34, 1, 9);
   trunkGeo.translate(0, 0.5, 0);
   // Crowns: a broadleaf is a few overlapping rounded clumps; a pine is three stacked tiers. Unit-sized,
@@ -859,8 +882,8 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
     const id = b.bldg ?? b.id;
     switch (b.type) {
       // Real buildings dress by type: brick storefronts and halls, lap-sided houses, metal barns and warehouses.
-      case 'building': { if (b.real) return [pick(BRICK_COLORS, id), 'brick']; const c = COLORS.building, v = hash(id) / 4294967296; return [[c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 'office']; }
-      case 'civic': return [pick(CIVIC_COLORS, id), b.real ? 'brick' : 'office'];
+      case 'building': { if (b.real) { const k = hash(id) % 6; return k < 3 ? [pick(BRICK_COLORS, id), 'brick'] : k < 5 ? [pick(STUCCO_COLORS, id), 'stucco'] : [pick(BLOCK_COLORS, id), 'block']; } const c = COLORS.building, v = hash(id) / 4294967296; return [[c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 'office']; }
+      case 'civic': return [pick(CIVIC_COLORS, id), b.real ? (hash(id) % 3 ? 'brick' : 'stucco') : 'office'];
       case 'home': return [pick(HOME_COLORS, id), 'siding'];
       case 'barn': return [b.real ? pick(BARN_COLORS, id) : COLORS.barn, b.real ? (hash(id) % 5 < 2 ? 'planks' : 'metal') : 'planks'];   // old wooden barns and metal ones
       case 'warehouse': return [b.real ? pick(WAREHOUSE_COLORS, id) : COLORS.warehouse, b.real ? 'metal' : null];
@@ -995,6 +1018,7 @@ vBlade = position.y;
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
     const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), planks = newBuf(true), plain = newBuf(false), roof = newBuf(false);
+    const stucco = newBuf(true), block = newBuf(true), shingles = newBuf(false);
     const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
@@ -1006,10 +1030,10 @@ vBlade = position.y;
       if (b.type === 'car' || b.type === 'vehiclebody') { rigs.push(b); continue; }   // drawn as real vehicles, below
       if (b.type === 'ladder') { pushLadder(plain, b); continue; }
       const [c, tex] = paint(b);
-      pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'metal' ? metal : tex === 'planks' ? planks : plain, b, c, tex ? 4 : 0);
+      pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'stucco' ? stucco : tex === 'block' ? block : tex === 'metal' ? metal : tex === 'planks' ? planks : plain, b, c, tex ? 4 : 0);
     }
     for (const r of buildingsIn.get(key(cx, cz)) || []) {
-      if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
+      if (r.roof) pushRoof(r.type === 'barn' ? roof : shingles, r, pick(r.type === 'barn' ? METAL_ROOFS : ROOF_COLORS, r.bldg), wallColor(r));
       else if (r.type === 'warehouse') pushRoof(roof, r, pick(METAL_ROOFS, r.bldg), wallColor(r), true);
       else if (r.type === 'building' || r.type === 'civic') pushFlatRoof(plain, r, wallColor(r));
       if ((r.type === 'building' || r.type === 'civic') && r.top - (r.floor ?? 0) > 2.8) {
@@ -1037,7 +1061,7 @@ vBlade = position.y;
     const roads = map.roadGrid && buildRoads(x0, z0);
     if (roads) group.add(roads);
     if (ground.wet) { const w = new THREE.Mesh(waterGeo, waterMat); w.position.set(x0 + CHUNK / 2, 0, z0 + CHUNK / 2); group.add(w); }
-    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [metal, metalMat], [planks, plankMat], [plain, plainMat], [roof, roofMat]]) {
+    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [stucco, stuccoMat], [block, blockMat], [metal, metalMat], [planks, plankMat], [plain, plainMat], [roof, roofMat], [shingles, shingleMat]]) {
       if (!buf.idx.length) continue;
       const m = new THREE.Mesh(toGeometry(buf), mat);
       m.castShadow = true;
@@ -1061,8 +1085,8 @@ vBlade = position.y;
           group.add(m);
           return m;
         };
-        const full = [mk(v.full.wood, kit.woodMat), mk(v.full.leaves, kit.leafMat, kit.leafDepth)];
-        const lite = [mk(v.lite.wood, kit.woodMat), mk(v.lite.leaves, kit.leafMat, kit.leafDepth)];
+        const full = [mk(v.full.wood, kit.barkFor(v)), mk(v.full.leaves, kit.leafMat, kit.leafDepth)];
+        const lite = [mk(v.lite.wood, kit.barkFor(v)), mk(v.lite.leaves, kit.leafMat, kit.leafDepth)];
         for (const m of [...full, ...lite]) m.userData.noAO = true;   // thin branches in the corner shading only get dark outlines
         treeLod.push({ full, lite });
         ts.forEach(([t, sx], i) => {

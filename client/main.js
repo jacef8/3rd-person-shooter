@@ -5370,7 +5370,11 @@ function frame(now) {
     updateSkyLight(now);
     // The sky light now does much of what the flat fill light did: turn that down, sky light up
     // with the day (none at night: the sky model has no moon).
-    scene.environmentIntensity = 0.2 * (1 - state.env.state.night) * (1 - Math.min(0.6, state.env.state.fog * 40));   // (the sky model is bright: it holds the sun too)
+    // Indoors (the camera inside a building, below its roof) the sky can't light the room: fade it.
+    const cx = camera.position.x, cz = camera.position.z;
+    const roofed = state.map.buildings.some((q) => cx > q.minX && cx < q.maxX && cz > q.minZ && cz < q.maxZ && camera.position.y < q.top && insideBuilding(q, cx, cz, 0.1));
+    state.skyIn = (state.skyIn ?? 1) + ((roofed ? 0.25 : 1) - (state.skyIn ?? 1)) * Math.min(1, dt * 4);
+    scene.environmentIntensity = 0.2 * state.skyIn * (1 - state.env.state.night) * (1 - Math.min(0.6, state.env.state.fog * 40));   // (the sky model is bright: it holds the sun too)
     hemi.intensity *= scene.environment ? 0.8 + 0.2 * state.env.state.night : 1;
     updateLanterns(now);
     if (now - (state.clockShown || 0) > 1000) { state.clockShown = now; $('whereClock').textContent = clockLabel(state.env.state.clock); }

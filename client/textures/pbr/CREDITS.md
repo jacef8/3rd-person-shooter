@@ -14,3 +14,9 @@ attribution needed, given anyway. Colour maps at 1024 px; `_n` are the OpenGL no
 | brick | red_brick_03 |
 | planks | weathered_planks |
 | metal | corrugated_iron |
+| siding | weathered_plank_siding (painted in each house's colour) |
+| stucco | white_stucco_02 |
+| block | concrete_block_wall (painted concrete block) |
+| shingles | grey_roof_01 (asphalt shingle roofs) |
+| pinebark | pine_bark (the pines) |
+| oakbark | bark_brown_02 (the oaks) |
