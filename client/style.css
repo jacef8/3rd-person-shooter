@@ -436,7 +436,7 @@ body.touchui #resources { right: auto; left: 50%; transform: translateX(-50%); b
 /* Text over the 3D world sits on solid chips (no outlines or glow to make it readable). */
 #prompt { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; font-size: 15px; }
 #prompt:empty { display: none; }
-#feed div { background: var(--surface); border-radius: 8px; padding: 3px 8px; font-size: 13px; width: fit-content; }
+#feed div { background: var(--surface); border-radius: 8px; padding: 3px 8px; font-size: 13px; width: fit-content; max-width: min(440px, 46vw); }
 #tracker div { background: var(--surface); border-radius: 8px; padding: 3px 8px; width: fit-content; }
 #housestatus { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px 8px; color: var(--ink-2); }
 #housestatus:empty { display: none; }

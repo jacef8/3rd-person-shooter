@@ -1339,6 +1339,17 @@ function landHotDrop(tok, h, now) {
   });
   for (const o of players.values()) if (!riders.includes(o) && !o.dead && Math.hypot(o.x - z.x, o.z - z.z) < z.radius * 3) send(o.ws, { t: 'alert', x: Math.round(edge.x), z: Math.round(edge.z), text: 'Hot drop: parachutes coming in' });
 }
+/** What to do about an event, in a few words (the news line in everyone's corner feed). */
+function eventHint(e) {
+  const r = EV[e.type]?.reward || {}, pay = [r.cash ? `$${r.cash}` : '', r.parts ? `${r.parts} parts` : '', r.meat ? `${r.meat} meat` : ''].filter(Boolean).join(', ');
+  const good = HOMESTEAD.goods[e.good]?.name || e.good;
+  if (e.type === 'swing') return e.mult > 1 ? `${e.town}'s trading post pays ${e.mult}× for ${good} for 45 min: haul it there and sell` : `${e.town} pays under half for ${good} for 45 min: sell it somewhere else`;
+  if (e.type === 'riot') return `kill the Rogues in the square and take their cache (${pay})`;
+  if (e.type === 'hoghunt') return `kill the monster boar in the swamp for ${pay} (it charges)`;
+  if (e.type === 'convoy') return `stop the armed truck on SR 20 and take its cargo (${pay})`;
+  if (e.type === 'fair') return 'no shooting there: hunt deer and hogs, hand in the meat; the top 3 hunters win cash';
+  return "it's on your map";
+}
 function startEvent(type) {
   const def = EV[type];
   if (!def) return null;
@@ -1384,7 +1395,7 @@ function startEvent(type) {
       desc: boom ? `${postTown(c.id)}'s trading post is paying ${def.boom}× for ${HOMESTEAD.goods[good].name}. Haul it in while it lasts.` : `${postTown(c.id)} is drowning in ${HOMESTEAD.goods[good].name}: it pays less than half. Sell it elsewhere.` });
   }
   worldEvents.set(e.id, e);
-  feed(`📣 ${e.name}`);
+  feed(`📣 ${e.name}: ${eventHint(e)}`);
   pushWorldEvents({ announce: e.id });
   return e;
 }
