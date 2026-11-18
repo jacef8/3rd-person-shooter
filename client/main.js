@@ -774,8 +774,10 @@ function rideSounds(dt) {
     const g = v.mesh.position, def = BOATS[v.data.type];
     const mine = !!(me?.boat && me.boat.id === id), local = state.boat && state.boat.id === id ? state.boat : null;
     let speed;
-    if (local) speed = Math.abs(local.speed || 0);
-    else { speed = v.sndPrev && dt > 0 ? Math.hypot(g.x - v.sndPrev.x, g.z - v.sndPrev.z) / dt : 0; v.sndSp = (v.sndSp || 0) + (speed - (v.sndSp || 0)) * Math.min(1, dt * 6); speed = v.sndSp; }
+    const was = v.sndSp || 0;
+    if (local) { speed = Math.abs(local.speed || 0); v.sndSp = speed; }
+    else { speed = v.sndPrev && dt > 0 ? Math.hypot(g.x - v.sndPrev.x, g.z - v.sndPrev.z) / dt : 0; v.sndSp = was + (speed - was) * Math.min(1, dt * 6); speed = v.sndSp; }
+    v.sndAcc = (v.sndAcc || 0) + ((dt > 0 ? (v.sndSp - was) / dt : 0) - (v.sndAcc || 0)) * Math.min(1, dt * 4);   // speeding up?
     v.sndPrev = { x: g.x, z: g.z };
     if (def.land && ((v.sndN = (v.sndN || 0) + 1) % 15 === 1)) v.sndRoad = state.map.roadsNear(g.x, g.z, 8).some((r) => !r.dirt && distToSeg(g.x, g.z, r) < (r.width || 12) / 2);
     sfx.ride(id, v.data.type, { x: g.x, y: g.y + 0.8, z: g.z, speed, top: def.speed, on: !!(local || v.data.seats?.[0]), own: mine, throttle: local ? state.boatThrottle || 0 : null, road: def.land ? !!v.sndRoad : true, dt });
@@ -1246,12 +1248,15 @@ function gunPose(g, c, now, adt) {
   joint.rotation.set(-0.12 * u.kick - 0.45 * env + (u.gunTilt || 0), 0.35 * env, 1.05 * env);
   joint.position.set(u.gunHome.x + 0.16 * env, u.gunHome.y + 0.04 * env, u.gunHome.z - 0.05 * u.kick - 0.08 * env);
 }
+const SIDE_ON = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
 function updateCharacterMesh(g, c, dt) {
+  if (c.lad && c.ly != null) c = { ...c, yaw: c.ly };   // on a ladder: facing it
   // On a ride: sit right on your seat, facing the way it points (no lag behind a fast car).
   const rv = c.boat && boatVis.get(c.boat), onRide = rv && BOATS[rv.data.type].land;
   if (onRide && c.seat != null) {
     const q = seatPos({ type: rv.data.type, x: rv.mesh.position.x, z: rv.mesh.position.z, yaw: rv.mesh.rotation.y }, c.seat);
-    c = { ...c, x: q.x, z: q.z, yaw: c.aiming || c.aim ? c.yaw : rv.mesh.rotation.y, smooth: 1 };
+    const skate = BOATS[rv.data.type].stand && !(c.aiming || c.aim);   // a skateboard: ridden side-on
+    c = { ...c, x: q.x, z: q.z, yaw: c.aiming || c.aim ? c.yaw : rv.mesh.rotation.y + (skate ? Math.PI / 2 : 0), smooth: 1, ...(skate ? { skate: 1 } : {}) };
   }
   // Interpolate toward the latest snapshot (already smoothed for other players: follow it exactly).
   const k = c.smooth ? 1 : Math.min(1, dt * 12);
@@ -1263,6 +1268,7 @@ function updateCharacterMesh(g, c, dt) {
   let dy = c.yaw - g.rotation.y;
   dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   g.rotation.y += dy * k;
+  if (c.skate) g.quaternion.copy(rv.mesh.quaternion).multiply(SIDE_ON);   // stuck to the board, side-on, tipping with it
   // Pose: walk cycle from how fast the character is really moving, crouch, sitting in a boat.
   const u = g.userData, now = performance.now(), adt = Math.min(0.1, (now - u.lastT) / 1000) || 0.016;
   u.lastT = now;
@@ -1284,7 +1290,7 @@ function updateCharacterMesh(g, c, dt) {
     const fwd = u.vf, side = u.vs;
     const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming) || now - (u.firedAt || 0) < 900;   // shooting brings the gun up to the shoulder, as aiming does
     // Busy with something that takes a while (a locker, a flag, a flare…): the gun goes away for the pose.
-    const act = c.act && !c.dead && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] ? c.act : null;
+    const act = c.skate && !c.dead ? 'skate' : c.lad && !c.dead && !c.boat ? 'climb' : c.act && !c.dead && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] ? c.act : null;
     const kneel = act && ['pry', 'revive', 'cook'].includes(ACT_POSE[act]);
     const armed = !!gunObj && !act && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
     u.gun.visible = armed;
@@ -1292,7 +1298,9 @@ function updateCharacterMesh(g, c, dt) {
     const pitch = c.pitch || 0;
     const fine = animatePerson(g, u.rig, { speed: still || act ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched || !!kneel, seated, armed, aiming: aimNow && !act, pitch: act ? 0 : pitch, detail }, adt);
     if (fine && u.hitAt && now - u.hitAt < 380) flinch(g, u.rig, Math.sin(Math.min(1, (now - u.hitAt) / 380) * Math.PI), u.hitSide);
-    const acting = fine && updateAction(g, act, c.ap || 0, adt);
+    // (On a board, `ap` says whether they're kicking: rolling slowly, or speeding up.)
+    const skateP = act === 'skate' && rv ? ((rv.sndSp ?? 0) < 8 && (rv.sndAcc ?? 0) > 0.3 ? 1 : 0) : 0;
+    const acting = fine && updateAction(g, act, act === 'skate' ? skateP : c.ap || 0, adt);
     if (!fine && u.props) updateAction(g, null, 0, adt);
     // The gun rides on the chest, turned with the aim; up to the eye when aiming down the sights.
     u.aimK = (u.aimK || 0) + ((aimNow ? 1 : 0) - (u.aimK || 0)) * Math.min(1, adt * 12);
@@ -1578,7 +1586,7 @@ function pumpToasts() {
 
 function feedLine(text) {
   // On a phone the corner feed is only for fights; everything else already comes as a message or on the map.
-  if (document.body.classList.contains('touchui') && !/➜|downed|revived|took down|data-hacked/.test(text)) return;
+  if (document.body.classList.contains('touchui') && !/➜|downed|revived|took down|data-hacked|📣|📦/.test(text)) return;
   const el = document.createElement('div');
   el.textContent = text;
   $('feed').prepend(el);
@@ -2209,7 +2217,7 @@ function handle(m) {
       state.extracts = m.extracts || [];
       syncDrops();
       syncExtracts(m.pickup);
-      if (m.announce) toast('📦 Supply drop inbound: it\'s on your map');
+      if (m.announce) feedLine('📦 Supply drop inbound: it\'s on your map');
       break;
     case 'contracts':
       state.contracts = m.list;
@@ -2225,7 +2233,7 @@ function handle(m) {
     case 'worldEvents': {
       state.worldEvents = m.list;
       const e = m.announce && m.list.find((x) => x.id === m.announce);
-      if (e) toast(`📣 ${e.name} — ${e.desc} Marked on your map (${glyph('M')}).`);
+      // (The news line itself comes in the feed, top left, out of the way.)
       if (state.contactOpen) renderContact();
       break;
     }
@@ -2273,7 +2281,7 @@ function stanceNote() {
   const pad = state.inputMode === 'pad';
   const hint = pad ? 'Ⓑ crouch · hold Ⓑ prone · L3 sprint' : MOBILE && !pad ? 'tap CROUCH · hold it to go prone' : 'C crouch · hold C prone · Shift sprint · Ctrl walk';
   el.innerHTML = `<b>${STANCE_TEXT[st]}</b><span>${hint}</span>`;
-  el.hidden = !!state.me.dead || !!state.me.boat || !!state.air;   // the line above the crosshair covers a jump
+  el.hidden = !tset.hints || !!state.me.dead || !!state.me.boat || !!state.air;   // reminders are off by default; the line covers a jump
   el.classList.toggle('standing', st === 'stand');
   // Phones are played sideways: say so if it's held upright in the game.
   const upright = document.body.classList.contains('touchui') && innerHeight > innerWidth * 1.1 && !state.me.dead;
@@ -2377,7 +2385,7 @@ function itemCard(item, { slot, buttons = [] } = {}) {
   return el;
 }
 
-const SLOT_LABEL = { primary: 'Main gun 1', primary2: 'Main gun 2', secondary: 'Sidearm', armor: 'Armor' };
+const SLOT_LABEL = { primary: 'Primary', primary2: 'Secondary', secondary: 'Sidearm', armor: 'Armor' };
 /** A short name for the weapon strip ("Marksman Rifle" is just "Marksman"). */
 const shortGun = (it) => String(it.name || it.archetype || '').replace(/ Rifle$/, '');
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -2434,7 +2442,7 @@ function invRow(key, o) {
   t.className = 'irow' + (o.big ? ' big' : '') + (o.mini ? ' mini' : '') + (invUi.sel === key ? ' sel' : '') + (o.hot ? ' hot' : '') + (acts.a || acts.x || acts.y || o.more?.length ? '' : ' idle') + (o.inHand ? ' inhand' : '');
   t.dataset.pad = key;
   t.style.setProperty('--bar', o.color || '#5a5f68');
-  t.innerHTML = `<span class="ic">${tileIcon(key, o)}</span><span class="tx"><b>${o.title}</b>${o.tag ? `<small>${o.tag}</small>` : ''}${o.chips || ''}</span>${acts.a && !o.mini ? `<span class="qa"><kbd class="padonly">Ⓐ</kbd> ${acts.a[0]}</span>` : ''}`;
+  t.innerHTML = `<span class="ic">${tileIcon(key, o)}</span><span class="tx"><b>${o.title}</b>${o.tag ? `<small>${o.tag}</small>` : ''}${o.chips || ''}${acts.a ? `<span class="qa"><kbd class="padonly">Ⓐ</kbd> ${acts.a[0]}</span>` : ''}</span>`;
   t.onfocus = () => invSelect(key);
   t.onclick = () => { if (state.inputMode === 'pad') invAct('a'); else invSelect(key); };
   t.ondblclick = () => invAct('a');
@@ -2509,12 +2517,13 @@ function buildInvColumns() {
   you.append(head('Equipped'));
   for (const slot of ['primary', 'primary2', 'secondary', 'armor']) {
     const it = inv[slot], label = SLOT_LABEL[slot];
-    if (!it) { you.append(...invRow(`eq-${slot}`, { title: 'Empty', tag: label, big: slot !== 'armor', detail: `Nothing in ${label.toLowerCase()}. Equip one from your backpack.`, why: 'Highlight something in your backpack and press its button to equip it.' })); continue; }
+    you.append(Object.assign(document.createElement('div'), { className: 'slothead', textContent: label }));
+    if (!it) { you.append(...invRow(`eq-${slot}`, { title: 'Empty', tag: '', big: slot !== 'armor', detail: `Nothing in ${label.toLowerCase()}. Equip one from your backpack.`, why: 'Highlight something in your backpack and press its button to equip it.' })); continue; }
     const unequip = ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })];
     const acts = it.kind === 'weapon'
       ? { a: me.active === slot ? partsAction(it) : ['Hold it', () => send({ t: 'weapon', slot })], x: unequip, y: me.active === slot ? null : partsAction(it) }
       : { x: unequip };
-    you.append(...invRow(`eq-${slot}`, { item: it, tag: `${label}${me.active === slot ? ' · in hand' : ''}`, inHand: me.active === slot, hot: !!it.hot, big: it.kind === 'weapon', title: it.name, chips: attachmentChips(it), detail: `${label} · ${statLine(it)}`, extra: attachmentLine(it), color: gunColor(it), acts }));
+    you.append(...invRow(`eq-${slot}`, { item: it, tag: me.active === slot ? '' : statLine(it).split(' · ').slice(0, 2).join(' · '), inHand: me.active === slot, hot: !!it.hot, big: it.kind === 'weapon', title: it.name, chips: attachmentChips(it), detail: `${label} · ${statLine(it)}`, extra: attachmentLine(it), color: gunColor(it), acts }));
   }
   if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', acts: { a: ['Open', openGunsmith] } }));
   // ---- your backpack, then your supplies
@@ -2526,7 +2535,18 @@ function buildInvColumns() {
   bar.innerHTML = `<i style="width:${Math.min(100, full * 100).toFixed(1)}%"></i>`;
   packEl.append(bar);
   if (!inv.pack.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
-  inv.pack.forEach((it) => {
+  // Grouped by what it is: guns, armor, healing, throwables and explosives, flares, tools, the rest.
+  const PACK_GROUPS = [['Guns', (it) => it.kind === 'weapon'], ['Armor', (it) => it.kind === 'armor'], ['Health', (it) => it.kind === 'medkit'],
+    ['Throwables & explosives', (it) => it.kind === 'frag' || it.kind === 'charge' || it.kind === 'sensor'], ['Flares', (it) => it.kind === 'flare' || it.kind === 'hotflare'],
+    ['Tools', (it) => it.kind === 'tool' || /hammer|hatchet|axe|pickaxe|rod|shovel/i.test(it.name || '')], ['Other', () => true]];
+  const grouped = new Map(PACK_GROUPS.map(([g]) => [g, []]));
+  for (const it of inv.pack) grouped.get(PACK_GROUPS.find(([, f]) => f(it))[0]).push(it);
+  for (const [g, items] of grouped) {
+    if (!items.length) continue;
+    packEl.append(Object.assign(document.createElement('div'), { className: 'packgroup', textContent: `${g} · ${items.length}` }));
+    items.forEach((it) => packItemRow(it));
+  }
+  function packItemRow(it) {
     const acts = {}, more = [];
     // Ⓧ puts it away at a stash, or drops it anywhere else (never on Ⓐ, so a quick press can't lose it).
     acts.x = put ? ['Put in stash', () => send({ t: 'container', action: 'put', itemId: it.id })] : it.kind !== 'package' ? drop(it) : null;
@@ -2535,7 +2555,7 @@ function buildInvColumns() {
       // Two main guns: Ⓐ into the empty slot (or swapped for the one in hand), Ⓨ into the other.
       const first = !inv.primary ? 'primary' : !inv.primary2 ? 'primary2' : me.active === 'primary2' ? 'primary2' : 'primary', other = first === 'primary' ? 'primary2' : 'primary';
       // Says which slot it goes in and, plainly, which gun of yours it puts back in the bag.
-      const lab = (slot) => (inv[slot] ? `Use as ${SLOT_LABEL[slot].toLowerCase()} · ${inv[slot].name} to bag` : `Use as ${SLOT_LABEL[slot].toLowerCase()}`);
+      const lab = (slot) => (inv[slot] ? `Equip as ${SLOT_LABEL[slot]} (your ${inv[slot].name} goes to the backpack)` : `Equip as ${SLOT_LABEL[slot]}`);
       acts.a = [lab(first), () => send({ t: 'inv', action: 'equip', itemId: it.id, slot: first })];
       acts.y = [lab(other), () => send({ t: 'inv', action: 'equip', itemId: it.id, slot: other })];
     } else if (it.kind === 'weapon' || it.kind === 'armor') acts.a = ['Equip', () => send({ t: 'inv', action: 'equip', itemId: it.id })];
@@ -2544,7 +2564,7 @@ function buildInvColumns() {
     if (it.kind === 'flare') acts.a = ['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }];
     if (it.kind === 'hotflare') acts.a = ['Fire it: hot drop', () => { send({ t: 'inv', action: 'hotdrop', itemId: it.id }); closeInventory(); }];
     packEl.append(...invRow(`pk-${it.id}`, { item: it, hot: !!it.hot, title: it.name, tag: it.kind === 'weapon' ? statLine(it) : '', chips: attachmentChips(it, false), detail: statLine(it), extra: attachmentLine(it), color: gunColor(it), acts, more }));
-  });
+  }
   const carried = RES_UI.filter((r) => me[r]);
   packEl.append(head('Supplies'));
   if (!carried.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No supplies.' }));
@@ -4317,7 +4337,8 @@ function updateGadgetBar() {
     ['T', 'Rally', GADGETS.rally.level, !leader ? 'notleader' : me.rallyReadyAt > now ? 'cooldown' : ''],
     ['B', 'Ping', 1, state.squad.id ? '' : 'notleader'],
   ];
-  $('gadgets').innerHTML = items.map(([k, name, lv, st]) => `<div class="gadget ${lvl < lv ? 'locked' : st}"><kbd>${glyph(k)}</kbd>${name}${lvl < lv ? `<small>LVL ${lv}</small>` : ''}</div>`).join('') +
+  // Without reminders, only what's running or recharging shows (with its timer).
+  $('gadgets').innerHTML = items.filter(([, , lv, st]) => tset.hints || (lvl >= lv && (st === 'on' || st === 'cooldown'))).map(([k, name, lv, st]) => `<div class="gadget ${lvl < lv ? 'locked' : st}"><kbd>${glyph(k)}</kbd>${name}${lvl < lv ? `<small>LVL ${lv}</small>` : ''}</div>`).join('') +
     (me.buffUntil > now ? '<div class="gadget on"><kbd>★</kbd>Rallied</div>' : '');
 }
 setInterval(updateGadgetBar, 1000);
@@ -4499,6 +4520,9 @@ function renderPadSettings() {
   const rowF = document.createElement('div'); rowF.className = 'item';
   rowF.innerHTML = '<div class="meta"><div class="nm">Frame rate on screen</div><div class="st">Shows how smoothly it runs (60 fps is smooth; under 40 feels laggy).</div></div>';
   { const b = btn(tset.showFps ? 'On' : 'Off', () => { tset.showFps = !tset.showFps; saveTset(); renderPadSettings(); }, tset.showFps ? '' : 'ghost'); b.dataset.pad = 'fps'; rowF.append(b); }
+  const rowH = document.createElement('div'); rowH.className = 'item';
+  rowH.innerHTML = '<div class="meta"><div class="nm">Button reminders on screen</div><div class="st">The crouch/sprint line and the gadget buttons along the bottom. Off: a gadget only shows while it\'s running or recharging.</div></div>';
+  { const b = btn(tset.hints ? 'On' : 'Off', () => { tset.hints = !tset.hints; saveTset(); stanceNote(); updateGadgetBar(); renderPadSettings(); }, tset.hints ? '' : 'ghost'); b.dataset.pad = 'hints'; rowH.append(b); }
   // Wardrobe: what you wear, seen by everyone (shared/looks.js). Changes on you as you pick.
   const [curO, curD] = (selfMesh.userData.lookKey || '').split(':');
   const nowO = curO, nowD = curD || 'none';
@@ -4522,7 +4546,7 @@ function renderPadSettings() {
   const rowM = document.createElement('div'); rowM.className = 'item';
   rowM.innerHTML = '<div class="meta"><div class="nm">Microphone</div><div class="st">Push to talk (hold N, or TALK), or an open mic that\'s always on (handy on a controller).</div></div>';
   for (const [m2, l] of [[false, 'Push to talk'], [true, 'Open mic']]) { const b = btn(l, () => { tset.voiceOpen = m2; saveTset(); voiceSettings(); renderPadSettings(); }, !!tset.voiceOpen === m2 ? '' : 'ghost'); b.dataset.pad = `vmic-${m2 ? 'open' : 'ptt'}`; rowM.append(b); }
-  box.append(rowW, rowC, row5, rowF, rowV, rowN, rowM, row, row2, row3, row4, rowA, pushRow());
+  box.append(rowW, rowC, row5, rowF, rowH, rowV, rowN, rowM, row, row2, row3, row4, rowA, pushRow());
   if (touchCapable) {
     const t1 = document.createElement('div'); t1.className = 'item';
     t1.innerHTML = '<div class="meta"><div class="nm">Phone controls: layout</div><div class="st">Move any button where your thumbs want it, make them bigger or smaller, more or less see-through.</div></div>';
@@ -5137,6 +5161,19 @@ function stunThrowFx(m, color = 0xe8f2ff) {
   scene.add(ball);
   const [fx, fy, fz] = m.from, ty = ground(m.x, m.z) + 0.3, ms = Math.max(300, m.at - Date.now());
   const t0 = performance.now();
+  if (m.path?.length > 1) {   // its real flight, bounces and all (the server worked it out)
+    const P = m.path, end = P[P.length - 1][3];
+    let i = 0;
+    const fly = () => {
+      const t = performance.now() - t0;
+      while (i < P.length - 2 && P[i + 1][3] <= t) i++;
+      const a = P[i], b = P[Math.min(i + 1, P.length - 1)], f = b[3] > a[3] ? Math.min(1, Math.max(0, (t - a[3]) / (b[3] - a[3]))) : 1;
+      ball.position.set(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f);
+      if (t < end) requestAnimationFrame(fly); else setTimeout(() => scene.remove(ball), m.kind === 'frag' ? Math.max(50, (m.boomAt || 0) - Date.now()) : Math.max(50, (m.at || 0) - Date.now()));
+    };
+    fly();
+    return;
+  }
   const step = () => {
     const f = Math.min(1, (performance.now() - t0) / ms);
     ball.position.set(fx + (m.x - fx) * f, fy + (ty - fy) * f + Math.sin(f * Math.PI) * 4, fz + (m.z - fz) * f);
@@ -5589,7 +5626,7 @@ function frame(now) {
   const myAct = state.hack ? { act: state.hack.kind, ap: Math.min(1, (nowP - state.hack.start) / state.hack.total) }
     : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) } : {};
   setHolstered(selfMesh, !!state.me && !state.me.boat && (state.sprint || now < (state.drawUntil || 0) - 150));   // gun on your back at a sprint
-  updateCharacterMesh(selfMesh, { ...myAct, hp: state.me?.hp, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { ...myAct, hp: state.me?.hp, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY(), ...(state.hop?.ladder ? { lad: 1, yaw: Math.atan2(state.hop.dir[0], state.hop.dir[1]) } : {}) }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   rideSounds(dt);
@@ -5737,7 +5774,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
+window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, openInventory, state, send, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere

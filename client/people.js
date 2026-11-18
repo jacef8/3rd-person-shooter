@@ -329,8 +329,21 @@ export function poseAction(holder, rig, pose, t, p) {
     ik2(R.up, R.lo, R.tip, at(-0.11, 0.1, -0.42), at(-0.12, 0.05, 1.5));     // right knee on the ground
     ik2(L.up, L.lo, L.tip, at(0.13, 0.08, 0.32), at(0.14, 1.2, 1.6));        // left knee up
   }
+  if (pose.squat) {   // knees bent: the hips come down a little
+    const hips = B.Hips;
+    hips.getWorldPosition(_a); _b.copy(_a); _b.y -= pose.squat;
+    hips.parent.worldToLocal(_b); hips.parent.worldToLocal(_a);
+    hips.position.add(_b.sub(_a));
+    hips.updateMatrixWorld(true);
+  }
+  if (pose.feet) {   // feet on their own spots (a ladder's rungs), knees out ahead
+    const [L, R] = rig.legs, rf = at(...pose.RF(t, p)), lf = at(...pose.LF(t, p));
+    ik2(R.up, R.lo, R.tip, rf, rf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
+    ik2(L.up, L.lo, L.tip, lf, lf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
+  }
   if (pose.lean) for (const [bone, share] of [[B.Spine, 0.35], [B.Spine1, 0.35], [B.Spine2, 0.3]]) { _q.setFromAxisAngle(right, -pose.lean * share); turnWorld(bone, _q); }
   if (pose.look) { _q.setFromAxisAngle(right, -pose.look); turnWorld(B.Neck, _q); }
+  if (pose.headYaw) { _q.setFromAxisAngle(V().set(0, 1, 0), pose.headYaw * 0.35); turnWorld(B.Spine2, _q); _q.setFromAxisAngle(V().set(0, 1, 0), pose.headYaw * 0.65); turnWorld(B.Neck, _q); }
   const [AR, AL] = rig.arms;
   const r = pose.R(t, p), l = pose.L(t, p);
   const rw = at(...r), lw = at(...l);

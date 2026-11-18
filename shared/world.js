@@ -278,8 +278,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const doorFloor = horiz ? floorAt(c, fixed0) : floorAt(fixed0, c);
       // Door centre and the outward direction (for tests and, later, AI pathing).
       const out = side === 'n' ? [0, -1] : side === 's' ? [0, 1] : side === 'w' ? [-1, 0] : [1, 0];
-      rec.doors.push(horiz ? { x: c, z: fixed0 + WALL / 2, out } : { x: fixed0 + WALL / 2, z: c, out });
       const top = Math.max(doorFloor + DOOR_H, y0 + 0.1);
+      rec.doors.push(horiz ? { x: c, z: fixed0 + WALL / 2, out, top } : { x: fixed0 + WALL / 2, z: c, out, top });
       if (y0 + wallH - top > 0.05) seg(da, db, top, y0 + wallH - top);
     };
     for (const sd of sides) wallRun(sd);
@@ -288,6 +288,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     let mid = null;
     if (Math.max(w, d) >= 14) {
       mid = alongX ? (minX + maxX) / 2 : (minZ + maxZ) / 2;
+      const clear = (m) => rec.doors.every((dr) => (alongX ? Math.abs(dr.out[0]) > 0.5 : Math.abs(dr.out[1]) > 0.5) || Math.abs((alongX ? dr.x : dr.z) - m) > DOOR_W / 2 + WALL + 0.5);
+      for (const step of [0, 2.2, -2.2, 3.4, -3.4]) if (clear(mid + step)) { mid += step; break; }
       const a0 = (alongX ? minZ : minX) + WALL, a1 = (alongX ? maxZ : maxX) - WALL;
       const g0 = a0 + 1 + rand() * (a1 - a0 - 2 - DOOR_W), g1 = g0 + DOOR_W;
       for (const [a, b] of [[a0, g0], [g1, a1]]) {
@@ -317,6 +319,75 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
    * walls), relative to (cx, cz). Walls run only along the outside of the shape (where two pieces
    * meet it's open inside), with one or two doorways; a ceiling over each piece; loot inside.
    */
+  /**
+   * Fill a building's rooms: against the walls (backs to them) and, in a big enough room, one piece in
+   * the middle. By kind of building: homes get beds, couches, a TV, a kitchen and a table; shops and
+   * offices shelves, counters and desks; warehouses racks and crates; barns hay and a workbench. All in
+   * the building's own frame; `put(x0, z0, x1, z1, h, extra)` makes each one. Nothing goes within reach
+   * of a doorway, a loot spot or the gap in the interior wall.
+   */
+  const FURN = {
+    home: [['bed', 1.6, 2.1, 0.6], ['couch', 2.1, 0.9, 0.85], ['tv', 1.5, 0.45, 0.55], ['kitchen', 2.6, 0.65, 0.92], ['fridge', 0.8, 0.75, 1.8], ['dresser', 1.2, 0.5, 1.05], ['books', 1.0, 0.35, 1.9], ['chair', 0.85, 0.85, 0.9], ['bed', 1.4, 2.0, 0.6]],
+    farmhouse: [['bed', 1.6, 2.1, 0.6], ['kitchen', 2.4, 0.65, 0.92], ['couch', 2.0, 0.9, 0.85], ['dresser', 1.2, 0.5, 1.05], ['fridge', 0.8, 0.75, 1.8], ['books', 1.0, 0.35, 1.9]],
+    building: [['shelf', 2.4, 0.5, 1.8], ['counter', 2.6, 0.7, 1.0], ['shelf', 2.4, 0.5, 1.8], ['desk', 1.5, 0.75, 0.78], ['cabinet', 0.9, 0.5, 1.3], ['shelf', 2.4, 0.5, 1.8], ['cooler', 1.6, 0.7, 2.0], ['desk', 1.5, 0.75, 0.78]],
+    civic: [['desk', 1.6, 0.75, 0.78], ['bench', 2.2, 0.6, 0.5], ['cabinet', 0.9, 0.5, 1.3], ['books', 1.0, 0.35, 1.9], ['bench', 2.2, 0.6, 0.5], ['desk', 1.6, 0.75, 0.78]],
+    warehouse: [['rack', 3.0, 1.0, 2.6], ['crates', 1.3, 1.3, 1.2], ['rack', 3.0, 1.0, 2.6], ['crates', 1.3, 1.3, 1.7], ['bench', 2.0, 0.7, 0.9], ['rack', 3.0, 1.0, 2.6]],
+    barn: [['hay', 1.3, 1.0, 1.0], ['hay', 1.3, 1.0, 1.9], ['bench', 2.0, 0.7, 0.9], ['crates', 1.2, 1.2, 1.2], ['hay', 1.3, 1.0, 1.0]],
+  };
+  const MIDDLE = { home: ['table', 1.5, 0.95, 0.76], farmhouse: ['table', 1.6, 1.0, 0.76], building: ['aisle', 3.2, 0.9, 1.6], civic: ['table', 2.4, 1.1, 0.76], warehouse: ['pallets', 1.2, 1.0, 0.5], barn: ['hay', 1.3, 1.0, 1.0] };
+  function furnish(rects, mid, alongX, type, floorY, rand, doorL, lootL, put, gapL) {
+    const kit = FURN[type] || FURN.building;
+    const rooms = [];
+    for (const [x0, z0, x1, z1] of rects) {
+      if (x1 - x0 < 3 || z1 - z0 < 3) continue;
+      if (mid !== null && rects.length === 1) {
+        if (alongX) rooms.push([x0, z0, mid, z1], [mid, z0, x1, z1]); else rooms.push([x0, z0, x1, mid], [x0, mid, x1, z1]);
+      } else rooms.push([x0, z0, x1, z1]);
+    }
+    const placed = [], IN = WALL + 0.06, used = new Set(), ONE = new Set(['tv', 'fridge', 'kitchen', 'couch', 'counter']);   // one of these per building
+    const clearOf = (ax0, az0, ax1, az1) => {
+      const cxp = (ax0 + ax1) / 2, czp = (az0 + az1) / 2;
+      const nearPt = (p, r) => Math.max(ax0 - p[0], 0, p[0] - ax1) ** 2 + Math.max(az0 - p[1], 0, p[1] - az1) ** 2 < r * r;
+      if (doorL.some((p) => nearPt(p, 3.3))) return false;   // (a Contact stands 2.6 m inside the front door)
+      if (lootL.some((p) => nearPt(p, 1.0))) return false;
+      if (gapL && nearPt(gapL, 1.7)) return false;
+      if (mid !== null && rects.length === 1 && (alongX ? ax0 < mid + 0.2 && ax1 > mid - 0.2 : az0 < mid + 0.2 && az1 > mid - 0.2)) return false;
+      return !placed.some(([bx0, bz0, bx1, bz1]) => ax0 < bx1 + 0.45 && ax1 > bx0 - 0.45 && az0 < bz1 + 0.45 && az1 > bz0 - 0.45) && cxp === cxp && czp === czp;
+    };
+    for (const [x0, z0, x1, z1] of rooms) {
+      const rw = x1 - x0, rd = z1 - z0, area = rw * rd;
+      const want = Math.max(1, Math.min(7, Math.round(area / 9)));
+      let n = 0, k = Math.floor(rand() * kit.length);
+      for (let tries = 0; tries < want * 4 && n < want; tries++, k++) {
+        const [kind, L, D, H] = kit[k % kit.length];
+        if (ONE.has(kind) && used.has(kind)) continue;
+        const side = Math.floor(rand() * 4);   // which wall its back is against: n, s, w, e
+        const horiz = side < 2, span = horiz ? rw - 2 * IN - L : rd - 2 * IN - L;
+        if (span < 0 || (horiz ? rd : rw) < D + 2 * IN + 1.2) continue;
+        const u = (horiz ? x0 : z0) + IN + L / 2 + rand() * span;
+        let bx0, bz0, bx1, bz1, fr;
+        if (side === 0) { bx0 = u - L / 2; bx1 = u + L / 2; bz0 = z0 + IN; bz1 = bz0 + D; fr = [0, 1]; }
+        else if (side === 1) { bx0 = u - L / 2; bx1 = u + L / 2; bz1 = z1 - IN; bz0 = bz1 - D; fr = [0, -1]; }
+        else if (side === 2) { bz0 = u - L / 2; bz1 = u + L / 2; bx0 = x0 + IN; bx1 = bx0 + D; fr = [1, 0]; }
+        else { bz0 = u - L / 2; bz1 = u + L / 2; bx1 = x1 - IN; bx0 = bx1 - D; fr = [-1, 0]; }
+        if (!clearOf(bx0, bz0, bx1, bz1)) continue;
+        placed.push([bx0, bz0, bx1, bz1]); used.add(kind);
+        put(bx0, bz0, bx1, bz1, H, { furn: kind, fr, fl: +(horiz ? L : L).toFixed(2), fd: D, fs: Math.floor(rand() * 1e6) });
+        n++;
+      }
+      // The middle of a roomy room.
+      const m = MIDDLE[type] || MIDDLE.building;
+      if (m && Math.min(rw, rd) > m[2] + 3.4 && Math.max(rw, rd) > m[1] + 3.4) {
+        const [kind, L, D, H] = m, wide = rw >= rd;
+        const cxm = (x0 + x1) / 2 + (rand() - 0.5) * 0.6, czm = (z0 + z1) / 2 + (rand() - 0.5) * 0.6;
+        const hx = (wide ? L : D) / 2, hz = (wide ? D : L) / 2;
+        if (clearOf(cxm - hx, czm - hz, cxm + hx, czm + hz)) {
+          placed.push([cxm - hx, czm - hz, cxm + hx, czm + hz]);
+          put(cxm - hx, czm - hz, cxm + hx, czm + hz, H, { furn: kind, fr: wide ? [0, 1] : [1, 0], fl: L, fd: D, fs: Math.floor(rand() * 1e6) });
+        }
+      }
+    }
+  }
   function realShell(cx, cz, ang, rects, h, type, zone, base, opts = {}) {
     // Its own random numbers (from where it stands), so a change to one building never reshuffles the rest of the map.
     const rand = mulberry32((Math.round(cx * 10) * 73856093) ^ (Math.round(cz * 10) * 19349663) ^ seed);
@@ -373,6 +444,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (area >= 100) { const other = fit.find((r) => !doorRuns.has(r) && ![...doorRuns].some((d) => d.side === r.side)); if (other) doorRuns.add(other); }
     }
     const OUT = { n: [0, -1], s: [0, 1], w: [-1, 0], e: [1, 0] };
+    const doorAt = [], doorL = [];   // each doorway: [along, centre], and its point, in the building's frame
     for (const r of runs) {
       // A wall piece along this run, `WALL` thick, on the inside of the line.
       const seg = (a, b, yy, hh) => {
@@ -384,25 +456,31 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       };
       if (!doorRuns.has(r)) { seg(r.a, r.b, y0, wallH); continue; }
       const c = r.a + r.len * (0.3 + rand() * 0.4), da = c - DOOR_W / 2, db = c + DOOR_W / 2;
+      doorAt.push([r.along, c]);
+      doorL.push(r.along === 'x' ? [c, r.at] : [r.at, c]);
       seg(r.a, da, y0, wallH);
       seg(db, r.b, y0, wallH);
       const inward = r.side === 'n' || r.side === 'w' ? WALL / 2 : -WALL / 2;
       const [dx, dz] = r.along === 'x' ? W(c, r.at + inward) : W(r.at + inward, c);
       const [ox, oz] = OUT[r.side];
       // The door's centre, which way is out, and the angle of the wall it sits in.
-      rec.doors.push({ x: dx, z: dz, out: [ox * ca - oz * sa, ox * sa + oz * ca], ang: r.along === 'x' ? ang : ang + Math.PI / 2 });
       const top = Math.max(terrain.exact(dx, dz) + DOOR_H, y0 + 0.1);
+      rec.doors.push({ x: dx, z: dz, out: [ox * ca - oz * sa, ox * sa + oz * ca], ang: r.along === 'x' ? ang : ang + Math.PI / 2, top });
       if (y0 + wallH - top > 0.05) seg(da, db, top, y0 + wallH - top);
     }
     // One big room: an interior wall across it, with a gap.
-    let mid = null;
+    let mid = null, gapL = null;
     const one = rects.length === 1 ? rects[0] : null;
     const alongX = one ? one[2] - one[0] >= one[3] - one[1] : true;
     if (one && Math.max(one[2] - one[0], one[3] - one[1]) >= 14) {
       const [x0, z0, x1, z1] = one;
       mid = alongX ? (x0 + x1) / 2 : (z0 + z1) / 2;
+      // Never into a doorway: step it along until it's clear of every door in the walls it meets.
+      const clear = (m) => doorAt.every(([al, c]) => al !== (alongX ? 'x' : 'z') || Math.abs(c - m) > DOOR_W / 2 + WALL + 0.5);
+      for (const step of [0, 2.2, -2.2, 3.4, -3.4, 4.6, -4.6]) if (clear(mid + step)) { mid += step; break; }
       const a0 = (alongX ? z0 : x0) + WALL, a1 = (alongX ? z1 : x1) - WALL;
       const g0 = a0 + 1 + rand() * (a1 - a0 - 2 - DOOR_W), g1 = g0 + DOOR_W;
+      gapL = alongX ? [mid, (g0 + g1) / 2] : [(g0 + g1) / 2, mid];
       for (const [a, b] of [[a0, g0], [g1, a1]]) {
         if (alongX) obox(mid - WALL / 2, a, mid + WALL / 2, b, wallH, y0);
         else obox(a, mid - WALL / 2, b, mid + WALL / 2, wallH, y0);
@@ -427,7 +505,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       }
     }
     // Loot inside: one spot per ~120 m² of floor, up to 3, in the bigger pieces and off the walls.
-    const n = zone ? Math.max(1, Math.min(3, Math.floor(area / 120))) : 0;
+    const n = zone ? Math.max(1, Math.min(3, Math.floor(area / 120))) : 0, lootL = [];
     const roomy = rects.filter(([x0, z0, x1, z1]) => x1 - x0 > 3.4 && z1 - z0 > 3.4);
     for (let k = 0; k < n && roomy.length; k++) {
       const [x0, z0, x1, z1] = roomy[k % roomy.length];
@@ -435,7 +513,15 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       if (mid !== null) { const v = mid + (k % 2 ? 1 : -1) * (1.6 + rand() * Math.max(0, ((alongX ? x1 - x0 : z1 - z0) / 2) - 3.2)); if (alongX) lx = v; else lz = v; }
       const [wx, wz] = W(lx, lz);
       lootSpawns.push({ x: wx, z: wz, zone, indoor: true });
+      lootL.push([lx, lz]);
     }
+    // Furniture: solid (cover, and you walk round it), kept off the doorways, the loot and the gap in the interior wall.
+    if (!opts.noFurniture) furnish(rects, mid, alongX, type, base, rand, doorL, lootL, (x0, z0, x1, z1, hh, extra) => {
+      const [wx, wz] = W((x0 + x1) / 2, (z0 + z1) / 2);
+      const [fx, fz] = [extra.fr[0] * ca - extra.fr[1] * sa, extra.fr[0] * sa + extra.fr[1] * ca];
+      const b = orientedBox(wx, wz, (x1 - x0) / 2, (z1 - z0) / 2, ang, { id: boxes.length, h: hh, y0: base, type: 'furn', bldg, real: 1, ...extra, fr: [+fx.toFixed(3), +fz.toFixed(3)] });
+      boxes.push(b); grid.insert(b);
+    }, gapL);
     return null;
   }
   const inBounds = (minX, minZ, maxX, maxZ) => minX > -half + 30 && maxX < half - 30 && minZ > -half + 30 && maxZ < half - 30;
@@ -1648,4 +1734,63 @@ export function rayAgainstBoxes(ox, oy, oz, dx, dy, dz, list, maxDist = Infinity
 export function characterBounds(x, z, crouch, y = 0, prone = false) {
   const r = prone ? 0.7 : 0.4;   // lying down: lower and longer
   return { minX: x - r, minZ: z - r, maxX: x + r, maxZ: z + r, minY: y, maxY: y + (prone ? PRONE_HEIGHT : crouch ? CROUCH_HEIGHT : STAND_HEIGHT) };
+}
+
+/**
+ * A thrown grenade's flight: an arc toward (tx, tz), landing there after about `flightMs` if nothing is
+ * in the way. It bounces off walls (and anything solid), off the ground and roofs, then rolls to a
+ * stop, all within `maxMs` (the fuse). `solids`: the boxes about; `ground(x, z)`: the height there.
+ * Returns where it ends up and its path, [x, y, z, ms] points for drawing.
+ */
+export function throwPath(from, tx, tz, flightMs, maxMs, solids, ground) {
+  const G = 14, T = Math.max(0.25, flightMs / 1000), R = 0.12, dt = 1 / 60;
+  let x = from[0], y = from[1], z = from[2];
+  const ty = ground(tx, tz) + R;
+  let vx = (tx - x) / T, vz = (tz - z) / T, vy = (ty - y + 0.5 * G * T * T) / T;
+  const pts = [[x, y, z, 0]];
+  let t = 0, rest = false, lastPt = 0;
+  const live = solids.filter((b) => !b.gone && b.type !== 'ladder');
+  while (t < maxMs / 1000 && !rest) {
+    t += dt;
+    if (!rest) vy -= G * dt;
+    let nx = x + vx * dt, ny = y + vy * dt, nz = z + vz * dt;
+    // Into something solid on the way: bounce off the face it hit.
+    const sx = nx - x, sy = ny - y, sz = nz - z, sl = Math.hypot(sx, sy, sz);
+    if (sl > 1e-6) {
+      const hit = rayAgainstBoxes(x, y, z, sx / sl, sy / sl, sz / sl, live, sl + R);
+      if (hit.box) {
+        const b = hit.box, hx = x + sx / sl * Math.max(0, hit.t - R), hy = y + sy / sl * Math.max(0, hit.t - R), hz = z + sz / sl * Math.max(0, hit.t - R);
+        const top = (b.y0 || 0) + b.h;
+        if (vy < 0 && hy >= top - 0.25) {   // landed on top of it (a roof, a car, a crate)
+          ny = top + R; nx = hx; nz = hz;
+          vy = Math.abs(vy) > 2 ? -vy * 0.3 : 0; vx *= 0.55; vz *= 0.55;
+        } else {
+          // Which side: in the box's own frame, the nearest face.
+          let lx = hx, lz = hz, hw, hd;
+          if (b.ang !== undefined) { const dx0 = hx - b.cx, dz0 = hz - b.cz; lx = dx0 * b.ca + dz0 * b.sa; lz = -dx0 * b.sa + dz0 * b.ca; hw = b.hw; hd = b.hd; }
+          else { lx = hx - (b.minX + b.maxX) / 2; lz = hz - (b.minZ + b.maxZ) / 2; hw = (b.maxX - b.minX) / 2; hd = (b.maxZ - b.minZ) / 2; }
+          let ln = Math.abs(hw - Math.abs(lx)) < Math.abs(hd - Math.abs(lz)) ? [Math.sign(lx) || 1, 0] : [0, Math.sign(lz) || 1];
+          let wx = ln[0], wz = ln[1];
+          if (b.ang !== undefined) { const ax = ln[0] * b.ca - ln[1] * b.sa, az = ln[0] * b.sa + ln[1] * b.ca; wx = ax; wz = az; }
+          const dot = vx * wx + vz * wz;
+          if (dot < 0) { vx -= 1.55 * dot * wx; vz -= 1.55 * dot * wz; }   // reflected, losing some speed
+          vx *= 0.6; vz *= 0.6; vy *= 0.8;
+          nx = hx + wx * 0.02; nz = hz + wz * 0.02; ny = hy;
+        }
+        pts.push([nx, ny, nz, Math.round(t * 1000)]); lastPt = t;
+      }
+    }
+    // The ground: bounce, then roll.
+    const gy = ground(nx, nz) + R;
+    if (ny <= gy) {
+      ny = gy;
+      if (vy < -2.5) { vy = -vy * 0.3; vx *= 0.35; vz *= 0.35; pts.push([nx, ny, nz, Math.round(t * 1000)]); lastPt = t; }
+      else { vy = 0; const f = Math.max(0, 1 - 7 * dt); vx *= f; vz *= f; }
+    }
+    x = nx; y = ny; z = nz;
+    if (vy === 0 && Math.hypot(vx, vz) < 0.15) rest = true;
+    if (t - lastPt > 0.05) { pts.push([x, y, z, Math.round(t * 1000)]); lastPt = t; }
+  }
+  pts.push([x, y, z, Math.round(t * 1000)]);
+  return { x, y, z, path: pts.map((p) => [+p[0].toFixed(2), +p[1].toFixed(2), +p[2].toFixed(2), p[3]]) };
 }

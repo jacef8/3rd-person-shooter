@@ -80,7 +80,7 @@ test('imported real structures and roads become map objects', () => {
   assert.equal(mapChecksum(m), mapChecksum(m2));
   assert.notEqual(mapChecksum(m), mapChecksum(generateMap(42)));
   // Each real footprint becomes a walk-in building (or a solid box if it's too small to enter).
-  const rb = [...m.buildings.filter((b) => b.real), ...m.boxes.filter((bx) => bx.real && !bx.shell)];
+  const rb = [...m.buildings.filter((b) => b.real), ...m.boxes.filter((bx) => bx.real && !bx.shell && bx.type !== 'furn')];   // (furniture inside isn't a structure)
   assert.equal(m.real.structures, rb.length);
   assert.ok(rb.length >= 2, `placed ${rb.length}`);
   const wh = m.buildings.find((b) => b.real && b.type === 'warehouse');

@@ -184,12 +184,14 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
       const faces = [[f.ca, f.sa, f.hw, f.hd], [-f.ca, -f.sa, f.hw, f.hd], [-f.sa, f.ca, f.hd, f.hw], [f.sa, -f.ca, f.hd, f.hw]];
       const [nx, nz, out, along] = faces.reduce((a, b) => (b[0] * tx + b[1] * tz > a[0] * tx + a[1] * tz ? b : a));
       const ux = -nz, uz = nx;   // along the wall
-      const w = Math.max(2.4, Math.min(along * 2 * 0.8, 1.8 + bz.name.length * 0.32, 12)), hgt = Math.min(1.7, w / 3.6);
+      const w = Math.max(2.4, Math.min(along * 2 * 0.8, 1.8 + bz.name.length * 0.32, 12));
+      // Above the shop window and its awning (worldview.js pushStorefront: its top is 3.3 m up), under the roof line.
+      const base = (bld.y0 || 0) + 3.4, hgt = Math.max(0.7, Math.min(1.7, w / 3.6, top - 0.15 - base));
       const tex = signTexture(bz.name, st);
       const m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.25 }); mats.push(m);
       const sign = add(new THREE.Mesh(GEO.box, [MAT.dark, MAT.dark, MAT.dark, MAT.dark, m, MAT.dark]));
       sign.scale.set(w, hgt, 0.18);
-      const sy = Math.max((bld.y0 || 0) + 2.6, Math.min(top - hgt / 2 - 0.25, (bld.y0 || 0) + 4.4));
+      const sy = base + hgt / 2;
       sign.position.set(f.cx + nx * (out + 0.12), sy, f.cz + nz * (out + 0.12));
       sign.rotation.y = Math.atan2(nx, nz);
       // Out front: a gas station's canopy and pumps, or a few customers' cars.

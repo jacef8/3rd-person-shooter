@@ -24,6 +24,7 @@ export const ACT_POSE = {
   upgrade: 'hammer', rebuild: 'hammer', harvest: 'hammer',
   cook: 'cook', fish: 'fish',
   eat: 'eat', heal: 'bandage',
+  climb: 'climb', skate: 'skate',
 };
 
 const S = Math.sin, PI = Math.PI;
@@ -64,6 +65,19 @@ const POSES = {
   bandage: { look: 0.45, lean: 0.1,
     R: (t) => [-0.02 + 0.07 * S(t * 4), 1.05 + 0.05 * S(t * 8), 0.3 + 0.04 * Math.cos(t * 4)],
     L: () => [0.14, 1.0, 0.32] },
+  // Up a ladder: hand over hand, each foot stepping up a rung as the other hand reaches.
+  climb: { look: -0.25, feet: true,
+    R: (t) => [-0.17, 1.62 + 0.22 * S(t * 5.5), 0.3],
+    L: (t) => [0.17, 1.62 + 0.22 * S(t * 5.5 + PI), 0.3],
+    RF: (t) => [-0.11, 0.12 + 0.3 * Math.max(0, S(t * 5.5 + PI)), 0.24],
+    LF: (t) => [0.11, 0.12 + 0.3 * Math.max(0, S(t * 5.5)), 0.24] },
+  // On a skateboard, side-on: knees bent, arms out for balance, looking where it's going (the nose is
+  // on the rider's right). Pushing (p = 1): the back foot comes off and kicks along the ground.
+  skate: { feet: true, squat: 0.16, headYaw: -1.15, lean: 0.12,
+    R: (t) => [-0.48, 1.02 + 0.04 * S(t * 1.3), 0.1],
+    L: (t) => [0.46, 0.98 + 0.04 * S(t * 1.3 + 1), -0.06],
+    RF: () => [-0.24, 0.03, 0.02],
+    LF: (t, p) => { if (!p) return [0.24, 0.03, -0.02]; const c = (t * 1.6) % 1; return c < 0.6 ? [-0.05 + c / 0.6 * 0.65, -0.1, 0.22] : [0.6 - (c - 0.6) / 0.4 * 0.65, 0.12, 0.18]; } },
   // Rod out ahead, the tip twitching now and then.
   fish: { look: 0.05,
     R: (t) => [-0.08, 1.05 + 0.03 * Math.max(0, S(t * 1.7)) ** 8, 0.38],
@@ -151,7 +165,7 @@ function makeProps() {
   for (const k of ['crowbar', 'locker', 'flag', 'flare', 'tablet', 'medkit', 'hammer', 'pan', 'rod', 'line', 'can', 'kit']) { P[k].visible = false; P[k].traverse((o) => { if (o.isMesh) o.castShadow = true; }); }
   return P;
 }
-const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'], eat: ['can'], bandage: ['kit'] };
+const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'], eat: ['can'], bandage: ['kit'], climb: [], skate: [] };
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 /** Put a prop at a hand, turned with the person (yaw) plus its own tilt. */

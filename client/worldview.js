@@ -233,7 +233,13 @@ export function pushStorefront(buf, r, toward) {
   }
   at(front / 2, 0.06, y0, gh, 0.1, 0.07, FRAME);
   // Awning (most shops have one) over the front.
-  if (seed % 3 !== 0) at(0, 0.6, y0 + gh + 0.2, 0.16, front + 0.6, 1.2, AWNINGS[seed % AWNINGS.length]);
+  // Awning (most shops have one) over the front: the canopy and a hanging front edge, kept under the
+  // business sign (towns.js puts it from 3.4 m up).
+  if (seed % 3 !== 0) {
+    const ay = Math.min(y0 + gh + 0.16, floor + 3.05), col = AWNINGS[seed % AWNINGS.length];
+    at(0, 0.55, ay, 0.12, front + 0.4, 1.1, col);
+    at(0, 1.08, ay - 0.28, 0.4, front + 0.4, 0.04, col);
+  }
   // Upper floors: a window every 3 m.
   for (let fy = floor + 3.6; fy + 1.6 < r.top - 0.4; fy += 3.4) {
     const m = Math.max(1, Math.floor((len - 2) / 3));
@@ -250,6 +256,141 @@ export function pushStorefront(buf, r, toward) {
 const TRIM = [0.93, 0.92, 0.88], SILL = [0.86, 0.85, 0.8], STOOP = [0.62, 0.61, 0.58], FOUND = [0.46, 0.45, 0.43], PANE = [0.06, 0.08, 0.1];
 const SHUTTERS = [[0.13, 0.22, 0.16], [0.1, 0.11, 0.12], [0.14, 0.2, 0.34], [0.42, 0.13, 0.1], [0.36, 0.33, 0.28]];
 const DOORS = [[0.42, 0.13, 0.1], [0.1, 0.11, 0.12], [0.14, 0.2, 0.34], [0.93, 0.92, 0.88], [0.4, 0.28, 0.16], [0.13, 0.3, 0.2]];
+// ---- furniture (shared/world.js furnish): one solid box each, drawn here with its real parts.
+const WOODS = [[0.42, 0.28, 0.17], [0.55, 0.38, 0.24], [0.3, 0.2, 0.13], [0.62, 0.5, 0.36]];
+const FABRICS = [[0.32, 0.36, 0.42], [0.45, 0.3, 0.24], [0.28, 0.38, 0.3], [0.52, 0.48, 0.42], [0.2, 0.22, 0.28], [0.55, 0.22, 0.2]];
+const BLANKETS = [[0.62, 0.66, 0.72], [0.35, 0.45, 0.62], [0.6, 0.35, 0.35], [0.45, 0.55, 0.42], [0.78, 0.74, 0.62]];
+const GOODS = [[0.8, 0.25, 0.2], [0.2, 0.45, 0.75], [0.9, 0.75, 0.25], [0.3, 0.6, 0.35], [0.85, 0.85, 0.82], [0.6, 0.35, 0.6], [0.95, 0.55, 0.2]];
+const METAL = [0.55, 0.57, 0.6], DARK = [0.12, 0.12, 0.13], WHITE = [0.9, 0.9, 0.88], STEEL_BLUE = [0.18, 0.32, 0.6], RACK_ORANGE = [0.85, 0.42, 0.12];
+export function pushFurniture(buf, b) {
+  const fx = b.fr?.[0] ?? 0, fz = b.fr?.[1] ?? 1, ca = fz, sa = -fx, ang = Math.atan2(-fx, fz);
+  const cx = b.cx ?? (b.minX + b.maxX) / 2, cz = b.cz ?? (b.minZ + b.maxZ) / 2, y = b.y0 || 0;
+  const L = b.fl || 1, D = b.fd || 1, H = b.h, s = b.fs || 1;
+  const pick = (list, k = 0) => list[(s >> k) % list.length];
+  // A part `w` along by `d` deep, its centre `u` along and `v` out from the middle (back is -D/2).
+  const P = (u, v, y0, h, w, d, c) => pushBox(buf, { ang, ca, sa, cx: cx + ca * u - sa * v, cz: cz + sa * u + ca * v, hw: w / 2, hd: d / 2, y0: y + y0, h }, c, 0);
+  const wood = pick(WOODS), fab = pick(FABRICS, 2);
+  switch (b.furn) {
+    case 'bed': {   // L across the wall, D out into the room
+      P(0, 0, 0, 0.32, L, D, wood);
+      P(0, 0.04, 0.32, 0.18, L - 0.08, D - 0.12, WHITE);                          // mattress
+      P(0, 0.22, 0.5, 0.07, L - 0.04, D - 0.5, pick(BLANKETS, 3));                // blanket
+      for (const k of L > 1.5 ? [-L / 4, L / 4] : [0]) P(k, -D / 2 + 0.32, 0.5, 0.13, L > 1.5 ? L / 2 - 0.12 : L - 0.3, 0.4, WHITE);   // pillows
+      P(0, -D / 2 + 0.04, 0, 1.05, L, 0.08, wood);                                // headboard
+      break;
+    }
+    case 'couch':
+    case 'chair':
+      P(0, 0.05, 0.1, 0.32, L, D - 0.1, fab);
+      P(0, -D / 2 + 0.13, 0.1, H - 0.1, L, 0.26, fab);                           // back
+      for (const k of [-1, 1]) P(k * (L / 2 - 0.09), 0.05, 0.1, 0.55, 0.18, D - 0.1, fab);   // arms
+      for (const k of L > 1.2 ? [-L / 4, L / 4] : [0]) P(k, 0.12, 0.42, 0.12, L > 1.2 ? L / 2 - 0.22 : L - 0.4, D - 0.4, fab.map((c) => c * 1.12));   // cushions
+      P(0, 0, 0, 0.1, L - 0.1, D - 0.1, DARK);
+      break;
+    case 'table': {
+      P(0, 0, H - 0.05, 0.05, L, D, wood);
+      for (const a of [-1, 1]) for (const c of [-1, 1]) P(a * (L / 2 - 0.08), c * (D / 2 - 0.08), 0, H - 0.05, 0.07, 0.07, wood);
+      for (const a of [-1, 1]) for (const c of L > 1.3 ? [-L / 4, L / 4] : [0]) {   // chairs tucked in
+        P(c, a * (D / 2 + 0.22), 0.44, 0.05, 0.42, 0.42, wood);
+        P(c, a * (D / 2 + 0.41), 0.44, 0.5, 0.42, 0.05, wood);
+        for (const q of [-1, 1]) for (const r of [-1, 1]) P(c + q * 0.18, a * (D / 2 + 0.22) + r * 0.18, 0, 0.44, 0.04, 0.04, wood);
+      }
+      break;
+    }
+    case 'tv':
+      P(0, 0, 0, H, L, D, DARK.map((c) => c * 2.2));
+      P(0, -D / 2 + 0.15, H, 0.7, L * 0.85, 0.05, DARK);                          // the set
+      P(0, -D / 2 + 0.15, H + 0.08, 0.56, L * 0.8, 0.055, [0.05, 0.07, 0.1]);
+      break;
+    case 'kitchen':
+      P(0, 0, 0, H - 0.04, L, D, pick(WOODS, 1).map((c) => c * 1.2));
+      P(0, 0.02, H - 0.04, 0.04, L + 0.02, D + 0.04, [0.82, 0.8, 0.76]);           // counter top
+      P(-L / 4, 0.05, H, 0.02, 0.7, 0.45, METAL);                                 // sink
+      P(L / 2 - 0.4, 0.02, H - 0.04, 0.05, 0.62, D, DARK);                         // the stove top
+      P(0, -D / 2 + 0.17, 1.45, 0.75, L, 0.34, pick(WOODS, 1).map((c) => c * 1.2));   // wall cupboards
+      for (let i = 0; i < Math.floor(L / 0.6); i++) P(-L / 2 + 0.3 + i * 0.6, D / 2 + 0.005, 0.12, H - 0.25, 0.54, 0.01, pick(WOODS, 1).map((c) => c * 1.35));
+      break;
+    case 'fridge':
+      P(0, 0, 0, H, L, D, WHITE);
+      P(L / 2 - 0.08, D / 2 + 0.02, 0.9, 0.6, 0.03, 0.04, METAL);
+      P(0, D / 2 + 0.003, 1.18, 0.015, L - 0.04, 0.01, METAL.map((c) => c * 0.7));
+      break;
+    case 'dresser':
+    case 'cabinet':
+      P(0, 0, 0.08, H - 0.08, L, D, b.furn === 'cabinet' ? METAL.map((c) => c * 0.8) : wood);
+      for (let i = 0; i < 3; i++) P(0, D / 2 + 0.005, 0.2 + i * (H - 0.25) / 3, 0.02, L - 0.12, 0.012, DARK);
+      break;
+    case 'books':
+    case 'shelf':
+    case 'aisle': {
+      const frame = b.furn === 'books' ? wood : METAL, rows = b.furn === 'books' ? 5 : 4, both = b.furn === 'aisle';
+      for (const k of [-1, 1]) P(k * (L / 2 - 0.03), 0, 0, H, 0.06, D, frame);
+      if (!both) P(0, -D / 2 + 0.02, 0, H, L, 0.03, frame);
+      else P(0, 0, 0, H, L, 0.03, frame);
+      for (let i = 0; i < rows; i++) {
+        const yy = 0.08 + i * (H - 0.12) / rows;
+        P(0, 0, yy, 0.03, L, D, frame);
+        // What's on it: a row of books or goods, gaps here and there.
+        for (const face of both ? [-1, 1] : [0]) {
+          let u = -L / 2 + 0.08, j = 0;
+          while (u < L / 2 - 0.12) {
+            const w = b.furn === 'books' ? 0.04 + ((s >> ((i * 7 + j) % 20)) % 4) * 0.015 : 0.16 + ((s >> ((i * 5 + j) % 20)) % 3) * 0.06;
+            const hh = b.furn === 'books' ? 0.2 + ((s >> ((i + j) % 18)) % 3) * 0.03 : 0.16 + ((s >> ((i * 3 + j) % 18)) % 3) * 0.08;
+            if ((s >> ((i * 11 + j) % 22)) % 7 !== 0) P(u + w / 2, face ? face * D / 4 : 0.02, yy + 0.03, Math.min(hh, (H - 0.12) / rows - 0.06), w - 0.01, face ? D / 2 - 0.08 : D - 0.1, GOODS[(s + i * 3 + j) % GOODS.length].map((c) => (b.furn === 'books' ? c * 0.75 : c)));
+            u += w; j++;
+          }
+        }
+      }
+      break;
+    }
+    case 'counter':
+      P(0, 0, 0, H - 0.05, L, D, wood);
+      P(0, 0.03, H - 0.05, 0.05, L + 0.06, D + 0.08, [0.75, 0.73, 0.7]);
+      P(L / 2 - 0.4, 0, H, 0.22, 0.38, 0.32, DARK);                                // the till
+      break;
+    case 'cooler':
+      P(0, 0, 0, H, L, D, WHITE.map((c) => c * 0.85));
+      P(0, D / 2 + 0.01, 0.12, H - 0.35, L - 0.12, 0.02, [0.55, 0.7, 0.78]);       // glass doors
+      for (let i = 0; i < 4; i++) P(0, D / 2 - 0.2, 0.25 + i * 0.4, 0.22, L - 0.3, 0.3, GOODS[(s + i) % GOODS.length]);
+      P(0, D / 2 + 0.02, H - 0.2, 0.18, L, 0.03, [0.85, 0.2, 0.15]);
+      break;
+    case 'desk':
+      P(0, 0, H - 0.04, 0.04, L, D, wood);
+      for (const k of [-1, 1]) P(k * (L / 2 - 0.03), 0, 0, H - 0.04, 0.05, D, wood);
+      P(-L / 4, -D / 2 + 0.2, H, 0.36, 0.5, 0.04, DARK);                           // monitor
+      P(-L / 4, -D / 2 + 0.25, H, 0.03, 0.18, 0.12, DARK);
+      P(0, D / 2 + 0.35, 0, 0.48, 0.48, 0.48, DARK.map((c) => c * 2.5));              // the chair
+      P(0, D / 2 + 0.58, 0.48, 0.5, 0.46, 0.06, DARK.map((c) => c * 2.5));
+      break;
+    case 'bench':
+      P(0, 0, H - 0.08, 0.08, L, D, wood);
+      for (const k of [-1, 1]) P(k * (L / 2 - 0.1), 0, 0, H - 0.08, 0.08, D - 0.1, wood.map((c) => c * 0.8));
+      if (H > 0.7) P(0, -D / 2 + 0.2, H, 0.5, L - 0.1, 0.35, METAL);                // tools on the workbench
+      break;
+    case 'rack':
+      for (const a of [-1, 1]) for (const c of [-1, 1]) P(a * (L / 2 - 0.05), c * (D / 2 - 0.05), 0, H, 0.08, 0.08, STEEL_BLUE);
+      for (const yy of [0.15, H * 0.45, H * 0.85]) {
+        for (const c of [-1, 1]) P(0, c * (D / 2 - 0.05), yy, 0.1, L, 0.06, RACK_ORANGE);
+        for (const k of [-1, 0, 1]) if ((s >> (k + 3 + Math.round(yy * 3))) % 4) P(k * L / 3, 0, yy + 0.1, 0.6 + ((s >> (k + 5)) % 3) * 0.1, L / 3 - 0.15, D - 0.15, k ? [0.62, 0.48, 0.3] : [0.7, 0.56, 0.36]);
+      }
+      break;
+    case 'crates':
+    case 'pallets': {
+      P(0, 0, 0, 0.14, L, D, [0.58, 0.46, 0.3]);
+      if (b.furn === 'pallets') { P(0, 0, 0.14, H - 0.14, L - 0.1, D - 0.1, [0.75, 0.72, 0.65]); break; }
+      const top = H - 0.14, two = top > 1.4;
+      P(0, 0, 0.14, two ? top / 2 : top, L - 0.06, D - 0.06, [0.62, 0.47, 0.28]);
+      P(0, D / 2 - 0.02, 0.14 + (two ? top / 4 : top / 2) - 0.05, 0.1, L - 0.04, 0.02, [0.42, 0.3, 0.17]);
+      if (two) P(0.1, -0.05, 0.14 + top / 2, top / 2, L - 0.3, D - 0.3, [0.66, 0.52, 0.32]);
+      break;
+    }
+    case 'hay':
+      for (let yy = 0; yy < H - 0.1; yy += 0.95) P(0, 0, yy, Math.min(0.92, H - yy), L, D, [0.78, 0.66, 0.34].map((c) => c * (0.9 + ((s >> Math.round(yy)) % 3) * 0.06)));
+      break;
+    default:
+      P(0, 0, 0, H, L, D, wood);
+  }
+}
 export function pushHouseDetail(buf, glass, r, roofColor) {
   const rects = r.rects || [[r.minX, r.minZ, r.maxX, r.maxZ]];
   const turned = !!r.rects, ca = turned ? Math.cos(r.ang) : 1, sa = turned ? Math.sin(r.ang) : 0, ox = turned ? r.cx : 0, oz = turned ? r.cz : 0;
@@ -278,7 +419,7 @@ export function pushHouseDetail(buf, glass, r, roofColor) {
     box(b, lx, lz, run.nz ? w / 2 : d / 2, run.nz ? d / 2 : w / 2, y0, h, c);
   };
   const local = (x, z) => { const dx = x - ox, dz = z - oz; return [dx * ca + dz * sa, -dx * sa + dz * ca]; };
-  const doors = (r.doors || []).map((d) => local(d.x, d.z));
+  const doors = (r.doors || []).map((d) => local(d.x, d.z)), doorTops = (r.doors || []).map((d) => d.top ?? floor + 2.42);
   const shutters = seed % 3 !== 0 ? SHUTTERS[(seed >> 3) % SHUTTERS.length] : null, doorC = DOORS[(seed >> 6) % DOORS.length];
   const storeys = Math.max(1, Math.round(wallH / 3.2));
   for (const run of runs) {
@@ -289,12 +430,15 @@ export function pushHouseDetail(buf, glass, r, roofColor) {
     // A frieze board under the eaves.
     onRun(buf, run, (run.a + run.b) / 2, 0.05, wallTop - 0.28, 0.22, run.len, 0.05, TRIM);
     // The doors on this run: their trim and a stoop.
-    const onThis = doors.filter(([lx, lz]) => (run.nz ? Math.abs(lz - run.at) < 0.5 && lx > run.a && lx < run.b : Math.abs(lx - run.at) < 0.5 && lz > run.a && lz < run.b)).map(([lx, lz]) => (run.nz ? lx : lz));
-    for (const u of onThis) {
-      for (const s of [-1, 1]) onRun(buf, run, u + s * 0.86, 0.06, floor, 2.5, 0.14, 0.08, TRIM);
-      onRun(buf, run, u, 0.06, floor + 2.42, 0.16, 1.86, 0.08, TRIM);
+    const here = doors.map((q, i) => [q, doorTops[i]]).filter(([[lx, lz]]) => (run.nz ? Math.abs(lz - run.at) < 0.5 && lx > run.a && lx < run.b : Math.abs(lx - run.at) < 0.5 && lz > run.a && lz < run.b));
+    const onThis = here.map(([[lx, lz]]) => (run.nz ? lx : lz));
+    // The frame goes round the real opening (its top follows the ground at the door, as the wall does).
+    here.forEach(([, top], i) => {
+      const u = onThis[i];
+      for (const s of [-1, 1]) onRun(buf, run, u + s * 0.86, 0.06, floor, top - floor + 0.08, 0.14, 0.08, TRIM);
+      onRun(buf, run, u, 0.06, top, 0.16, 1.86, 0.08, TRIM);
       onRun(buf, run, u, 0.75, floor - 0.6, 0.6, 2.1, 1.5, STOOP);
-    }
+    });
     // Windows every ~3.2 m, kept clear of the doors and the corners.
     const n = Math.floor((run.len - 1.4) / 3.2);
     for (let k = 0; k < n; k++) {
@@ -316,7 +460,7 @@ export function pushHouseDetail(buf, glass, r, roofColor) {
   if (front) {
     const [lx, lz] = local(front.x, front.z), run = runs.find((q) => (q.nz ? Math.abs(lz - q.at) < 0.5 : Math.abs(lx - q.at) < 0.5));
     if (run) {
-      const u = run.nz ? lx : lz, pw = Math.min(run.len - 0.4, 4.2), py = floor + 2.75;
+      const u = run.nz ? lx : lz, pw = Math.min(run.len - 0.4, 4.2), py = Math.max(floor + 2.75, (front.top ?? 0) + 0.35);
       onRun(buf, run, u, 1.25, py, 0.14, pw, 2.5, roofColor);                 // the porch roof
       onRun(buf, run, u, 2.46, py - 0.12, 0.14, pw, 0.08, TRIM);              // its fascia
       for (const s of [-1, 1]) onRun(buf, run, u + s * (pw / 2 - 0.15), 2.35, floor - 0.1, py - floor + 0.1, 0.16, 0.16, TRIM);   // posts
@@ -1019,6 +1163,7 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
   // the same), laid out again as you move. Only on grass: not roads, towns, sand, water, the woods floor
   // or inside anything. They sway in a breeze. How many depends on the graphics setting (none on Low).
   const GRASS_R = 30, TUFTS_PER_BLADE = 0.55;   // (the setting counts blades; a tuft is a clump of them)
+  const GRASS_FAR = mobile ? 45 : 85, OUTER_K = 0.4;   // the thinner outer ring: out to here, this share of the density
   const bladeGeo = (() => {
     const pos = [], nor = [], uv = [], idx = [];
     for (const [ax, az] of [[1, 0], [0, 1]]) {
@@ -1061,7 +1206,7 @@ vBlade = position.y;
     if (grassMesh) { scene.remove(grassMesh); grassMesh.dispose(); grassMesh = null; }
     grassAt = null;
     if (!density) return;
-    const cap = Math.ceil(Math.PI * GRASS_R * GRASS_R * density * TUFTS_PER_BLADE * 1.05) + 64;
+    const cap = Math.ceil(Math.PI * (GRASS_R * GRASS_R + (GRASS_FAR * GRASS_FAR - GRASS_R * GRASS_R) * OUTER_K) * density * TUFTS_PER_BLADE * 1.05) + 64;
     grassMesh = new THREE.InstancedMesh(bladeGeo.clone(), grassMat, cap);
     grassMesh.geometry.setAttribute('aCell', new THREE.InstancedBufferAttribute(new Float32Array(cap), 1));
     grassMesh.count = 0;
@@ -1071,27 +1216,33 @@ vBlade = position.y;
   }
   let pavedAt = null;   // parking lots and sidewalks (client/towns.js): no grass on them
   function layGrass(px, pz) {
-    const cx = Math.round(px), cz = Math.round(pz), N = GRASS_R * 2 + 1;
+    const cx = Math.round(px), cz = Math.round(pz), N = GRASS_FAR * 2 + 1;
     // What blades can't grow in: buildings and solid things (trees are fine), roads.
     const blocked = new Uint8Array(N * N);
-    for (const b of map.grid.near(cx, cz, GRASS_R + 4)) {
+    for (const b of map.grid.near(cx, cz, GRASS_FAR + 4)) {
       if (b.gone) continue;
       if (b.type === 'tree' || b.type === 'pine') {   // bare ground round the foot of a tree
-        const tx = Math.round((b.minX + b.maxX) / 2) - cx + GRASS_R, tz = Math.round((b.minZ + b.maxZ) / 2) - cz + GRASS_R;
+        const tx = Math.round((b.minX + b.maxX) / 2) - cx + GRASS_FAR, tz = Math.round((b.minZ + b.maxZ) / 2) - cz + GRASS_FAR;
         for (let x = tx - 2; x <= tx + 2; x++) for (let z = tz - 2; z <= tz + 2; z++) if (x >= 0 && z >= 0 && x < N && z < N) blocked[z * N + x] = 1;
         continue;
       }
-      for (let x = Math.floor(b.minX) - cx + GRASS_R; x <= Math.ceil(b.maxX) - cx + GRASS_R; x++) for (let z = Math.floor(b.minZ) - cz + GRASS_R; z <= Math.ceil(b.maxZ) - cz + GRASS_R; z++) if (x >= 0 && z >= 0 && x < N && z < N) blocked[z * N + x] = 1;
+      for (let x = Math.floor(b.minX) - cx + GRASS_FAR; x <= Math.ceil(b.maxX) - cx + GRASS_FAR; x++) for (let z = Math.floor(b.minZ) - cz + GRASS_FAR; z <= Math.ceil(b.maxZ) - cz + GRASS_FAR; z++) if (x >= 0 && z >= 0 && x < N && z < N) blocked[z * N + x] = 1;
     }
-    const roads = map.roadsNear(cx, cz, GRASS_R + 12);
+    const roads = map.roadsNear(cx, cz, GRASS_FAR + 12);
     const onRoad = (x, z) => roads.some((r) => { const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2)); return Math.hypot(r.x1 + dx * t - x, r.z1 + dz * t - z) < (r.width || 8) / 2 + 0.4; });
     const colorAt = new Map();
     let n = 0;
     const cap = grassMesh.instanceMatrix.count;
-    for (let j = -GRASS_R; j <= GRASS_R && n < cap; j++) for (let i = -GRASS_R; i <= GRASS_R && n < cap; i++) {
-      if (i * i + j * j > GRASS_R * GRASS_R || blocked[(j + GRASS_R) * N + (i + GRASS_R)]) continue;
+    // Close by, every 1 m square; farther out (to GRASS_FAR) every 2 m, fewer but bigger clumps, so the
+    // field doesn't stop a few steps ahead of you.
+    for (let j = -GRASS_FAR; j <= GRASS_FAR && n < cap; j++) for (let i = -GRASS_FAR; i <= GRASS_FAR && n < cap; i++) {
+      const d2 = i * i + j * j;
+      if (d2 > GRASS_FAR * GRASS_FAR) continue;
+      const outer = d2 > GRASS_R * GRASS_R, cell = outer ? 2 : 1, big = outer ? 1.45 : 1;
+      if (outer && ((i | j) & 1)) continue;
+      if (blocked[(j + GRASS_FAR) * N + (i + GRASS_FAR)]) continue;
       const gx = cx + i, gz = cz + j;
-      const td = grassDensity * TUFTS_PER_BLADE, kmax = Math.floor(td) + (ghash(gx, gz, 99) < td % 1 ? 1 : 0);
+      const td = grassDensity * TUFTS_PER_BLADE * (outer ? 4 * OUTER_K : 1), kmax = Math.floor(td) + (ghash(gx, gz, 99) < td % 1 ? 1 : 0);
       if (!kmax) continue;
       const ck = `${gx >> 2},${gz >> 2}`;   // ground colour, sampled every 4 m
       let c = colorAt.get(ck);
@@ -1104,8 +1255,8 @@ vBlade = position.y;
       if (!c || onRoad(gx + 0.5, gz + 0.5) || pavedAt?.(gx + 0.5, gz + 0.5)) continue;
       if (terrain.hasCover && terrain.cover(gx + 0.5, gz + 0.5) === COVER.woods) continue;   // the woods floor is pine straw and leaves, not grass
       for (let k = 0; k < kmax && n < cap; k++) {
-        const x = gx + ghash(gx, gz, k * 3 + 1), z = gz + ghash(gx, gz, k * 3 + 2), r = ghash(gx, gz, k * 3 + 3);
-        const hgt = 0.34 + r * 0.38, wid = 0.75 + ghash(gz, gx, k + 7) * 0.5;
+        const x = gx + ghash(gx, gz, k * 3 + 1) * cell, z = gz + ghash(gx, gz, k * 3 + 2) * cell, r = ghash(gx, gz, k * 3 + 3);
+        const hgt = (0.34 + r * 0.38) * big, wid = (0.75 + ghash(gz, gx, k + 7) * 0.5) * big;
         e2.set((r - 0.5) * 0.12, r * 6.283, (ghash(gz, gx, k) - 0.5) * 0.12);
         tm2.compose(p2.set(x, meshHeight(x, z) - 0.03, z), q2.setFromEuler(e2), s2.set(wid, hgt, wid));
         grassMesh.setMatrixAt(n, tm2);
@@ -1137,6 +1288,7 @@ vBlade = position.y;
       if (b.type === 'tank') { tanks.push(b); continue; }
       if (b.type === 'car' || b.type === 'vehiclebody') { rigs.push(b); continue; }   // drawn as real vehicles, below
       if (b.type === 'ladder') { pushLadder(plain, b); continue; }
+      if (b.type === 'furn') { pushFurniture(plain, b); continue; }
       const [c, tex] = paint(b);
       pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'stucco' ? stucco : tex === 'block' ? block : tex === 'metal' ? metal : tex === 'planks' ? planks : plain, b, c, tex ? 4 : 0);
     }

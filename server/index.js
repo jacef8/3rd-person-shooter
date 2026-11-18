@@ -26,7 +26,7 @@ import { serveStatic } from './static.js';
 import webpush from 'web-push';
 import { BOATS, RIDES, RIDE_RULES, floats, seatPos, isLand, riderFeet, rideSolids } from '../shared/boats.js';
 import {
-  SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, rayBox, rayHitBox, insideBuilding, characterBounds,
+  SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, throwPath, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
   JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB, LADDER, ladderAt, drawMs,
 } from '../shared/world.js';
@@ -2954,8 +2954,9 @@ function throwStun(p, msg) {
   if (d > STUN.throwRange) { x = p.x + (x - p.x) * STUN.throwRange / d; z = p.z + (z - p.z) * STUN.throwRange / d; }
   p.tech -= GADGETS.stun.cost;
   p.stunReadyAt = now + STUN.cooldown;
-  stunBlasts.push({ x, z, y: terrain.height(x, z) + 0.4, at: now + STUN.fuseMs, owner: p });
-  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'stunThrow', x, z, from: [p.x, gy(p) + 1.5, p.z], at: now + STUN.fuseMs });
+  const fl = flyNade(p, x, z, Math.min(STUN.fuseMs * 0.8, Math.max(250, d * 28)), STUN.fuseMs);
+  stunBlasts.push({ x: fl.x, z: fl.z, y: fl.y + 0.25, at: now + STUN.fuseMs, owner: p });
+  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'stunThrow', x: fl.x, z: fl.z, y: fl.y, path: fl.path, from: [p.x, gy(p) + 1.5, p.z], at: now + STUN.fuseMs });
   dirty(p);
 }
 // ---- the frag grenade: thrown in an arc, bursts after its fuse
@@ -2975,9 +2976,17 @@ function throwFrag(p, msg) {
   const cook = Math.max(0, Math.min(FRAG.fuseMs, Number(msg.cook) || 0)), left = FRAG.fuseMs - cook;
   if (left <= (FRAG.cookMinMs || 150)) { x = p.x; z = p.z; }
   const flight = left <= (FRAG.cookMinMs || 150) ? 0 : Math.min(left, Math.max(250, Math.min(1200, d * 32)));
-  fragBlasts.push({ id: uid('fg'), x, z, at: now + left, owner: p.token, ownerName: p.name });
-  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'nadeThrow', kind: 'frag', by: p.id, x, z, from: [p.x, gy(p) + 1.5, p.z], at: now + flight, boomAt: now + left });
+  // Its real flight: off walls, roofs and the ground, rolling to a stop where the fuse finds it.
+  const fl = flight ? flyNade(p, x, z, flight, left) : { x, z, y: gy(p) + 0.15, path: null };
+  fragBlasts.push({ id: uid('fg'), x: fl.x, z: fl.z, y: fl.y, at: now + left, owner: p.token, ownerName: p.name });
+  for (const o of players.values()) if (Math.abs(o.x - x) < INTEREST && Math.abs(o.z - z) < INTEREST) send(o.ws, { t: 'nadeThrow', kind: 'frag', by: p.id, x: fl.x, z: fl.z, y: fl.y, path: fl.path, from: [p.x, gy(p) + 1.5, p.z], at: now + flight, boomAt: now + left });
   dirty(p);
+}
+/** A grenade's path from someone's hand toward (x, z): bounces and all (shared/world.js throwPath). */
+function flyNade(p, x, z, flightMs, fuseMs) {
+  const from = [p.x, gy(p) + 1.5, p.z], mx = (p.x + x) / 2, mz = (p.z + z) / 2;
+  const r = Math.hypot(x - p.x, z - p.z) / 2 + 12;
+  return throwPath(from, x, z, flightMs, fuseMs, solidsNear(mx, mz, r), (a, b) => terrain.height(a, b));
 }
 /** Anyone throwing a sensor: everyone nearby sees it fly. */
 function sensorThrowFx(p, x, z) {
@@ -2988,7 +2997,7 @@ function tickStuns(now) {
     const g = fragBlasts[i];
     if (g.at > now) continue;
     fragBlasts.splice(i, 1);
-    explode({ id: g.id, x: g.x, y: terrain.height(g.x, g.z) + 0.2, z: g.z, owner: g.owner, ownerName: g.ownerName }, now, FRAG);
+    explode({ id: g.id, x: g.x, y: (g.y ?? terrain.height(g.x, g.z)) + 0.1, z: g.z, owner: g.owner, ownerName: g.ownerName }, now, FRAG);
   }
   for (let i = stunBlasts.length - 1; i >= 0; i--) {
     const g = stunBlasts[i];
@@ -5358,7 +5367,7 @@ wss.on('connection', (ws) => {
         // Up a ladder that's really there.
         if (msg.ladder) {
           const lad = ladderAt(solidsNear(p.x, p.z, 3), p.x, p.z, standing(p));
-          if (lad) { p.hop = { alt: 0, vy: 0, ladder: lad.ladderTop - standing(p) + 0.35, x0: p.x, z0: p.z }; return; }
+          if (lad) { p.hop = { alt: 0, vy: 0, ladder: lad.ladderTop - standing(p) + 0.35, x0: p.x, z0: p.z, ly: Math.atan2(lad.ladderIn[0], lad.ladderIn[1]) }; return; }
         }
         // A climb: only as high as something there really is to climb, in some direction.
         const want = Number(msg.climb);
@@ -5597,6 +5606,7 @@ const loop = setInterval(() => {
       id: p.id, name: p.name, ...(p.look ? { lk: p.look } : {}), x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, ...(p.slide ? { sl: 1 } : {}), prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
+      ...(p.hop?.ladder ? { lad: 1, ly: +p.hop.ly.toFixed(2) } : {}),   // on a ladder: climbing pose
       air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : p.hop ? Math.round(p.hop.alt * 100) / 100 : undefined,
       y: !p.boat && standing(p) > terrain.height(p.x, p.z) + 0.8 ? +standing(p).toFixed(2) : undefined,   // up on a bridge deck
       aim: p.aiming && !p.dead ? 1 : 0,
@@ -5633,4 +5643,4 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 refillLoot(Date.now());
-server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${(WORLD_SIZE / 1609.344).toFixed(1)} × ${(WORLD_SIZE / 1609.344).toFixed(1)} mi world at 1:1, ${map.towns.length} towns, ${map.real.structures ? `${map.real.structures} real buildings, ` : ''}${map.real.roads ? `${map.real.roads} real roads, ` : ''}${map.houses.length} stash houses, ${map.contacts.length} contacts)`));
+server.listen(PORT, () => console.log(`Deadzone server on ${TLS ? 'https' : 'http'}://localhost:${PORT}  (seed ${SEED}, ${(WORLD_SIZE / 1609.344).toFixed(1)} × ${(WORLD_SIZE / 1609.344).toFixed(1)} mi world at 1:1, ${map.towns.length} towns, ${map.real.structures ? `${map.real.structures} real buildings, ` : ''}${map.real.roads ? `${map.real.roads} real roads, ` : ''}${map.houses.length} stash houses, ${map.lootSpawns.length} loot spots, ${map.contacts.length} contacts)`));

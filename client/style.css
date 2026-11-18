@@ -912,11 +912,13 @@ body.touchui .tbtn.zoom { right: calc(100px + env(safe-area-inset-right)); botto
 .irow .tx .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .irow .tx .chip { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2, #22262c); color: var(--ink-3, #9aa0a8); border: 1px solid var(--line); }
 .irow .tx .chip.on { color: var(--ink); border-color: var(--accent); }
-.irow .qa { display: none; font-size: 12.5px; font-weight: 700; color: var(--accent); white-space: nowrap; }
-.irow.sel .qa { display: inline; }
+.irow .qa { display: none; font-size: 13px; font-weight: 700; color: var(--accent); white-space: normal; line-height: 1.3; margin-top: 2px; }
+.irow.sel .qa { display: block; }
+#inventory .slothead { font-size: 12px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); margin: 10px 2px 4px; }
+#inventory .slothead:first-of-type { margin-top: 2px; }
+#inventory .packgroup { font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); margin: 12px 2px 4px; padding-bottom: 3px; border-bottom: 1px solid var(--line); }
 .irow.sel, .irow.padfocus { border-color: var(--accent); background: var(--accent-tint); box-shadow: 0 0 0 2px var(--accent) inset; }
 .irow.inhand::after { content: 'IN HAND'; position: absolute; top: 6px; right: 8px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--on-accent, #111); background: var(--accent); border-radius: 5px; padding: 1px 5px; }
-.irow.inhand.sel .qa { margin-top: 18px; }
 .irow.hot .tx small { color: #ff8a3d; font-weight: 700; }
 .irow.idle { opacity: 0.78; }
 #invBar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; min-height: 78px; padding: 10px 14px; background: var(--surface-2, var(--surface)); border: 1px solid var(--line); border-radius: 14px; }
