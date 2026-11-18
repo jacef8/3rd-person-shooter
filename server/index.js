@@ -2738,6 +2738,32 @@ function tickHunger(p, now) {
   }
 }
 /** Eat one of a good (or the best thing you're carrying). */
+/**
+ * Eating and patching up take a moment (PUBG-style): a bar fills, you can walk but not sprint, and
+ * it only counts when it's done. Sprinting, firing, jumping into a ride or going down stops it (you keep
+ * what you were using). Taking fire doesn't.
+ */
+const USE_MS = { eat: 3000, heal: 5000 };
+function startUse(p, kind, good) {
+  if (p.dead || p.downed || p.boat) return;
+  if (p.hack) { if (p.hack.kind === kind) return; return toast(p, 'Busy: finish what you\'re doing first'); }
+  if (kind === 'eat') {
+    if (HUNGER.max - p.food < 3) return toast(p, 'You\'re full');
+    if (!GOODS.some((g) => HOMESTEAD.goods[g].food && p[g] > 0)) return toast(p, 'Nothing to eat — farm, fish, hunt, or buy food at a trading post');
+  } else if (!p.inv.pack.some((i) => i.kind === 'medkit')) return toast(p, 'No medkit');
+  const now = Date.now(), ms = USE_MS[kind];
+  p.hack = { kind, id: null, start: now, until: now + ms, total: ms, x: p.x, z: p.z, good, walk: true };
+  send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
+}
+function finishHeal(p) {
+  const idx = p.inv.pack.findIndex((i) => i.kind === 'medkit');
+  if (idx < 0) return;
+  p.inv.pack.splice(idx, 1);
+  p.hp = Math.min(maxHp(p), p.hp + COMBAT.medkitHeal);
+  p.armor = Math.min(maxArmor(p), p.armor + 40);
+  send(p.ws, { t: 'hack', done: true, text: `Patched up (+${COMBAT.medkitHeal} health)` });
+  dirty(p);
+}
 function eat(p, good) {
   const room = HUNGER.max - p.food;
   if (room < 3) return toast(p, 'You\'re full');
@@ -3212,10 +3238,15 @@ function tickHacks(now) {
       if (isStunned(t, now)) t.stunnedUntil = Math.max(t.stunnedUntil, now + 600);
       else if (!t.downed) { cancelHack(p, 'They shook it off'); continue; }
     }
-    if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Interrupted — you moved'); continue; }
-    if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
+    if (h.walk) { if (p.sprint || p.boat) { cancelHack(p, h.kind === 'eat' ? 'Stopped eating' : 'Stopped patching up'); continue; } }
+    else {
+      if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Interrupted — you moved'); continue; }
+      if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
+    }
     if (now < h.until) continue;
     p.hack = null;
+    if (h.kind === 'eat') { eat(p, h.good); send(p.ws, { t: 'hack', done: true, text: '' }); continue; }
+    if (h.kind === 'heal') { finishHeal(p); continue; }
     if (h.kind === 'claim') { finishClaim(p, h.id); continue; }
     if (h.kind === 'claimBuilding') { finishClaimBuilding(p, h.id); continue; }
     if (h.kind === 'datahack') { finishDataHack(p, h.id); continue; }
@@ -4677,16 +4708,12 @@ function invAction(p, msg) {
     if (it) return callHotDrop(p, it);
     return;
   } else if (msg.action === 'eat') {
-    return eat(p, msg.good);
+    return startUse(p, 'eat', msg.good);
   } else if (msg.action === 'use') {
-    // H: patch up if you're hurt and have a medkit, otherwise eat.
-    const idx = inv.pack.findIndex((i) => i.kind === 'medkit');
+    // H: patch up if you're hurt and have a medkit, otherwise eat. Either takes a few seconds.
     const hurt = p.hp < maxHp(p) || p.armor < maxArmor(p);
-    if (idx < 0 || !hurt) return eat(p);
-    if (p.hp >= maxHp(p) && p.armor >= maxArmor(p)) return;
-    inv.pack.splice(idx, 1);
-    p.hp = Math.min(maxHp(p), p.hp + COMBAT.medkitHeal);
-    p.armor = Math.min(maxArmor(p), p.armor + 40);
+    if (!hurt || !inv.pack.some((i) => i.kind === 'medkit')) return startUse(p, 'eat');
+    return startUse(p, 'heal');
   }
   dirty(p);
 }
@@ -5190,6 +5217,7 @@ function tickAir(p, dt) {
 }
 function handleShoot(p, msg) {
   if (p.dead || p.taserOut) return;
+  if (p.hack?.walk) cancelHack(p, p.hack.kind === 'eat' ? 'Stopped eating' : 'Stopped patching up');
   const w = activeWeapon(p);
   if (!w) return;
   const s = stats(p);

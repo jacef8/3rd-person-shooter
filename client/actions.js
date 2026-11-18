@@ -23,6 +23,7 @@ export const ACT_POSE = {
   revive: 'revive',
   upgrade: 'hammer', rebuild: 'hammer', harvest: 'hammer',
   cook: 'cook', fish: 'fish',
+  eat: 'eat', heal: 'bandage',
 };
 
 const S = Math.sin, PI = Math.PI;
@@ -55,6 +56,14 @@ const POSES = {
   cook: { kneel: true, lean: 0.35, look: 0.3,
     R: (t) => [-0.08 + 0.07 * S(t * 3.5), 0.48, 0.5 + 0.07 * Math.cos(t * 3.5)],
     L: () => [0.14, 0.45, 0.5] },
+  // A can in the right hand, up to the mouth and down again, about once a second; the left hand at the chest.
+  eat: { look: -0.1,
+    R: (t) => { const k = (1 - Math.cos(t * 5.4)) / 2; return [-0.1 + 0.08 * k, 1.05 + 0.42 * k, 0.32 - 0.16 * k]; },
+    L: () => [0.12, 1.02, 0.3] },
+  // The medkit open in the left hand; the right pulls a dressing out and wraps the forearm.
+  bandage: { look: 0.45, lean: 0.1,
+    R: (t) => [-0.02 + 0.07 * S(t * 4), 1.05 + 0.05 * S(t * 8), 0.3 + 0.04 * Math.cos(t * 4)],
+    L: () => [0.14, 1.0, 0.32] },
   // Rod out ahead, the tip twitching now and then.
   fish: { look: 0.05,
     R: (t) => [-0.08, 1.05 + 0.03 * Math.max(0, S(t * 1.7)) ** 8, 0.38],
@@ -131,10 +140,18 @@ function makeProps() {
   P.rodTip = new THREE.Object3D(); P.rodTip.position.set(0, 2.1 * Math.cos(PI / 2 - 0.55), 2.1 * Math.sin(PI / 2 - 0.55)); P.rod.add(P.rodTip);
   P.lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
   P.line = new THREE.Line(P.lineGeo, MAT.line); P.line.frustumCulled = false;
-  for (const k of ['crowbar', 'locker', 'flag', 'flare', 'tablet', 'medkit', 'hammer', 'pan', 'rod', 'line']) { P[k].visible = false; P[k].traverse((o) => { if (o.isMesh) o.castShadow = true; }); }
+  // A can of food, and a small first-aid kit for patching yourself up.
+  P.can = new THREE.Group();
+  P.can.add(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.11, 12), M({ color: 0xb8bcc0, metalness: 0.7, roughness: 0.35 })));
+  P.can.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.0355, 0.0355, 0.06, 12), M({ color: 0xc23b22 })), 0, 0, 0));
+  P.kit = new THREE.Group();
+  P.kit.add(at(box(0.2, 0.08, 0.14, MAT.red), 0, 0, 0));
+  P.kit.add(at(box(0.04, 0.004, 0.1, MAT.white), 0, 0.042, 0));
+  P.kit.add(at(box(0.1, 0.004, 0.04, MAT.white), 0, 0.042, 0));
+  for (const k of ['crowbar', 'locker', 'flag', 'flare', 'tablet', 'medkit', 'hammer', 'pan', 'rod', 'line', 'can', 'kit']) { P[k].visible = false; P[k].traverse((o) => { if (o.isMesh) o.castShadow = true; }); }
   return P;
 }
-const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'] };
+const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'], eat: ['can'], bandage: ['kit'] };
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 /** Put a prop at a hand, turned with the person (yaw) plus its own tilt. */
@@ -156,7 +173,7 @@ export function updateAction(g, kind, p, dt, extra = {}) {
   if (P) {
     const show = pose ? new Set(PROPS_OF[ACT_POSE[kind]]) : new Set();
     if (kind === 'breakbox') show.add('locker');
-    for (const k of ['crowbar', 'locker', 'flag', 'flare', 'tablet', 'medkit', 'hammer', 'pan', 'rod', 'line']) P[k].visible = show.has(k);
+    for (const k of ['crowbar', 'locker', 'flag', 'flare', 'tablet', 'medkit', 'hammer', 'pan', 'rod', 'line', 'can', 'kit']) P[k].visible = show.has(k);
     if (!pose) { u.actT = 0; u.actKind = null; return false; }
   }
   if (!pose || !u.rig) return false;
@@ -196,6 +213,10 @@ export function updateAction(g, kind, p, dt, extra = {}) {
   } else if (name === 'cook') {
     holder2(g, L, L, _w);
     P.pan.position.set(_w.x - 0.05, Math.max(0.02, _w.y - 0.12), _w.z + 0.05);
+  } else if (name === 'eat') {
+    inHand(g, P.can, R, 0.3 + 0.9 * ((1 - Math.cos(t * 5.4)) / 2), 0, 0);   // tipped up as it reaches the mouth
+  } else if (name === 'bandage') {
+    inHand(g, P.kit, L, 0.5, 0, 0);
   } else if (name === 'fish') {
     holder2(g, R, L, _w);
     P.rod.position.copy(_w);

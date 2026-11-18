@@ -2122,7 +2122,7 @@ function handle(m) {
       break;
     case 'hack':
       if (m.cancel) { state.hack = null; toast(m.reason); }
-      else if (m.done) { state.hack = null; toast(m.text); }
+      else if (m.done) { state.hack = null; if (m.text) toast(m.text); }
       // Progress can speed up mid-way (crewmates helping), so work back from the finish time.
       else state.hack = { start: performance.now() - Math.max(0, m.total - (m.until - Date.now())), total: m.total, kind: m.kind, helpers: m.helpers || 0 };
       break;
@@ -4190,7 +4190,7 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING', breakbox: 'PRYING OPEN THE LOCKER', rebuild: 'REBUILDING', selfrevive: 'PATCHING YOURSELF UP' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + ' — hold still';
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING', breakbox: 'PRYING OPEN THE LOCKER', rebuild: 'REBUILDING', selfrevive: 'PATCHING YOURSELF UP', eat: 'EATING', heal: 'USING MEDKIT' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + (state.hack.kind === 'eat' || state.hack.kind === 'heal' ? ' — walking is fine, sprinting stops it' : ' — hold still');
   } else hb.hidden = true;
   // Stun flash fades out over the stun.
   const sf = $('stunfx'), sLeft = (state.stunnedUntil || 0) - performance.now();
@@ -5394,6 +5394,8 @@ function frame(now) {
     const trigger = (state.mouseDown || autoFireNow(me)) && !build.on && !state.nadeAim;   // (phones: auto-fire on a foe counts)
     state.sprint = (k.has('ShiftLeft') || pad.sprint || autoSprint || touch.sprint || touch.sprintOn) && pf > 0.3 && !state.aiming && !trigger;
     if (trigger && (pad.sprint || touch.sprintOn)) { pad.sprint = false; touch.sprintOn = false; }
+    const using = state.hack && (state.hack.kind === 'eat' || state.hack.kind === 'heal');   // eating or patching up: a walk at most
+    if (using && state.sprint && !wasSprint) state.sprint = false;
     if (state.sprint) { state.crouch = false; state.prone = false; }
     // Mobility comes from the active weapon build and the armor you wear.
     const ws = weaponStats(me.inv[me.active]);
@@ -5431,6 +5433,7 @@ function frame(now) {
     const tilt = Math.min(1, len);
     let pace = tilt >= 0.98 ? 1 : tilt ** 1.4;
     if (k.has('ControlLeft') || k.has('ControlRight')) pace = Math.min(pace, 0.3);
+    if (using) pace = Math.min(pace, 0.4);
     if (!state.sprint && tilt > 0.05) { mx *= pace / tilt; mz *= pace / tilt; }
     // Walk into a ladder and you climb it: no button. (Moving toward it, onto it, not just past it; a
     // moment's grace after getting off one so you don't go straight back up.)
