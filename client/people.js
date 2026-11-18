@@ -199,11 +199,12 @@ export function animatePerson(holder, rig, st, dt) {
   // Which clip: crouch-walk, walk, jog or sprint by speed; standing still, aiming or just holding.
   const crouch = st.crouch && !st.seated;
   // (one switch point, with room either side, so a run starting or easing off changes clip once)
-  let gait = crouch ? 'cwalk' : s < (rig.gait === 'run' || rig.gait === 'sprint' ? 3.2 : 3.9) ? 'walk' : 'run';
+  let gait = crouch ? 'cwalk' : s < (rig.gait === 'run' || rig.gait === 'sprint' ? 2.6 : 3.1) ? 'walk' : 'run';
+  // Straight ahead: a walk, then the rifle jog for a part-way push, then the upright run (the sprint
+  // clip at your pace) for the stick all the way and a sprint. So each pace looks like what it is.
+  const fast = s > (rig.gait === 'sprint' ? 5.0 : 5.6);
   const want = !moving ? (crouch ? 'crouch' : !st.armed ? 'idle' : st.aiming ? 'aim' : 'hold')   // standing tall unless aiming or shooting
-    // Running straight ahead is a real upright run (the sprint clip, played at your pace); the rifle jog,
-    // which is low and short-stepped, is kept for strafing and backing up.
-    : gait === 'run' && (DIRS[dir] === 'f' || DIRS[dir] === 'fl' || DIRS[dir] === 'fr') ? 'sprint' : `${gait}_${DIRS[dir]}`;
+    : gait === 'run' && fast && (DIRS[dir] === 'f' || DIRS[dir] === 'fl' || DIRS[dir] === 'fr') ? 'sprint' : `${gait}_${DIRS[dir]}`;
   if (want === 'sprint') gait = 'sprint';
   rig.gait = gait; rig.cur = want;
   // (the run straight ahead also covers the diagonals ahead: the hips turn the whole way toward them)

@@ -2165,7 +2165,7 @@ function stanceNote() {
   if (!el || !state.me) return;
   const st = state.sprint ? 'sprint' : state.prone ? 'prone' : state.crouch ? 'crouch' : 'stand';
   const pad = state.inputMode === 'pad';
-  const hint = pad ? 'Ⓑ crouch · hold Ⓑ prone · L3 sprint' : MOBILE && !pad ? 'tap CROUCH · hold it to go prone' : 'C crouch · hold C prone · Shift sprint';
+  const hint = pad ? 'Ⓑ crouch · hold Ⓑ prone · L3 sprint' : MOBILE && !pad ? 'tap CROUCH · hold it to go prone' : 'C crouch · hold C prone · Shift sprint · Ctrl walk';
   el.innerHTML = `<b>${STANCE_TEXT[st]}</b><span>${hint}</span>`;
   el.hidden = !!state.me.dead || !!state.me.boat || !!state.air;   // the line above the crosshair covers a jump
   el.classList.toggle('standing', st === 'stand');
@@ -5315,7 +5315,14 @@ function frame(now) {
     }
     // Momentum: you reach full speed in well under a tenth of a second and stop almost as fast:
     // quick to start and stop, without dead stops.
-    if (len > 1) { mx /= len; mz /= len; }   // analog sticks below full tilt walk slower
+    if (len > 1) { mx /= len; mz /= len; }
+    // How far the stick is pushed sets the pace, on a curve so there's room to walk: a light push is
+    // a walk (a third of the way is about 2 mph), most of the way a jog, all the way a run; the sprint
+    // is its own button. On a keyboard, hold Ctrl to walk.
+    const tilt = Math.min(1, len);
+    let pace = tilt >= 0.98 ? 1 : tilt ** 1.4;
+    if (k.has('ControlLeft') || k.has('ControlRight')) pace = Math.min(pace, 0.3);
+    if (!state.sprint && tilt > 0.05) { mx *= pace / tilt; mz *= pace / tilt; }
     updateStance(dt, now);
     let want = len > 0.05 && !stunnedNow && now >= (state.stanceBusyUntil || 0) ? [mx * speed, mz * speed] : [0, 0];
     if (state.hop?.ladder) want = [0, 0];   // on a ladder: up, not about
