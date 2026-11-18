@@ -1223,6 +1223,7 @@ vBlade = position.y;
     return out.sort((a, b) => a[0] - b[0]);
   }
 
+  const primed = [];   // drawn this frame whatever way you face (see update)
   return {
     /** The far scene: draw it first with a long-range camera at the same place, then clear depth. */
     far,
@@ -1239,6 +1240,11 @@ vBlade = position.y;
       chunks.clear();
     },
     update(px, pz, speed = 0) {
+      // New ground is drawn once whatever way you face, so its shapes reach the graphics card as it's
+      // built, not in a lump the moment you turn to look at it (a hitch on every turn).
+      for (const m of primed) m.frustumCulled = true;
+      primed.length = 0;
+      const prime = (g) => g?.traverse((o) => { if ((o.isMesh || o.isInstancedMesh) && o.frustumCulled && o.visible) { o.frustumCulled = false; primed.push(o); } });
       sky.position.set(px, 0, pz);
       waterTime.value = performance.now() / 1000;
       // Grass blades are laid out around you as you move. At driving speed they'd be laid out again
@@ -1259,6 +1265,7 @@ vBlade = position.y;
         // while this frame has time to spare, so driving into new ground doesn't hitch.
         if (chunks.has(k) || built >= (chunks.size < 4 ? 9 : 2) || (chunks.size >= 4 && built && performance.now() - t0 > 5)) continue;
         chunks.set(k, buildChunk(cx, cz));
+        prime(chunks.get(k));
         built++;
       }
       for (const [k, g] of chunks) if (!want.has(k)) { dispose(g); chunks.delete(k); }
@@ -1272,6 +1279,7 @@ vBlade = position.y;
         if (g.userData.near === near) continue;
         g.userData.near = near;
         for (const l of lod) { for (const m of l.full) m.visible = near; for (const m of l.lite) m.visible = !near; }
+        prime(g);
       }
       // Far stand-ins: built a few a frame, shown only where the full-detail chunk isn't.
       const wantFar = new Set();
@@ -1279,7 +1287,7 @@ vBlade = position.y;
       for (const [, cx, cz] of chunksWithin(px, pz, farRange)) {
         const k = key(cx, cz);
         wantFar.add(k);
-        if (!farChunks.has(k) && built < 3 && performance.now() - t0 < 8) { farChunks.set(k, buildFar(cx, cz)); built++; }
+        if (!farChunks.has(k) && built < 3 && performance.now() - t0 < 8) { farChunks.set(k, buildFar(cx, cz)); prime(farChunks.get(k)); built++; }
         const g = farChunks.get(k);
         if (g) g.visible = !chunks.has(k);
       }

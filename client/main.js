@@ -16,6 +16,7 @@ import { withCounty } from '/shared/county.js';
 import { withEdits } from '/shared/edits.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
 import { createPost } from '/post.js';
+import { OUTFITS as LOOK_OUTFITS, DYES, cleanLook } from '/shared/looks.js';
 import { Sky as EnvSky } from '/addons/objects/Sky.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople, flinch } from '/people.js';
 import { ACT_POSE, updateAction } from '/actions.js';
@@ -872,7 +873,7 @@ const PLAYER_OUTFITS = ['swat1', 'swat2', 'james', 'liza', 'remy'];
  * the back and the right thigh. The outfit and skin come from the name, so everyone looks a bit
  * different and always the same to everyone: Rogues in black or punk gear, Contacts in work clothes.
  */
-function makeCharacter(kind, name) {
+function makeCharacter(kind, name, look = null) {
   const g = new THREE.Group();
   const h = nameHash(kind === 'self' ? (localStorage.getItem('dz_name') || 'you') : name), pick = (list, n) => list[(h >>> n) % list.length];
   const joint = (x, y, z, parent) => { const j = new THREE.Group(); j.position.set(x, y, z); parent.add(j); return j; };
@@ -900,20 +901,47 @@ function makeCharacter(kind, name) {
     Object.assign(g.userData, { label, bar, armorBar, bars });
   }
   scene.add(g);
-  // Rogues all in black tactical gear; Contacts in street clothes; players any of the others.
-  const outfit = kind === 'bot' ? 'swat3' : kind === 'contact' ? pick(['james', 'liza', 'remy'], 5) : pick(PLAYER_OUTFITS, 5);
+  // Rogues all in black tactical gear; Contacts in street clothes; players what they picked in the
+  // wardrobe (shared/looks.js), or else one of the others by their name.
+  g.userData.dress = { kind, name, h, thigh, slingAt: sling.map((sl) => sl.position.clone()) };
+  dressCharacter(g, kind === 'self' ? myLook() : look);
+  return g;
+}
+/** Your look: as the server last said, or as picked on this device. */
+function myLook() { try { return state?.selfSnap?.lk || localStorage.getItem('dz_look') || null; } catch { return null; } }
+/** Pick a look in the wardrobe: on you now, saved with your character, seen by everyone. */
+function setMyLook(look) {
+  look = cleanLook(look);
+  if (!look) return;
+  try { localStorage.setItem('dz_look', look); } catch { /* private mode */ }
+  state.lookSentAt = performance.now();
+  send({ t: 'look', look });
+  dressCharacter(selfMesh, look);
+}
+/** (Re)dress a person in a look ("outfit:dye", or null for the one their name gives). */
+function dressCharacter(g, look) {
+  const d = g.userData.dress, { kind, h } = d;
+  const pick = (list, n) => list[(h >>> n) % list.length];
+  const [lo, ld] = (cleanLook(look) || '').split(':');
+  const outfit = kind === 'bot' ? 'swat3' : kind === 'contact' ? pick(['james', 'liza', 'remy'], 5) : lo || pick(PLAYER_OUTFITS, 5);
+  const dye = DYES.find((x) => x.id === ld)?.hex ?? null;
+  g.userData.lookKey = look || '';
+  const old = g.userData.rig;
+  const token = (g.userData.dressToken = (g.userData.dressToken || 0) + 1);
   attachPerson(g, outfit, {
+    dye,
     onReady: (rig) => {
+      if (token !== g.userData.dressToken) { g.remove(rig.model); return; }   // dressed again meanwhile
+      if (old) { old.mixer.stopAllAction(); g.remove(old.model); old.model.traverse((o) => { if (o.isMesh) o.material.dispose(); }); }
       const back = hangFrom(rig, 'Chest', g, [0, 0.95, 0]);
-      for (const sl of sling) { sl.position.y -= 0.95; back.add(sl); }
-      hangFrom(rig, 'UpperLegR', g, [-0.1, 0.9, 0]).add(holster);
-      g.remove(thigh);
+      for (const [i, sl] of g.userData.sling.entries()) { sl.position.copy(d.slingAt[i]); sl.position.y -= 0.95; back.add(sl); }
+      hangFrom(rig, 'UpperLegR', g, [-0.1, 0.9, 0]).add(g.userData.holster);
+      g.remove(d.thigh);
       g.userData.rig = rig;
       if (g.userData.cloak != null && g.userData.cloak < 1) { const c = g.userData.cloak; g.userData.cloak = null; setCloak(g, c); }
     },
-    onFail: () => { g.remove(thigh); buildBlockBody(g, kind, name, h); },
+    onFail: () => { if (!old) { g.remove(d.thigh); buildBlockBody(g, kind, d.name, h); } },
   });
-  return g;
 }
 /** The old hand-built body: only if a person's model can't be loaded. Moves the gun, sling and
  *  holster joints onto it. */
@@ -1844,12 +1872,18 @@ function handle(m) {
       for (const p of m.players) {
         if (p.id === state.id) {
           state.selfSnap = p;
+          // Your look from the server (another device, or a fresh start): unless you just changed it here.
+          if ((p.lk || '') !== selfMesh.userData.lookKey && performance.now() - (state.lookSentAt || 0) > 3000) {
+            if (p.lk) dressCharacter(selfMesh, p.lk);
+            else if (selfMesh.userData.lookKey) send({ t: 'look', look: selfMesh.userData.lookKey });   // picked here before it was saved
+          }
           // The server owns your height on a jump: catch up if the two drift apart.
           if (state.air && p.alt != null) { if (Math.abs(p.alt - state.air.alt) > 4) state.air.alt = p.alt; if (p.air === 'chute') state.air.mode = 'chute'; }
           continue;
         }
         let rec = state.players.get(p.id);
-        if (!rec) { rec = { mesh: makeCharacter('player', p.name) }; rec.mesh.position.set(p.x, ground(p.x, p.z), p.z); state.players.set(p.id, rec); }
+        if (rec && (p.lk || '') !== rec.mesh.userData.lookKey) dressCharacter(rec.mesh, p.lk || null);   // changed clothes
+        if (!rec) { rec = { mesh: makeCharacter('player', p.name, p.lk || null) }; rec.mesh.position.set(p.x, ground(p.x, p.z), p.z); state.players.set(p.id, rec); }
         rec.data = p;
         (rec.buf ??= []).push({ t: performance.now(), x: p.x, z: p.z, yaw: p.yaw, alt: p.alt || 0, y: p.y });
         if (rec.buf.length > 12) rec.buf.shift();
@@ -3569,6 +3603,9 @@ canvas.addEventListener('click', () => { if (state.me && !state.invOpen && !stat
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return;
   setInputMode('kb');
+  // Free look ends as soon as the wheel isn't held, even if its release was missed (it could stick on,
+  // so turning moved only the view and you kept running the old way).
+  if (touch.freeLook?.id === 'mouse' && !(e.buttons & 4)) endMouseLook();
   const sens = state.aiming ? 0.0022 * camera.fov / 70 : 0.0022;
   state.yaw -= e.movementX * sens; if (e.movementX) state.lookAt = performance.now();
   state.pitch = Math.max(-1.2, Math.min(1.2, state.pitch - e.movementY * sens));
@@ -3587,6 +3624,8 @@ addEventListener('mousedown', (e) => {
   if (e.button === 0) { state.mouseDown = true; state.firedThisPress = false; }
   if (e.button === 2) state.aiming = true;
 });
+document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement !== canvas) endMouseLook(); });
+addEventListener('blur', () => endMouseLook());
 addEventListener('mouseup', (e) => {
   if (e.button === 1) endMouseLook();
   if (e.button === 0) state.mouseDown = false;
@@ -4297,7 +4336,20 @@ function renderPadSettings() {
   const rowF = document.createElement('div'); rowF.className = 'item';
   rowF.innerHTML = '<div class="meta"><div class="nm">Frame rate on screen</div><div class="st">Shows how smoothly it runs (60 fps is smooth; under 40 feels laggy).</div></div>';
   { const b = btn(tset.showFps ? 'On' : 'Off', () => { tset.showFps = !tset.showFps; saveTset(); renderPadSettings(); }, tset.showFps ? '' : 'ghost'); b.dataset.pad = 'fps'; rowF.append(b); }
-  box.append(row5, rowF, row, row2, row3, row4, rowA, pushRow());
+  // Wardrobe: what you wear, seen by everyone (shared/looks.js). Changes on you as you pick.
+  const [curO, curD] = (selfMesh.userData.lookKey || '').split(':');
+  const nowO = curO, nowD = curD || 'none';
+  const rowW = document.createElement('div'); rowW.className = 'item';
+  rowW.innerHTML = `<div class="meta"><div class="nm">Outfit: ${LOOK_OUTFITS.find((o) => o.id === curO)?.label || 'picked by your name'}</div><div class="st">What you wear. Everyone in the world sees it; it stays with your character.</div></div>`;
+  for (const o of LOOK_OUTFITS) { const b = btn(o.label, () => { setMyLook(`${o.id}:${nowD}`); renderPadSettings(); }, o.id === nowO ? '' : 'ghost'); b.dataset.pad = `outfit-${o.id}`; rowW.append(b); }
+  const rowC = document.createElement('div'); rowC.className = 'item';
+  rowC.innerHTML = `<div class="meta"><div class="nm">Clothes colour: ${DYES.find((x) => x.id === nowD)?.label}</div><div class="st">Skin and hair keep their own colour.${curO ? '' : ' Pick an outfit first.'}</div></div>`;
+  for (const x of DYES) {
+    const b = btn(x.label, () => { if (curO) { setMyLook(`${curO}:${x.id}`); renderPadSettings(); } }, x.id === nowD && curO ? '' : 'ghost');
+    if (x.hex != null) b.prepend(Object.assign(document.createElement('span'), { className: 'swatch', style: `background:#${x.hex.toString(16).padStart(6, '0')}` }));
+    b.dataset.pad = `dye-${x.id}`; b.disabled = !curO; rowC.append(b);
+  }
+  box.append(rowW, rowC, row5, rowF, row, row2, row3, row4, rowA, pushRow());
   if (touchCapable) {
     const t1 = document.createElement('div'); t1.className = 'item';
     t1.innerHTML = '<div class="meta"><div class="nm">Phone controls: layout</div><div class="st">Move any button where your thumbs want it, make them bigger or smaller, more or less see-through.</div></div>';
@@ -5459,7 +5511,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
+window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere

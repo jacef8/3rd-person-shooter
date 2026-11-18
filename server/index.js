@@ -10,6 +10,7 @@ import { withCounty } from '../shared/county.js';
 import { withEdits, placement } from '../shared/edits.js';
 import { SITES, findSites } from '../shared/sites.js';
 import { project } from '../shared/geography.js';
+import { cleanLook } from '../shared/looks.js';
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
@@ -572,7 +573,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', ...RESOURCES];
+const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -5249,6 +5250,11 @@ wss.on('connection', (ws) => {
     }
     switch (msg.t) {
       case 'state': return handleState(p, msg);
+      case 'look': {   // the wardrobe (shared/looks.js)
+        const v = cleanLook(msg.look);
+        if (v) p.look = v;
+        return;
+      }
       case 'jump': {   // off the ground only, not lying down, a breath between jumps
         const now = Date.now();
         if (p.dead || p.downed || p.prone || p.boat || p.air || p.hop || now - (p.lastJump || 0) < 650 || isStunned(p, now)) return;
@@ -5478,7 +5484,7 @@ const loop = setInterval(() => {
   }
   if (tick % SNAPSHOT_EVERY === 0 && players.size) {
     const views = new Map([...players.values()].filter((p) => !p.deploying).map((p) => [p, {
-      id: p.id, name: p.name, x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
+      id: p.id, name: p.name, ...(p.look ? { lk: p.look } : {}), x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +p.yaw.toFixed(3), pitch: +(p.pitch || 0).toFixed(3),
       crouch: p.crouch, ...(p.slide ? { sl: 1 } : {}), prone: p.prone ? 1 : 0, dead: p.dead, downed: p.downed ? 1 : 0, stun: isStunned(p, now) ? 1 : 0, hp: Math.round(p.hp), maxHp: maxHp(p), armor: Math.round(p.armor), maxArmor: maxArmor(p),
       level: level(p), sh: shielded(p) ? 1 : 0, camo: camoActive(p), hacking: !!p.hack, prot: (p.protectedUntil || 0) > now, boat: p.boat || null, seat: p.seat ?? null,
       air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : p.hop ? Math.round(p.hop.alt * 100) / 100 : undefined,

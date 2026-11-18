@@ -47,6 +47,7 @@ export function attachPerson(holder, outfit, opts = {}) {
       m.metalness = 0; m.roughness = Math.max(m.roughness, 0.7);   // no environment map out here: shiny reads as black
       // A little lift (from the texture itself), so dark gear isn't a silhouette with the sun behind it.
       if (m.map) { m.emissiveMap = m.map; m.emissive.setScalar(0.16); }
+      if (opts.dye != null && m.map && !/hair|lash|head/i.test(m.name)) dyeClothes(m, opts.dye);
       o.material = m;
       o.castShadow = true;
       o.frustumCulled = true;
@@ -56,6 +57,32 @@ export function attachPerson(holder, outfit, opts = {}) {
     opts.onReady?.(rig);
     return rig;
   }).catch((e) => { console.warn('person', outfit, e); opts.onFail?.(); return null; });
+}
+
+/**
+ * Clothes in a colour of your choosing (the wardrobe): every texel that isn't skin takes the colour,
+ * keeping the texture's light and shade (folds, straps, pockets). Skin is told apart by its hue: warm,
+ * red over green over blue, not grey and not too strong. Hair and faces are other materials, left be.
+ */
+function dyeClothes(m, hex) {
+  const dye = { value: new THREE.Color(hex) };
+  m.emissiveMap = null;
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uDye = dye;
+    sh.fragmentShader = 'uniform vec3 uDye;\n' + sh.fragmentShader
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        {
+          vec3 c = diffuseColor.rgb, g = sqrt(c);   // (judged near how it looks on screen)
+          float mx = max(g.r, max(g.g, g.b)), mn = min(g.r, min(g.g, g.b));
+          float sat = (mx - mn) / max(mx, 1e-4);
+          float warm = step(g.b, g.g) * step(g.g, g.r) * smoothstep(0.14, 0.24, sat) * (1.0 - smoothstep(0.82, 0.92, sat)) * smoothstep(0.12, 0.22, mx);
+          float l = dot(g, vec3(0.2126, 0.7152, 0.0722));
+          vec3 dyed = uDye * (0.3 + 1.2 * l);
+          diffuseColor.rgb = mix(dyed, c, warm);
+        }`)
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance = diffuseColor.rgb * 0.16;');
+  };
+  m.customProgramCacheKey = () => 'dye';
 }
 
 // Scratch objects (no garbage in the frame loop).

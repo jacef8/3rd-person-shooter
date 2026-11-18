@@ -940,3 +940,4 @@ body.touchui .irow { min-height: 52px; }
 /* Frame-rate readout (Settings: Frame rate on screen). */
 #fps { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 40; padding: 3px 10px; border-radius: 8px; background: var(--surface); color: var(--ink); font: 600 13px/1.4 var(--font-text); font-variant-numeric: tabular-nums; pointer-events: none; }
 #fps[hidden] { display: none; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(255,255,255,0.5); }
