@@ -87,14 +87,14 @@ function applyGfx(mode = gfxMode) {
   try { localStorage.setItem('dz_gfx', mode); } catch { /* private mode */ }
   const g = GFX[mode];
   renderer.setPixelRatio(Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9));
-  sun.castShadow = g.shadows;
+  sun.castShadow = g.shadows && !perf.noShadows;
   if (sun.shadow.mapSize.x !== g.shadowMap) { sun.shadow.mapSize.set(g.shadowMap, g.shadowMap); sun.shadow.map?.dispose(); sun.shadow.map = null; }
   const reach = mode === 'ultra' ? 110 : 70;
   Object.assign(sun.shadow.camera, { left: -reach, right: reach, top: reach, bottom: -reach, far: reach * 3 });
   sun.shadow.camera.updateProjectionMatrix();
   try { localStorage.setItem('dz_gfx_v2', '1'); } catch { /* private mode */ }
   state.view?.setRanges(g.view, g.far);
-  state.view?.setGrass(g.grass || 0);
+  state.view?.setGrass((g.grass || 0) * (perf.grassCut ? 0.5 : 1));
   post ??= createPost(renderer, scene, camera, drawWorld);
   post.setQuality(postQuality(mode));
   dispatchEvent(new Event('resize'));
@@ -4287,14 +4287,17 @@ function renderPadSettings() {
   const row5 = document.createElement('div'); row5.className = 'item';
   row5.innerHTML = `<div class="meta"><div class="nm">Graphics: ${GFX[gfxMode].label}</div><div class="st">${GFX[gfxMode].about}</div></div>`;
   for (const m of Object.keys(GFX)) {
-    const b = btn(GFX[m].label, () => { applyGfx(m); renderPadSettings(); }, m === gfxMode ? '' : 'ghost');
+    const b = btn(GFX[m].label, () => { Object.assign(perf, { cap: 2, ratioCap: 0, grassCut: false, noShadows: false, eased: false, since: performance.now() }); applyGfx(m); renderPadSettings(); }, m === gfxMode ? '' : 'ghost');
     b.dataset.pad = `gfx-${m}`;
     row5.append(b);
   }
   const rowA = document.createElement('div'); rowA.className = 'item';
   rowA.innerHTML = '<div class="meta"><div class="nm">Aim assist (phone and controller)</div><div class="st">Over an enemy your aim slows so you don\'t sweep past; while you move or fire it gently follows them; pressing AIM near one settles your sights on them. Never with a mouse.</div></div>';
   for (const [m, l] of [['off', 'Off'], ['light', 'Light'], ['strong', 'Strong']]) { const b = btn(l, () => { tset.aimAssist = m; saveTset(); renderPadSettings(); }, (tset.aimAssist || 'strong') === m ? '' : 'ghost'); b.dataset.pad = `assist-${m}`; rowA.append(b); }
-  box.append(row5, row, row2, row3, row4, rowA, pushRow());
+  const rowF = document.createElement('div'); rowF.className = 'item';
+  rowF.innerHTML = '<div class="meta"><div class="nm">Frame rate on screen</div><div class="st">Shows how smoothly it runs (60 fps is smooth; under 40 feels laggy).</div></div>';
+  { const b = btn(tset.showFps ? 'On' : 'Off', () => { tset.showFps = !tset.showFps; saveTset(); renderPadSettings(); }, tset.showFps ? '' : 'ghost'); b.dataset.pad = 'fps'; rowF.append(b); }
+  box.append(row5, rowF, row, row2, row3, row4, rowA, pushRow());
   if (touchCapable) {
     const t1 = document.createElement('div'); t1.className = 'item';
     t1.innerHTML = '<div class="meta"><div class="nm">Phone controls: layout</div><div class="st">Move any button where your thumbs want it, make them bigger or smaller, more or less see-through.</div></div>';
@@ -5115,34 +5118,45 @@ function dismantleAimed() {
 
 // ------------------------------------------------------------------ main loop
 let last = performance.now();
-// Keeps it smooth: every 3 s, if the middle frame took longer than 1/40 s (a hitch or two doesn't count),
-// ease one thing off: the corner shading, then the glow and smoothing, then screen sharpness, then grass.
-function perfWatch(now) {
+// Keeps it smooth: every 3 s, if the middle frame took longer than 1/50 s, or one frame in ten took
+// longer than 1/22 s (stutter), ease one thing off: the corner shading, then the glow and smoothing,
+// then screen sharpness, then grass. Says so on screen. Also feeds the frame-rate readout (Settings).
+const fpsEl = Object.assign(document.createElement('div'), { id: 'fps', hidden: true });
+document.body.append(fpsEl);
+function perfWatch(now, ms) {
+  perf.recent = (perf.recent || []).concat(ms).slice(-60);
+  fpsEl.hidden = !tset.showFps;
+  if (tset.showFps && now - (perf.shownAt || 0) > 500) {
+    perf.shownAt = now;
+    const r = [...perf.recent].sort((x, y) => x - y), md = r[r.length >> 1] || 16.7, worst = r[Math.floor(r.length * 0.95)] || md;
+    fpsEl.textContent = `${Math.round(1000 / md)} fps · ${md.toFixed(0)} ms · worst ${worst.toFixed(0)} ms · ${GFX[gfxMode].label}${perf.eased ? ' (eased)' : ''}`;
+  }
   if (document.hidden || now - perf.since < 5000) { perf.frames.length = 0; perf.at = now; return; }
-  perf.frames.push(now - last);
-  if (now - perf.at < 3000) return;
+  perf.frames.push(ms);
+  if (now - perf.at < 3000 || perf.frames.length < 5) return;
   perf.at = now;
-  const f = perf.frames.sort((a, b) => a - b), mid = f[f.length >> 1] || 0;
+  const f = perf.frames.sort((x, y) => x - y), mid = f[f.length >> 1] || 0, p90 = f[Math.floor(f.length * 0.9)] || 0;
   perf.frames.length = 0;
-  if (mid < 25 || f.length < 20) return;
+  if (mid < 20 && p90 < 45) return;
   const g = GFX[gfxMode], cur = POST_STEPS.indexOf(postQuality(gfxMode));
   let what = '';
-  if (cur > 0) { perf.cap = cur - 1; what = cur === 2 ? 'corner shading off' : 'glow off'; }
+  if (cur > 0) { perf.cap = cur - 1; what = cur === 2 ? 'corner shading off' : 'glow and smoothing off'; }
   else if (renderer.getPixelRatio() > 1) { perf.ratioCap = Math.max(1, renderer.getPixelRatio() - 0.5); what = 'screen sharpness down'; }
-  else if ((g.grass || 0) > 0.6 && !perf.grassCut) { perf.grassCut = true; state.view?.setGrass((g.grass || 0) / 2); what = 'less grass'; }
+  else if ((g.grass || 0) > 0.6 && !perf.grassCut) { perf.grassCut = true; what = 'less grass'; }
+  else if (g.shadows && !perf.noShadows) { perf.noShadows = true; what = 'shadows off'; }
   else return;
+  perf.eased = true;
   applyGfx(gfxMode);
-  if (perf.grassCut) state.view?.setGrass((g.grass || 0) / 2);
   perf.since = now - 2000;   // let it settle before judging again
-  console.info(`[gfx] ${mid.toFixed(1)} ms frames: ${what}`);
+  toast(`Running slow: graphics eased (${what})`);
 }
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const dt = Math.min(0.05, (now - last) / 1000), rawMs = now - last;
   last = now;
   pollPad(dt, now);   // also drives the login and death screens
   if (!state.map) { renderWorld(); perf.since = now; return; }
-  perfWatch(now);
+  perfWatch(now, rawMs);
   const me = state.me;
   const alive = me && !me.dead;
 
