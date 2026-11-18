@@ -1063,6 +1063,7 @@ vBlade = position.y;
         };
         const full = [mk(v.full.wood, kit.woodMat), mk(v.full.leaves, kit.leafMat, kit.leafDepth)];
         const lite = [mk(v.lite.wood, kit.woodMat), mk(v.lite.leaves, kit.leafMat, kit.leafDepth)];
+        for (const m of [...full, ...lite]) m.userData.noAO = true;   // thin branches in the corner shading only get dark outlines
         treeLod.push({ full, lite });
         ts.forEach(([t, sx], i) => {
           const k = 0.86 + ((t.id * 13) % 9) * 0.035;   // each tree a slightly different green and bark

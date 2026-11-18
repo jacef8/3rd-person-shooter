@@ -87,7 +87,7 @@ export function createEnvironment(o) {
   let fall = 0, flash = 0, nextBolt = performance.now() + 8000, thunderAt = 0, thunderPos = null;
   const dir = new THREE.Vector3(), moonDir = new THREE.Vector3(), horizon = new THREE.Color(), tmp = new THREE.Color();
   const mix = (k, i) => { const a = WEATHERS[k.prev][i], b = WEATHERS[k.weather][i]; return a + (b - a) * k.blend; };
-  const state = { clock: worldClock(), night: 0 };
+  const state = { clock: worldClock(), night: 0, sunDir: dir, clouds: 0, fog: 0 };
 
   return {
     state,
@@ -101,6 +101,7 @@ export function createEnvironment(o) {
       const el = dir.y, day = smooth(-0.1, 0.16, el), dusk = smooth(-0.12, 0.02, el) * (1 - smooth(0.05, 0.3, el));
       state.night = 1 - day;
       const clouds = mix(c, 1), dens = mix(c, 2), sunK = mix(c, 3), skyK = mix(c, 4), rainK = Math.min(1, mix(c, 5)), storm = Math.max(0, mix(c, 5) - 1), fog = mix(c, 6);
+      state.clouds = clouds; state.fog = fog;
       // Sunlight by day, moonlight by night (the shadows follow whichever is up).
       const up = el > -0.04 ? dir : moonDir;
       sun.position.set(target.x + up.x * 90, target.y + up.y * 90, target.z + up.z * 90);
@@ -122,7 +123,8 @@ export function createEnvironment(o) {
       // Fog: thick and grey in fog, a light veil in rain; the far landscape fades into it too.
       const fd = fog * (0.75 + 0.25 * day);
       scene.fog.color.copy(horizon); scene.fog.density = fd;
-      if (farFog) { farFog.color.copy(horizon); farFog.near = fog > 1e-4 ? 40 : 4000; farFog.far = fog > 1e-4 ? Math.max(150, 2.2 / Math.max(fog, 1e-6)) : 70000; }
+      // (Clear days still have a little haze in the distance, the way humid Florida air does.)
+      if (farFog) { farFog.color.copy(horizon); farFog.near = fog > 1e-4 ? 40 : 700; farFog.far = fog > 1e-4 ? Math.max(150, 2.2 / Math.max(fog, 1e-6)) : 26000; }
       if (sky) sky.visible = fog < 0.008;
       starMat.opacity = Math.max(0, (1 - day) - clouds * 0.9) * (fog > 0.008 ? 0 : 1);
       stars.position.set(camera.position.x, 0, camera.position.z);

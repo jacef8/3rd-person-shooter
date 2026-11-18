@@ -15,6 +15,8 @@ import { createTownDressing } from '/towns.js';
 import { withCounty } from '/shared/county.js';
 import { withEdits } from '/shared/edits.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
+import { createPost } from '/post.js';
+import { Sky as EnvSky } from '/addons/objects/Sky.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
 import { ACT_POSE, updateAction } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
@@ -93,11 +95,21 @@ function applyGfx(mode = gfxMode) {
   try { localStorage.setItem('dz_gfx_v2', '1'); } catch { /* private mode */ }
   state.view?.setRanges(g.view, g.far);
   state.view?.setGrass(g.grass || 0);
+  post ??= createPost(renderer, scene, camera, drawWorld);
+  post.setQuality(postQuality(mode));
   dispatchEvent(new Event('resize'));
 }
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 800);
 const farCamera = new THREE.PerspectiveCamera(70, 1, 20, 130000);
+// The finish (client/post.js): smooth edges, shade where things meet, glow, grade. Follows the
+// graphics setting (Low draws plainly); phones skip the shading on High, as it's the heaviest part.
+const postQuality = (mode) => (/[?&]nopost\b/.test(location.search) || mode === 'fast' ? 'off' : mode === 'balanced' ? 'medium' : mode === 'full' ? (MOBILE ? 'medium' : 'high') : (MOBILE ? 'high' : 'ultra'));
+let post = null;
 function renderWorld() {
+  post ??= createPost(renderer, scene, camera, drawWorld);
+  post.render();
+}
+function drawWorld() {
   renderer.clear();
   if (state.view) {
     farCamera.position.copy(camera.position);
@@ -121,6 +133,31 @@ function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  post?.setSize();
+}
+// Light from the sky itself (image-based lighting): a physical sky model, the sun where the clock
+// puts it, rendered round you and used to light everything, so surfaces pick up the blue of the sky
+// above and the warmth of a low sun, with real reflections on metal and glass. Remade when the sun
+// has moved a little (it's cheap: a small sky, a few times a minute).
+const envSky = new EnvSky(); envSky.scale.setScalar(1000);
+// No sun disk in it: the sun itself is the shadow-casting light; a disk here would light everything a
+// second time from the same side, with no shadows (and wash them all out).
+if (envSky.material.uniforms.showSunDisc) envSky.material.uniforms.showSunDisc.value = 0;
+const envScene = new THREE.Scene(); envScene.add(envSky);
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envDir = new THREE.Vector3(0, -1, 0);
+let envRT = null, envAt = 0;
+function updateSkyLight(now) {
+  const es = state.env?.state;
+  if (/[?&]noenv\b/.test(location.search)) return;   // (testing: without the sky light)
+  if (!es || (envAt && now - envAt < 20000 && envDir.angleTo(es.sunDir) < 0.03)) return;
+  envAt = now; envDir.copy(es.sunDir);
+  const u = envSky.material.uniforms;
+  u.sunPosition.value.copy(es.sunDir);
+  u.turbidity.value = 3.5 + es.clouds * 8; u.rayleigh.value = 1.3 * (1 - es.clouds * 0.6); u.mieCoefficient.value = 0.0015; u.mieDirectionalG.value = 0.6;
+  const rt = pmrem.fromScene(envScene, 0, 0.1, 2000);
+  envRT?.dispose(); envRT = rt;
+  scene.environment = rt.texture;
 }
 addEventListener('resize', resize);
 resize();
@@ -5330,6 +5367,11 @@ function frame(now) {
   // Day and night, and the weather: the sun or moon, the sky, fog, rain and lightning (client/daynight.js).
   if (state.env) {
     state.env.update(new THREE.Vector3(state.x, gy0, state.z), dt);
+    updateSkyLight(now);
+    // The sky light now does much of what the flat fill light did: turn that down, sky light up
+    // with the day (none at night: the sky model has no moon).
+    scene.environmentIntensity = 0.2 * (1 - state.env.state.night) * (1 - Math.min(0.6, state.env.state.fog * 40));   // (the sky model is bright: it holds the sun too)
+    hemi.intensity *= scene.environment ? 0.8 + 0.2 * state.env.state.night : 1;
     updateLanterns(now);
     if (now - (state.clockShown || 0) > 1000) { state.clockShown = now; $('whereClock').textContent = clockLabel(state.env.state.clock); }
   }
