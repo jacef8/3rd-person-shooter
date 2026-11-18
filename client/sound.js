@@ -31,6 +31,8 @@ function audio() {
   return ctx.state === 'running' || ctx.state === 'suspended' ? ctx : null;
 }
 export function unlock() { audio(); }
+/** The audio context and the master volume (voice chat plays through them). */
+export function mixer() { const c = audio(); return c ? { ctx: c, out: master } : null; }
 
 /** A gain → pan chain into the master volume. */
 function out(gain, pan = 0, at = 0) {

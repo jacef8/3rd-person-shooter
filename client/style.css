@@ -963,3 +963,13 @@ body.touchui .tbtn.stun.on { background: #f2c418; border-color: #fff; color: #11
 body.touchui #ridehud { bottom: auto; top: 64px; grid-template-columns: auto 170px; padding: 6px 12px; }
 body.touchui #ridehud .rh-speed b { font-size: 26px; }
 body.inride #gadgets { display: none; }   /* (the ride's panel takes their place) */
+
+/* Voice chat: who's talking (tap a name to mute them), and the TALK button on phones. */
+#voicebar { position: absolute; bottom: 150px; left: 12px; display: flex; flex-direction: column; gap: 4px; z-index: 6; pointer-events: auto; }
+#voicebar button, #voicebar span { font: 700 14px/1.3 var(--font-text); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 4px 10px; text-align: left; min-height: 30px; }
+#voicebar .crew { border-color: #7dff9a; }
+#voicebar .me { border-color: #ffb27a; }
+#voicebar button.muted { opacity: 0.5; text-decoration: line-through; }
+body.touchui .tbtn.talk { left: calc(24px + env(safe-area-inset-left)); right: auto; top: 200px; bottom: auto; width: 52px; height: 52px; }
+body.talking .tbtn.talk { background: #ffb27a; color: #111; }
+body.touchui #voicebar { bottom: auto; top: 262px; left: calc(8px + env(safe-area-inset-left)); }

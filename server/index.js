@@ -3034,6 +3034,31 @@ function behind(p, t) {
  * hand); `msg.dir` fires: the first enemy along your aim within range, in sight, is stunned (no damage),
  * ready to be data-hacked. Then it recharges.
  */
+// ---- voice chat (client/voice.js): crewmates who both have crew chat on; anyone within VOICE_NEAR
+// who both have nearby chat on. The server only says who may talk to whom and passes the introductions
+// along; the voices go straight between players.
+const VOICE_NEAR = 80;
+function voiceLink(a, b) {
+  if (!a.voice || !b.voice || a.dead || b.dead) return null;
+  if (a.voice.crew && b.voice.crew && sameSquad(a, b)) return 'crew';
+  if (a.voice.near && b.voice.near && Math.hypot(a.x - b.x, a.z - b.z) < VOICE_NEAR) return 'near';
+  return null;
+}
+function tickVoice() {
+  for (const p of players.values()) {
+    if (!p.voice) continue;
+    const list = [];
+    for (const o of players.values()) {
+      if (o === p) continue;
+      let k = voiceLink(p, o);
+      // (a nearby voice already connected stays so out to 20 m further, so the edge doesn't flicker)
+      if (!k && p.voicePeers?.[o.id] && p.voice.near && o.voice?.near && !o.dead && Math.hypot(p.x - o.x, p.z - o.z) < VOICE_NEAR + 20) k = 'near';
+      if (k) list.push({ id: o.id, crew: k === 'crew' });
+    }
+    const key = list.map((q) => q.id + (q.crew ? 'c' : 'n')).sort().join(',');
+    if (key !== p.voiceKey) { p.voiceKey = key; p.voicePeers = Object.fromEntries(list.map((q) => [q.id, 1])); send(p.ws, { t: 'voicePeers', peers: list }); }
+  }
+}
 function handleTaser(p, msg) {
   const now = Date.now();
   if (p.dead || p.downed) return;
@@ -5348,6 +5373,12 @@ wss.on('connection', (ws) => {
       }
       case 'shoot': return handleShoot(p, msg);
       case 'taser': return handleTaser(p, msg);
+      case 'voice': p.voice = { crew: !!msg.crew, near: !!msg.near }; p.voiceAt = 0; return;   // voice chat settings
+      case 'rtc': {   // voice chat: a connection message for one player, only to someone you may talk to
+        const o = players.get(msg.to);
+        if (!o || o === p || !msg.data || JSON.stringify(msg.data).length > 12000 || !(voiceLink(p, o) || p.voicePeers?.[o.id])) return;
+        return send(o.ws, { t: 'rtc', from: p.id, data: msg.data });
+      }
       case 'reload': return handleReload(p);
       case 'swap': {   // next gun you're carrying: main gun 1, main gun 2, sidearm, round again
         if (p.dead || p.reloadUntil >= Date.now()) return;
@@ -5529,6 +5560,7 @@ const loop = setInterval(() => {
   if (tick % TICK_HZ === 0) {
     manageAmbientBots();
     manageAnimals();
+    tickVoice();
     keepMerchants(now);
     keepSettlers(now);
     keepTraders();

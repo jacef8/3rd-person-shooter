@@ -13,6 +13,7 @@ import { buildRideModel, preloadVehicles } from '/ridemodels.js';
 import { attachAnimal, animateAnimal, preloadAnimals } from '/animals.js';
 import { createTownDressing } from '/towns.js';
 import { createPlaces } from '/places.js';
+import { createVoice } from '/voice.js';
 import { withCounty } from '/shared/county.js';
 import { withEdits } from '/shared/edits.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
@@ -1916,6 +1917,7 @@ function handle(m) {
           ? 'Aiming: drag the right side of the screen to put the crosshair on someone. Your gun fires by itself (AUTO on the FIRE button). To fire by hand, hold FIRE and slide that thumb to aim.'
           : 'Aiming: hold FIRE and slide that same thumb to aim while you shoot. Or turn on Auto-fire in Settings → Controls.'), 6000); } }
       syncPush();
+      voiceSettings();
       if (!state.map) initWorld(m);
       selfMesh.visible = true;
       selfMesh.position.set(m.x, ground(m.x, m.z), m.z);
@@ -2094,6 +2096,8 @@ function handle(m) {
       break;
     case 'stunBlast': stunBlastFx(m.x, m.y, m.z); break;
     case 'zap': drawZap(m.from, m.to, m.hit); break;
+    case 'voicePeers': voice.setPeers(m.peers); break;
+    case 'rtc': voice.signal(m.from, m.data); break;
     case 'stunned':
       state.stunnedUntil = performance.now() + (m.until - Date.now());
       $('stunfx').style.opacity = 1;
@@ -3721,6 +3725,34 @@ addEventListener('wheel', (e) => {
   const i = Math.max(0, slots.indexOf(me.active));
   send({ t: 'weapon', slot: slots[(i + (e.deltaY > 0 ? 1 : slots.length - 1)) % slots.length] });
 });
+// ---- voice chat (client/voice.js). Crew chat on unless turned off; nearby chat off unless turned on.
+// Hold N to talk (or the TALK button on a phone); "open mic" in Settings keeps the mic on instead.
+const voice = createVoice({
+  send: (m) => send(m),
+  myId: () => state.id || '',
+  posOf: (id) => state.players.get(id)?.data || null,
+  onTalking: (on, err) => { if (err) toast(err); document.body.classList.toggle('talking', !!on); },
+});
+function voiceSettings() {
+  send({ t: 'voice', crew: tset.voiceCrew !== false, near: !!tset.voiceNear });
+  if (tset.voiceOpen && (tset.voiceCrew !== false || tset.voiceNear)) voice.talk(true); else if (!state.pttHeld) voice.talk(false);
+}
+addEventListener('pointerdown', (e) => {
+  const id = e.target.closest?.('#voicebar [data-mute]')?.dataset.mute;
+  if (!id) return;
+  e.preventDefault(); e.stopPropagation();
+  voice.mute(id, true);
+  toast(`Muted ${state.players.get(id)?.data?.name || 'them'} (Settings → Voice chat to unmute everyone)`);
+}, true);
+/** Who's talking, low on the left: names (tap or click one to mute them). */
+function drawVoiceBar() {
+  const el = $('voicebar');
+  const on = voice.update(state.me ? { x: state.x, z: state.z } : null, state.yaw);
+  const chips = on.map((v) => { const pl = state.players.get(v.id)?.data; return pl ? `<button data-mute="${v.id}" class="${v.crew ? 'crew' : ''}">🎙 ${esc(pl.name)}${v.crew ? '' : ' · nearby'}</button>` : ''; });
+  if (voice.talking) chips.unshift(`<span class="me">🎙 You${tset.voiceOpen ? ' (open mic)' : ''}</span>`);
+  const html = chips.join('');
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
   KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', KeyY: 'stungun', KeyH: 'heal', Space: 'jump',
@@ -3743,6 +3775,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyC') { kbC.at = performance.now(); kbC.held = false; }
   if (KEY_ACTIONS[e.code]) doAction(KEY_ACTIONS[e.code]);
 });
+addEventListener('keydown', (e) => { if (e.code === 'KeyN' && !e.repeat && state.me && document.activeElement?.tagName !== 'INPUT') { state.pttHeld = true; voice.talk(true); } });
+addEventListener('keyup', (e) => { if (e.code === 'KeyN' && state.pttHeld) { state.pttHeld = false; if (!tset.voiceOpen) voice.talk(false); } });
 addEventListener('keyup', (e) => {
   state.keys.delete(e.code);
   if (e.code === 'KeyC' && kbC.at && !kbC.held) doAction('crouch');
@@ -4432,7 +4466,17 @@ function renderPadSettings() {
     if (x.hex != null) b.prepend(Object.assign(document.createElement('span'), { className: 'swatch', style: `background:#${x.hex.toString(16).padStart(6, '0')}` }));
     b.dataset.pad = `dye-${x.id}`; b.disabled = !curO; rowC.append(b);
   }
-  box.append(rowW, rowC, row5, rowF, row, row2, row3, row4, rowA, pushRow());
+  const rowV = document.createElement('div'); rowV.className = 'item';
+  rowV.innerHTML = '<div class="meta"><div class="nm">Voice chat: your crew</div><div class="st">Talk with your crewmates wherever they are. Hold N to talk (TALK on a phone).</div></div>';
+  { const b = btn(tset.voiceCrew !== false ? 'On' : 'Off', () => { tset.voiceCrew = tset.voiceCrew === false; saveTset(); voiceSettings(); renderPadSettings(); }, tset.voiceCrew !== false ? '' : 'ghost'); b.dataset.pad = 'vcrew'; rowV.append(b); }
+  const rowN = document.createElement('div'); rowN.className = 'item';
+  rowN.innerHTML = '<div class="meta"><div class="nm">Voice chat: people nearby</div><div class="st">Hear and talk to anyone within about 250 ft who has this on too, from where they stand. Strangers: off until you turn it on. Tap a name in the talking list to mute them.</div></div>';
+  { const b = btn(tset.voiceNear ? 'On' : 'Off', () => { tset.voiceNear = !tset.voiceNear; saveTset(); voiceSettings(); renderPadSettings(); }, tset.voiceNear ? '' : 'ghost'); b.dataset.pad = 'vnear'; rowN.append(b); }
+  { const b = btn('Unmute everyone', () => { try { localStorage.removeItem('dz_muted'); } catch { /* private */ } location.reload(); }, 'ghost'); b.dataset.pad = 'vunmute'; rowN.append(b); }
+  const rowM = document.createElement('div'); rowM.className = 'item';
+  rowM.innerHTML = '<div class="meta"><div class="nm">Microphone</div><div class="st">Push to talk (hold N, or TALK), or an open mic that\'s always on (handy on a controller).</div></div>';
+  for (const [m2, l] of [[false, 'Push to talk'], [true, 'Open mic']]) { const b = btn(l, () => { tset.voiceOpen = m2; saveTset(); voiceSettings(); renderPadSettings(); }, !!tset.voiceOpen === m2 ? '' : 'ghost'); b.dataset.pad = `vmic-${m2 ? 'open' : 'ptt'}`; rowM.append(b); }
+  box.append(rowW, rowC, row5, rowF, rowV, rowN, rowM, row, row2, row3, row4, rowA, pushRow());
   if (touchCapable) {
     const t1 = document.createElement('div'); t1.className = 'item';
     t1.innerHTML = '<div class="meta"><div class="nm">Phone controls: layout</div><div class="st">Move any button where your thumbs want it, make them bigger or smaller, more or less see-through.</div></div>';
@@ -5626,6 +5670,7 @@ function frame(now) {
   $('prompt').innerHTML = state.air && alive ? airHud() : prompt && !(alive && me?.boat) ? `${pkey}${prompt}` : '';
   updateRideHud(now, alive);
   drawMinimap();
+  drawVoiceBar();
   updateWhere(now);
   if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }
   updateScopeView(aimNow());
@@ -5675,6 +5720,7 @@ const TICON = {
   tag: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/>',
   heal: '<path d="M12 5v14M5 12h14"/>',
   stun: '<path d="M13 2L5 13h6l-1 9 8-11h-6z"/>',
+  talk: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   look: '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   zoom: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5M10.5 8v5M8 10.5h5"/>',
 };
@@ -5689,12 +5735,14 @@ const TOUCH_BTNS = [
   ['JUMP', 'jump', 'mid jump', 'jump'], ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
   // The stun gun: tap to pull it (FIRE shoots it), tap again to put it away.
   ['STUN', 'stungun', 'sm stun', 'stun'],
+  // Voice chat: hold to talk.
+  ['TALK', 'talk', 'sm talk', 'talk'],
   // Hold the eye and drag to look around without turning (you keep running the way you were going).
   ['LOOK', 'look', 'sm look', 'look'],
   // Only while looking through a sight with two zoom levels: flip between them.
   ['ZOOM', 'zoom', 'sm zoom', 'zoom'],
 ];
-const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom', stun: 'stun' };
+const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom', stun: 'stun', talk: 'talk' };
 // Top left: the bag, and ⋯ for the rest (the map: tap the minimap).
 const TOUCH_TOP = [['BAG', 'inventory'], ['⋯', 'touchMore']];   // the map: tap the minimap
 const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
@@ -5765,6 +5813,7 @@ function buildTouchUI() {
         return;
       }
       if (a === 'zoom') { state.zoomAlt = !state.zoomAlt; return; }
+      if (a === 'talk') { b.setPointerCapture(e.pointerId); if (tset.voiceOpen) { tset.voiceOpen = false; saveTset(); voice.talk(false); } else { state.pttHeld = true; voice.talk(true); } b.classList.add('on'); return; }
       if (a === 'heal' || a === 'sensor') {   // tap: use the best one; hold: choose which
         b.setPointerCapture(e.pointerId);
         b.holdTimer = setTimeout(() => { b.holdTimer = null; openTouchPicker(a, b); }, 380);
@@ -5779,6 +5828,7 @@ function buildTouchUI() {
       }
       doAction(a);
     });
+    if (b.dataset.act === 'talk') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { state.pttHeld = false; if (!tset.voiceOpen) voice.talk(false); b.classList.remove('on'); });
     if (b.dataset.act === 'crouch') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.holdTimer) { clearTimeout(b.holdTimer); b.holdTimer = null; doAction('crouch'); } });
     if (b.dataset.act === 'heal' || b.dataset.act === 'sensor') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => { if (b.holdTimer) { clearTimeout(b.holdTimer); b.holdTimer = null; doAction(b.dataset.act); } });
     if (b.dataset.act === 'aim') for (const ev of ['pointerup', 'pointercancel']) b.addEventListener(ev, () => {
@@ -6101,7 +6151,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { perf, touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, renderer, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction, mapView });   // debug/test hook
+Object.assign(window.__dz, { voice, perf, touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, renderer, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction, mapView });   // debug/test hook
 function closeTopPanel() {
   if (state.rideOpen) return closeRidePicker();
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
