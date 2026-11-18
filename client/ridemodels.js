@@ -26,10 +26,20 @@ function faded(name, src) {
       if (!o.isMesh || map.has(o.material)) return;
       const m = o.material.clone();
       m.roughness = 1; m.metalness = 0;
-      // Sun-bleached and dusty: most of the colour gone, darker, a brown cast.
-      m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
-  { float l = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); diffuseColor.rgb = mix(vec3(l), diffuseColor.rgb, 0.3) * vec3(0.78, 0.7, 0.6); }`); };
-      m.customProgramCacheKey = () => 'faded';
+      // Glass: grimed over and cracked dark, not clear.
+      if (m.transparent) { m.transparent = false; m.opacity = 1; m.color.setHex(0x2b2a26); m.map = null; }
+      // Sun-bleached and dusty (most of the colour gone, darker, a brown cast), with rust coming
+      // through in blotches, worst low down, so it reads as dead from across the street.
+      m.onBeforeCompile = (sh) => {
+        sh.vertexShader = 'varying vec3 vWr;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWr = position;');
+        sh.fragmentShader = 'varying vec3 vWr;\nfloat wrH(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }\nfloat wrN(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);\n  return mix(mix(mix(wrH(i), wrH(i + vec3(1,0,0)), f.x), mix(wrH(i + vec3(0,1,0)), wrH(i + vec3(1,1,0)), f.x), f.y), mix(mix(wrH(i + vec3(0,0,1)), wrH(i + vec3(1,0,1)), f.x), mix(wrH(i + vec3(0,1,1)), wrH(i + vec3(1,1,1)), f.x), f.y), f.z); }\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+  { float l = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); diffuseColor.rgb = mix(vec3(l), diffuseColor.rgb, 0.3) * vec3(0.72, 0.64, 0.55);
+    float n = wrN(vWr * 5.0) * 0.65 + wrN(vWr * 17.0) * 0.35;
+    float low = 1.0 - smoothstep(0.05, 0.3, vWr.y);
+    float rust = smoothstep(0.66 - 0.16 * low, 0.72 - 0.16 * low, n);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.15, 0.06) * (0.7 + 0.6 * wrN(vWr * 90.0)), rust * 0.9); }`);
+      };
+      m.customProgramCacheKey = () => 'faded3';
       map.set(o.material, m);
     });
     fadedCache.set(name, map);
@@ -185,10 +195,13 @@ export function buildWreck(seed) {
   const FADED = [0x6e4b35, 0x5d5f5a, 0x7d6a4c, 0x48525a, 0x6b3a2e, 0x8a8577];
   const g = buildRideModel(type, FADED[seed % FADED.length], { real: false });
   g.traverse((o) => { if (o.isMesh && o.material?.color && o.material !== RIDE_MAT.tire) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.8); o.material.roughness = 0.95; o.material.metalness = 0.1; } });
-  g.userData.body.position.y = -0.12;
-  g.userData.body.rotation.z = ((seed % 7) - 3) * 0.012;
+  // Flat tyres: sat down on its rims, sagging to one corner.
+  g.userData.body.position.y = -0.17;
+  g.userData.body.rotation.z = (seed % 2 ? 1 : -1) * (0.025 + (seed % 5) * 0.006);
+  g.userData.body.rotation.x = ((seed >>> 3) % 2 ? 1 : -1) * 0.02;
+  g.userData.wreckType = type;
   // The real thing, sun-faded, in place of the boxes.
-  const pick = type === 'pickup' ? 'pickup' : ['sedan', 'suv', 'classic'][(seed >> 2) % 3];
+  const pick = type === 'pickup' ? 'pickup' : ['sedan', 'suv', 'classic'][(seed >>> 2) % 3];
   useReal(g, pick, BOATS[type].len, { fade: true });
   return g;
 }

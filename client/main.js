@@ -3690,6 +3690,7 @@ function solidsNear(x, z, r) {
   const out = state.map.grid.near(x, z, r);
   for (const sv of structVis.values()) if (structSolid(sv) && Math.abs(sv.data.x - x) < r + 3 && Math.abs(sv.data.z - z) < r + 3) out.push(structBoxOf(sv.data));
   for (const d of state.doorSolids) if (Math.abs(d.minX - x) < r + 2 && Math.abs(d.minZ - z) < r + 2) out.push(d);
+  if (state.towns) out.push(...state.towns.solidsNear(x, z, r));   // abandoned cars in town (client/towns.js)
   return out;
 }
 function solidsAlongRay(ox, oz, dx, dz, dist) {

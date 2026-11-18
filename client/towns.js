@@ -1,14 +1,17 @@
 // Town life: the real businesses' signs on their buildings, gas stations with their canopies, pumps and
-// road signs, customers' cars parked out front, and along the streets of every built-up area street
-// lights, parked cars and fire hydrants. Decoration only: none of it is solid or changes the map, so
-// it can't move anyone's home or change the game. Built a cell at a time around you.
+// road signs, abandoned cars left out front, and along the streets of every built-up area street
+// lights, dead cars at the curb and fire hydrants. Decoration: none of it changes the map, so it can't
+// move anyone's home or change the game; only the cars are solid to walk into (solidsNear). Those cars
+// are wrecks (flat, rusted, glass grimed over), so nobody takes them for the rides you can drive. Built a cell at a time around you.
 //
 // The businesses are real (data/real/businesses.json, from Overture's places data): their names in
 // their usual colours, no logos.
 import * as THREE from 'three';
 import { project } from '/shared/geography.js';
 import { COVER } from '/shared/terrain.js';
-import { buildRideModel } from '/ridemodels.js';
+import { buildWreck } from '/ridemodels.js';
+import { BOATS } from '/shared/boats.js';
+import { orientedBox } from '/shared/world.js';
 
 const CELL = 160, RANGE = 420;
 // Colours for well-known names (background, text, a stripe), else by kind of business.
@@ -106,7 +109,6 @@ const paveMesh = (d, mat) => {
   g.setIndex(d.idx); g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat); m.receiveShadow = true; return m;
 };
-const FRESH = [0xb8b8bc, 0x1d1d20, 0x8a1c1c, 0x2a4a7a, 0xe8e8e8, 0x5a5f66, 0x6b4a2a, 0x24482e];
 
 export function createTownDressing(scene, map, rows, ground, realHydrants = null, onPaved = null) {
   const size = map.size;
@@ -145,11 +147,14 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
     const lot = { pos: [], uv: [], idx: [] }, walk = { pos: [], uv: [], idx: [] }, paved = [];   // paved: [corner x, z, along x, z, across x, z, a0, a1, b0, b1], for the grass
     const add = (o) => { grp.add(o); return o; };
     let cars = 0;
+    const solids = [];
     const park = (x, z, yaw, seed) => {
       if (cars >= 16 || solidAt(x, z, 1.2)) return;
-      const car = buildRideModel(seed % 4 === 0 ? 'pickup' : 'car', FRESH[seed % FRESH.length]);
+      const car = buildWreck(Math.abs(seed) % 1000003);
       car.position.set(x, ground(x, z), z); car.rotation.y = yaw;
       add(car); cars++;
+      const def = BOATS[car.userData.wreckType];
+      solids.push(orientedBox(x, z, def.wid / 2, def.len / 2, -yaw, { type: 'wreck', h: def.h - 0.15, y0: ground(x, z) }));
     };
     // ---- businesses: a sign on the building, facing the road (or on a post if it has no building)
     for (const bz of biz.get(`${cx},${cz}`) || []) {
@@ -281,6 +286,7 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
     }
     grp.userData.mats = mats;
     grp.userData.paved = paved;
+    grp.userData.solids = solids;
     scene.add(grp);
     onPaved?.();
     return grp;
@@ -305,6 +311,15 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
         const [i, j] = k.split(',').map(Number);
         if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) > n + 1) { dispose(g); cells.delete(k); }
       }
+    },
+    /** The abandoned cars near (x, z): solid, so you walk round them, not through. */
+    solidsNear(x, z, r) {
+      const out = [];
+      for (const [i, j] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+        const g = cells.get(`${Math.floor(x / CELL) + i},${Math.floor(z / CELL) + j}`);
+        for (const b of g?.userData.solids || []) if (b.maxX > x - r && b.minX < x + r && b.maxZ > z - r && b.minZ < z + r) out.push(b);
+      }
+      return out;
     },
     /** Whether (x, z) is paved (a lot or a sidewalk). */
     pavedAt(x, z) {

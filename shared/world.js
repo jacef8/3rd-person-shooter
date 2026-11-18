@@ -1543,7 +1543,7 @@ export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift 
 // ---- climbing: standing on things, and climbing onto and over them
 /** What you can't stand on or climb: trees, overhead roofs, doors, poles, and anything players built
  *  (their pieces carry no type: base walls, gates and barricades stay in the way of raiders). */
-const NO_CLIMB = new Set(['tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'rail', 'windsock', 'pole', 'scrub', 'cactus', 'bush', 'ladder']);
+const NO_CLIMB = new Set(['wreck', 'tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'rail', 'windsock', 'pole', 'scrub', 'cactus', 'bush', 'ladder']);
 const climbable = (b) => !!b.type && !b.gone && !NO_CLIMB.has(b.type) && !b.houseId;
 const insideTop = (b, x, z, m) => {
   if (b.ang !== undefined) { const [lx, lz] = toBox(b, x, z); return Math.abs(lx) <= b.hw - m && Math.abs(lz) <= b.hd - m; }
