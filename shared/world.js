@@ -1386,6 +1386,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   // Bristol's Veterans Memorial Park is open lawn (its pavilion, flag and railroad loop: client/places.js);
   // the land cover has it as woods, so keep the trees off it.
   if (realStructs) { const vp = project(30.4214, -84.9789, size); reserve({ minX: vp.x - 120, minZ: vp.z - 48, maxX: vp.x + 62, maxZ: vp.z + 50 }); }
+  // And Hosford's ball fields (the Hosford Recreational Center): open fields.
+  if (realStructs) { const hp = project(30.3840, -84.7949, size); reserve({ minX: hp.x - 110, minZ: hp.z - 100, maxX: hp.x + 110, maxZ: hp.z + 90 }); }
   grid.setLoader(NATURE_TILE, (tx, tz) => { for (const b of natureTile(tx, tz)) grid.insert(b); });
 
   // Labels for the map screen (only what's on this map).

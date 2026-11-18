@@ -84,6 +84,31 @@ export function createPlaces(scene, map, ground) {
     }
   }
 
+  /**
+   * A ball field: the infield dirt, the bases, the mound and the backstop behind home. (x, z) the
+   * middle of the infield; `yaw` turns it (0: home plate to the south, the outfield to the north).
+   */
+  function ballField(x, z, yaw) {
+    const g = new THREE.Group(); g.position.set(x, ground(x, z) + 0.03, z); g.rotation.y = yaw; root.add(g);
+    const b = 13, home = 9.2;   // 60 ft bases; home plate 9 m south of the middle of the diamond
+    const dirt = new THREE.Mesh(new THREE.PlaneGeometry(b + 5, b + 5), M(0xa0714a, { roughness: 1 }));
+    dirt.rotation.set(-Math.PI / 2, 0, Math.PI / 4); dirt.receiveShadow = true; g.add(dirt);
+    for (const [a, c] of [[0, home], [home, 0], [0, -home], [-home, 0]]) part(BOX, MAT.white, a, 0.03, c, 0.4, 0.08, 0.4, g);
+    part(CYL, M(0xa0714a, { roughness: 1 }), 0, 0.07, 0, 2.4, 0.2, 2.4, g);   // the mound
+    const fence = M(0x9aa0a6, { metalness: 0.4, roughness: 0.6, transparent: true, opacity: 0.55 });
+    for (const [dx, w, ang] of [[0, 8, 0], [-4.8, 4, 0.9], [4.8, 4, -0.9]]) {   // the backstop
+      const f = part(BOX, fence, dx, 2.2, home + 4 - Math.abs(dx) * 0.4, w, 4.4, 0.08, g);
+      f.rotation.y = ang; f.castShadow = false;
+    }
+    for (const s of [-1, 1]) {   // the dugout benches either side of home, roofed
+      const d = new THREE.Group(); d.position.set(s * 11, 0, home - 1); d.rotation.y = s * 0.6; g.add(d);
+      part(BOX, MAT.wood, 0, 0.45, 0, 5, 0.1, 0.5, d);
+      part(BOX, MAT.roof, 0, 2.3, 0.2, 5.6, 0.12, 1.6, d);
+      for (const k of [-2.6, 2.6]) part(BOX, MAT.post, k, 1.15, 0.6, 0.1, 2.3, 0.1, d);
+    }
+    return g;
+  }
+
   // ---- parks
   const nearestRoad = (x, z, r) => {
     let best = null, bd = Infinity;
@@ -147,21 +172,8 @@ export function createPlaces(scene, map, ground) {
             for (const s of [-1, 1]) part(BOX, MAT.wood, x + s * 0.75, y + 0.37, z, 0.08, 0.74, 1.4);   // legs
           }
         } }
-      // A ball field (Liberty County Recreation's diamonds are here): the infield dirt, the bases, the
-      // pitcher's mound and the backstop behind home.
-      { const p = at(-88, 0, 3);
-        if (p) {
-          const home = [p.x, p.z + 12], b = 13;   // home plate, the diamond opening north (-z)
-          const bases = [[0, 0], [b * 0.707, -b * 0.707], [0, -b * 1.414], [-b * 0.707, -b * 0.707]];
-          const dirt = new THREE.Mesh(new THREE.PlaneGeometry(b + 5, b + 5), M(0xa0714a, { roughness: 1 }));
-          dirt.rotation.set(-Math.PI / 2, 0, Math.PI / 4); dirt.position.set(home[0], p.y + 0.04, home[1] - b * 0.707); dirt.receiveShadow = true; root.add(dirt);
-          for (const [a, c2] of bases) part(BOX, MAT.white, home[0] + a, p.y + 0.06, home[1] + c2, 0.4, 0.08, 0.4);
-          part(CYL, M(0xa0714a, { roughness: 1 }), home[0], p.y + 0.1, home[1] - b * 0.707, 2.4, 0.2, 2.4);   // the mound
-          for (const [dx, w, ang] of [[0, 8, 0], [-4.8, 4, 0.9], [4.8, 4, -0.9]]) {   // the backstop
-            const f = part(BOX, M(0x9aa0a6, { metalness: 0.4, roughness: 0.6, transparent: true, opacity: 0.55 }), home[0] + dx, p.y + 2.2, home[1] + 4 - Math.abs(dx) * 0.4, w, 4.4, 0.08);
-            f.rotation.y = ang; f.castShadow = false;
-          }
-        } }
+      // One of the rec department's ball fields (its diamonds are here).
+      { const p = at(-88, 0, 3); if (p) ballField(p.x, p.z, 0); }
       // The railroad: a loop of track and the little engine and its cars on it.
       { const p = at(20, 25, 2);
         if (p) {
@@ -193,6 +205,24 @@ export function createPlaces(scene, map, ground) {
             part(BOX, MAT.wood, 0, 0.72, zc, 0.55, 0.06, 1.6, train);   // the bench
           }
         } }
+    }
+  }
+
+  // Hosford Recreational Center: the county's two ball fields east of NE Ferrell St, behind the
+  // Wesleyan Methodist Church (placed from the satellite view), with the concession stand between them.
+  {
+    const c = project(30.3840, -84.7949, map.size);
+    if (Math.abs(c.x) < map.half && Math.abs(c.z) < map.half) {
+      places.push({ name: 'Hosford Recreational Center', x: c.x, z: c.z, r: 150 });
+      for (const [lat, lon, yaw] of [[30.38406, -84.79469, -Math.PI / 4], [30.38363, -84.79497, -Math.PI / 5]]) { const f = project(lat, lon, map.size); ballField(f.x, f.z, yaw); }
+      const st = project(30.38384, -84.79525, map.size), y = ground(st.x, st.z);
+      if (!solidNear(st.x, st.z, 3)) {   // the concession stand and restrooms
+        part(BOX, M(0xd9d2c3), st.x, y + 1.4, st.z, 7, 2.8, 5);
+        part(BOX, MAT.roof, st.x, y + 2.95, st.z, 7.8, 0.25, 5.8);
+        part(BOX, M(0x2a2f36), st.x, y + 1.2, st.z + 2.51, 3, 1.1, 0.04);   // the serving window
+      }
+      const sg = project(30.38464, -84.79584, map.size);
+      parkSign(sg.x, sg.z, signFace([['HOSFORD', 180], ['RECREATIONAL CENTER', 110], ['Liberty County Recreation', 64]], '#1e4d2b', 1024, 560), 3.6, 2.0);
     }
   }
 
