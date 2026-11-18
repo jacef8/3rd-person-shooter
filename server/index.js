@@ -31,7 +31,7 @@ import {
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
-  levelFromXp, xpForLevel, MAX_LEVEL, unlocksAt, XP, ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
+  levelFromXp, xpForLevel, MAX_LEVEL, unlocksAt, XP, ARCHETYPES, MODELS, modelOf, gunLabel, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, investedCost, placementProblem } from '../shared/building.js';
@@ -142,6 +142,8 @@ Object.assign(db, { seed: SEED, version: DB_VERSION, size: WORLD_SIZE });
   const walk = (o, depth = 0) => {
     if (!o || typeof o !== 'object' || depth > 8) return;
     if (o.kind === 'weapon' && OLD[o.archetype]?.includes(o.name) && ARCHETYPES[o.archetype]) o.name = ARCHETYPES[o.archetype].label;
+    // Made before there were real guns in a class: it's the class's first one (an AR-15, a deer rifle).
+    if (o.kind === 'weapon' && MODELS[o.archetype] && !o.model) { o.model = modelOf(o); if (o.name === ARCHETYPES[o.archetype].label) o.name = gunLabel(o.archetype, o.model); }
     for (const v of Array.isArray(o) ? o : Object.values(o)) if (v && typeof v === 'object') walk(v, depth + 1);
   };
   walk(db);
@@ -415,7 +417,7 @@ function devKit(p) {
   inv.secondary ??= makeWeapon('sidearm');
   inv.armor ??= makeArmor('heavy');
   const all = () => [inv.primary, inv.primary2, inv.secondary, inv.armor, ...inv.pack].filter(Boolean);
-  for (const a of Object.keys(ARCHETYPES)) if (!all().some((i) => i.kind === 'weapon' && i.archetype === a)) inv.pack.push(makeWeapon(a));
+  for (const a of Object.keys(ARCHETYPES)) for (const m of MODELS[a] ? Object.keys(MODELS[a]) : [undefined]) if (!all().some((i) => i.kind === 'weapon' && i.archetype === a && (!m || modelOf(i) === m))) inv.pack.push(makeWeapon(a, {}, 'factory', m));   // every real gun too
   for (const a of Object.keys(ARMORS)) if (!all().some((i) => i.kind === 'armor' && i.type === a)) inv.pack.push(makeArmor(a));
   const upTo = (n, test, make) => { for (let k = inv.pack.filter(test).length; k < n; k++) inv.pack.push(make()); };
   upTo(3, (i) => i.kind === 'medkit', () => makeConsumable('medkit'));
@@ -545,7 +547,7 @@ const ARCHETYPE_KEYS = ['sidearm', 'smg', 'carbine', 'shotgun', 'dmr', 'lmg'];
 const GUN_SLOTS = ['primary', 'primary2', 'secondary'];
 function activeWeapon(p) { return p.inv[p.active] || p.inv.primary || p.inv.primary2 || p.inv.secondary || null; }
 /** The guns you're carrying but not holding (slung on your back, or the sidearm in its holster). */
-function stowedGuns(p) { return GUN_SLOTS.filter((s) => s !== p.active && p.inv[s]).map((s) => ({ slot: s, a: p.inv[s].archetype, parts: p.inv[s].parts, paint: p.inv[s].paint })); }
+function stowedGuns(p) { return GUN_SLOTS.filter((s) => s !== p.active && p.inv[s]).map((s) => ({ slot: s, a: p.inv[s].archetype, m: modelOf(p.inv[s]) || undefined, parts: p.inv[s].parts, paint: p.inv[s].paint })); }
 function stats(p) { return weaponStats(activeWeapon(p)); }
 function level(p) { return levelFromXp(p.xp || 0); }
 function hasField(p, id) { return (p.field || []).includes(id); }
@@ -1027,7 +1029,7 @@ function closeHotZone(z) {
 /** A gun with rare parts already fitted: the best that fits it in each slot, one or two steps down at random. */
 function rareWeapon() {
   const arche = pick(['carbine', 'dmr', 'lmg', 'smg', 'shotgun']);
-  const w = makeWeapon(arche);
+  const w = makeWeapon(arche, {}, 'factory', 'random');
   w.parts = { ...(w.parts || {}) };
   for (const slot of SLOTS) {
     const fits = Object.entries(PARTS).filter(([id, pt]) => pt.slot === slot && partFits(id, arche) && pt.level >= 5).sort((a, b) => b[1].level - a[1].level);
@@ -1550,7 +1552,7 @@ function pawnCase(now = Date.now()) {
     const have = P.stock.length;
     for (let i = have; i < (have ? have + 1 : PAWN.stockStart.length); i++) {
       const k = PAWN.stockStart[(i + Math.floor(now / 60000)) % PAWN.stockStart.length];
-      P.stock.push(PAWN.armorValue[k] ? makeArmor(k) : makeWeapon(k));
+      P.stock.push(PAWN.armorValue[k] ? makeArmor(k) : makeWeapon(k, {}, 'factory', 'random'));
     }
     P.restockAt = now + PAWN.restockMinutes * 60000;
   }
@@ -3454,7 +3456,7 @@ function killBot(b, attacker, headshotKill) {
   }
   const res = b.kind === 'hvt' ? { ammo: 60, parts: 40, tech: 20, salvage: 30, intel: 2 } : { ammo: 30, parts: 15, tech: 5, salvage: 8, intel: b.serial % 2 };
   // What they carried is yours to take: their gun, and a Lieutenant's plate carrier.
-  const gear = [makeWeapon(b.arche || 'carbine'), ...(b.kind === 'hvt' ? [makeArmor('medium')] : []), ...(b.serial % 3 === 0 ? [makeConsumable('medkit')] : []),
+  const gear = [makeWeapon(b.arche || 'carbine', {}, 'factory', 'random'), ...(b.kind === 'hvt' ? [makeArmor('medium')] : []), ...(b.serial % 3 === 0 ? [makeConsumable('medkit')] : []),
     ...(b.kind === 'hvt' && Math.random() < FLARE.lieutenantChance ? [makeFlare()] : [])];
   dropBag(b.x, b.z, gear, res, b.kind === 'hvt' ? 'Lieutenant\'s body' : 'Rogue\'s body');
   markAssist(b, attacker);
@@ -4506,7 +4508,7 @@ function gunsmithAction(p, msg) {
     if (!roomInPack && stash.items.length >= claimCap(c)) return toast(p, 'Backpack and stash are full');
     const cost = Math.round(def.cost * (1 - UPGRADES.workbench.tiers[stash.upg.workbench].discount));
     if (!spend(p, { parts: cost })) return toast(p, `Needs ${cost} parts`);
-    const item = isArmor ? makeArmor(msg.type) : makeWeapon(msg.type);
+    const item = isArmor ? makeArmor(msg.type) : makeWeapon(msg.type, {}, 'factory', typeof msg.model === 'string' ? msg.model : undefined);
     if (roomInPack) p.inv.pack.push(item); else stash.items.push(item);
     if (cost > 0) award(p, XP.build, `Built ${item.name}`);   // a free sidearm teaches nothing
     toast(p, `Built ${item.name}${roomInPack ? '' : ' (sent to stash)'}`);
@@ -5484,7 +5486,7 @@ const loop = setInterval(() => {
       aim: p.aiming && !p.dead ? 1 : 0,
       ...(p.sprint && !p.dead ? { sp: 1 } : {}),   // sprinting: gun put away
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,
-      gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
+      gun: activeWeapon(p) ? { a: activeWeapon(p).archetype, m: modelOf(activeWeapon(p)) || undefined, parts: activeWeapon(p).parts, paint: activeWeapon(p).paint } : null,
       stowed: stowedGuns(p),
       rl: p.reloadUntil > now ? Math.round(p.reloadUntil - now) : undefined,   // reloading: ms left
       ...actionView(p, now),   // doing something that takes a while (client/actions.js poses it)

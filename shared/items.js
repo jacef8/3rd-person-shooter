@@ -41,6 +41,27 @@ export const GADGETS = gadgetData.gadgets;
 // damage, range (m), rpm, mag, reloadMs, hipSpread, adsSpread (radians), recoil (pitch kick per shot),
 // handling (0-100: ADS speed + swap), mobility (move speed multiplier).
 export const ARCHETYPES = arsenal.archetypes;
+/** Real guns inside a class (AR-15 and AK-47 assault rifles; deer rifle and Mini-14 marksman rifles). */
+export const MODELS = Object.fromEntries(Object.entries(arsenal.models || {}).filter(([k]) => k !== '_about'));
+/** Which real gun a weapon is (its class's first one for guns made before there were models). */
+export function modelOf(item) {
+  const list = MODELS[item?.archetype];
+  if (!list) return null;
+  return list[item.model] ? item.model : Object.keys(list)[0];
+}
+/** A model of `archetype`: `want` if it's one of them, picked by weight for 'random', else the class's first. */
+export function pickModel(archetype, want) {
+  const list = MODELS[archetype];
+  if (!list) return undefined;
+  if (want && list[want]) return want;
+  if (want !== 'random') return Object.keys(list)[0];
+  const ks = Object.keys(list), tot = ks.reduce((n, k) => n + (list[k].weight || 1), 0);
+  let r = Math.random() * tot;
+  for (const k of ks) { r -= list[k].weight || 1; if (r <= 0) return k; }
+  return ks[0];
+}
+/** What a gun is called: its model's name if it has one. */
+export const gunLabel = (archetype, model) => MODELS[archetype]?.[model]?.label || ARCHETYPES[archetype].label;
 
 export const SLOTS = arsenal.slots;
 export const SLOT_LABELS = arsenal.slotLabels;
@@ -82,8 +103,9 @@ export function newItemId() {
   return `${Date.now().toString(36)}${idCounter.toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
 }
 
-export function makeWeapon(archetype, parts = {}, paint = 'factory') {
-  return { id: newItemId(), kind: 'weapon', archetype, name: ARCHETYPES[archetype].label, parts: { ...DEFAULT_PARTS, ...parts }, paint };
+export function makeWeapon(archetype, parts = {}, paint = 'factory', model) {
+  const m = pickModel(archetype, model);
+  return { id: newItemId(), kind: 'weapon', archetype, ...(m ? { model: m } : {}), name: gunLabel(archetype, m), parts: { ...DEFAULT_PARTS, ...parts }, paint };
 }
 
 export function makeArmor(type) {
@@ -127,6 +149,11 @@ export function weaponStats(item) {
     armor: 1, flesh: 1,    // ammunition: damage multiplier against armor, and against health
     thermal: false, autoTag: false, rangefinder: false, glint: false, subsonic: false,   // what a sight or a load can do
   };
+  // The real gun inside the class (an AK-47 hits harder than an AR-15; a Mini-14 holds 20).
+  const mm = MODELS[item.archetype]?.[modelOf(item)]?.mods || {};
+  for (const [k, v] of Object.entries(mm)) {
+    if (k.endsWith('Mul')) { const key = k.slice(0, -3); s[key] = (key in s ? s[key] : 1) * v; } else s[k] = v;
+  }
   for (const slot of SLOTS) {
     const id = item.parts?.[slot] || DEFAULT_PARTS[slot];
     if (!partFits(id, item.archetype)) continue;

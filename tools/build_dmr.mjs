@@ -1,4 +1,5 @@
-// The marksman rifle model: Quaternius "Ultimate Guns" SniperRifle_6 (CC0; client/models/guns/CREDITS.md),
+// Scoped rifles with the scope taken off: the marksman rifles (deer rifle: SniperRifle_6; Mini-14: SniperRifle_2),
+// from Quaternius "Ultimate Guns" (CC0; client/models/guns/CREDITS.md),
 // a wood-stocked bolt-style hunting rifle, with its built-in scope taken off (the lens pieces, and the
 // tube and rings above the receiver) so the gunsmith's sights go on it like on every other gun.
 // Usage: node tools/build_dmr.mjs <SniperRifle_6.glb> [out = client/models/guns/dmr.glb]

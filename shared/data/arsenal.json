@@ -17,6 +17,17 @@
       "lmg"
     ]
   },
+  "models": {
+    "_about": "Real guns inside a class. Each has its own model and changes the class's numbers: Mul multiplies, plain numbers replace (mag) or add. The first is the default (old saves, and anything made without one). weight: how often it turns up in loot and shops.",
+    "carbine": {
+      "ar15": { "label": "AR-15", "file": "carbine", "weight": 3, "desc": "5.56, light and easy to control.", "mods": {} },
+      "ak47": { "label": "AK-47", "file": "ak47", "weight": 2, "desc": "7.62, hits harder and kicks harder, a touch slower.", "mods": { "damageMul": 1.18, "rpmMul": 0.94, "recoilMul": 1.25, "hipSpreadMul": 1.1, "rangeMul": 0.9 } }
+    },
+    "dmr": {
+      "deer": { "label": "Deer Rifle", "file": "dmr", "weight": 3, "desc": "Bolt-action .30-06: five rounds, slow to work, hits like a truck at long range.", "mods": { "damageMul": 1.05, "rpmMul": 0.55, "mag": 5, "rangeMul": 1.15, "recoilMul": 1.1 } },
+      "mini14": { "label": "Mini-14", "file": "mini14", "weight": 2, "desc": "Semi-auto .223 ranch rifle: twenty rounds, quick follow-up shots, lighter hits.", "mods": { "damageMul": 0.6, "rpmMul": 1.9, "mag": 20, "rangeMul": 0.8, "recoilMul": 0.7, "reloadMsMul": 0.85 } }
+    }
+  },
   "archetypes": {
     "sidearm": {
       "label": "Sidearm",

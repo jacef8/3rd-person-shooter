@@ -4,7 +4,7 @@ import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy, LADDER, ladderAt, drawMs } from '/shared/world.js';
 import {
-  ARCHETYPES, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
+  ARCHETYPES, MODELS, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
@@ -953,7 +953,7 @@ function setCharacterStowed(g, list) {
   }
 }
 /** Your own stowed guns, from your inventory. */
-function stowedOf(me) { return ['primary', 'primary2', 'secondary'].filter((sl) => sl !== me.active && me.inv[sl]).map((sl) => ({ slot: sl, a: me.inv[sl].archetype, parts: me.inv[sl].parts, paint: me.inv[sl].paint })); }
+function stowedOf(me) { return ['primary', 'primary2', 'secondary'].filter((sl) => sl !== me.active && me.inv[sl]).map((sl) => ({ slot: sl, a: me.inv[sl].archetype, m: me.inv[sl].model, parts: me.inv[sl].parts, paint: me.inv[sl].paint })); }
 
 // ------------------------------------------------------------------ gun effects: flash, empties, kick, reloads
 /** A star-shaped muzzle flash, drawn once into a little texture. */
@@ -1868,7 +1868,7 @@ function handle(m) {
       if (build.on) renderBuildBar();
       document.body.classList.toggle('cloaked', !!m.camoActive);
       updateGadgetBar();
-      setCharacterGun(selfMesh, m.inv[m.active] ? { a: m.inv[m.active].archetype, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
+      setCharacterGun(selfMesh, m.inv[m.active] ? { a: m.inv[m.active].archetype, m: m.inv[m.active].model, parts: m.inv[m.active].parts, paint: m.inv[m.active].paint } : null);
       setCharacterStowed(selfMesh, stowedOf(m));
       break;
     }
@@ -3226,7 +3226,7 @@ function renderStatBars(item, preview) {
 }
 
 function setPreviewModel(item) {
-  const gun = item ? { a: item.archetype, parts: item.parts, paint: item.paint } : null;
+  const gun = item ? { a: item.archetype, m: item.model, parts: item.parts, paint: item.paint } : null;
   const key = gunKey(gun);
   if (key === gs.modelKey) return;
   gs.modelKey = key;
@@ -3277,7 +3277,7 @@ function renderGunsmith() {
     setPreviewModel(null);
     $('gsStats').innerHTML = ''; $('gsNumbers').innerHTML = 'Build a new gun or armor from parts. It goes in your backpack.';
     const discount = UPGRADES.workbench.tiers[state.container?.upg?.workbench || 0].discount;
-    const blueprint = (into, label, def, id, action, type) => {
+    const blueprint = (into, label, def, id, action, type, model) => {
       const locked = !isUnlocked(def, id, me);
       const cost = Math.round(def.cost * (1 - discount));
       const row = document.createElement('div');
@@ -3287,12 +3287,16 @@ function renderGunsmith() {
       b.className = 'ghost';
       b.textContent = locked ? lockLabel(def) : cost ? `Build · ${cost}` : 'Build · free';
       b.disabled = locked || totalParts < cost;
-      b.onclick = () => send({ t: 'gunsmith', action, type });
+      b.onclick = () => send({ t: 'gunsmith', action, type, ...(model ? { model } : {}) });
       row.append(b);
       into.append(row);
     };
     colHead(slotsEl, 'Guns');
-    for (const [k, a] of Object.entries(ARCHETYPES)) blueprint(slotsEl, a.label, a, k, 'build', k);
+    for (const [k, a] of Object.entries(ARCHETYPES)) {
+      // Classes with several real guns: one line each (AR-15 and AK-47; deer rifle and Mini-14).
+      if (MODELS[k]) for (const [mk, md] of Object.entries(MODELS[k])) blueprint(slotsEl, `${md.label} <small>${a.label}</small>`, a, k, 'build', k, mk);
+      else blueprint(slotsEl, a.label, a, k, 'build', k);
+    }
     colHead(opts, 'Armor');
     for (const [k, a] of Object.entries(ARMORS)) blueprint(opts, `${a.name} (armor ${a.armor})`, a, k, 'buildArmor', k);
     return;

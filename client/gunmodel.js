@@ -17,12 +17,18 @@ const REAL = {
   lmg:     { file: 'lmg', len: 0.98, grip: [0.067, 0.32], fore: [0.517, 0.6], bore: 0.70, rail: 0.82, optic: 0.25, mag: [0.27, 0.19] },
   sidearm: { file: 'sidearm', len: 0.19, grip: [0.18, 0.38], fore: [0.24, 0.3], bore: 0.94, rail: 0.99, optic: 0.5, mag: [0.18, 0.2] },
 };
+// Real guns inside a class (shared/data/arsenal.json "models"): their own model and measurements.
+const REAL_MODEL = {
+  ak47:   { file: 'ak47', len: 0.88, grip: [0.30, 0.46], fore: [0.68, 0.75], bore: 0.90, rail: 0.97, optic: 0.44, mag: [0.46, 0.34] },   // wood furniture
+  mini14: { file: 'mini14', len: 0.95, grip: [0.30, 0.52], fore: [0.55, 0.68], bore: 0.85, rail: 0.91, optic: 0.41, mag: [0.334, 0.48] },   // synthetic stock
+};
+const realOf = (a, m) => REAL_MODEL[m] || REAL[a];
 const PARTS3D = ['scope1', 'scope2', 'scope3', 'silencer', 'silencerShort', 'grip'];
 const realScenes = {};
 let realReady = false;
 const loader = new GLTFLoader();
 /** Fetch the real gun models (small, ~0.6 MB together). Resolves once they're in. */
-export const gunModelsReady = Promise.all([...new Set(Object.values(REAL).map((r) => r.file)), ...PARTS3D].map((n) =>
+export const gunModelsReady = Promise.all([...new Set([...Object.values(REAL), ...Object.values(REAL_MODEL)].map((r) => r.file)), ...PARTS3D].map((n) =>
   loader.loadAsync(`/models/guns/${n}.glb`).then((g) => { realScenes[n] = g.scene; })))
   .then(() => { realReady = true; }).catch((e) => console.warn('gun models', e));
 /** A copy of a loaded model turned to lie along +Z (its muzzle / front at +Z), `len` metres long, with
@@ -132,7 +138,7 @@ export function buildGunModel(gun) {
     Object.assign(g.userData, { muzzle: new THREE.Vector3(0, 0, 0.9), back: new THREE.Vector3(0, 0, -0.38), eject: null, mag: null, archetype: a, grip: new THREE.Vector3(0, -0.15, 0.05), fore: new THREE.Vector3(0, -0.07, 0.38) });
     return g;
   }
-  if (realReady && REAL[a]) return buildRealGun(g, gun, a, parts);
+  if (realReady && REAL[a]) return buildRealGun(g, gun, a, parts);   // (gun.m: which real gun, for classes with several)
   const [L, B, H] = SIZE[a] || SIZE.carbine;
   const paint = skinMaterial(gun.paint);
   const add = (mesh, explode = [0, 0, 0], slot = 'body') => {
@@ -282,7 +288,7 @@ export function buildGunModel(gun) {
 /** A gun from its real model, with the gunsmith's parts on it. Same frame and anchors as the built
  *  ones: +Z forward, the pistol grip near the origin. */
 function buildRealGun(g, gun, a, parts) {
-  const R = REAL[a];
+  const R = realOf(a, gun.m || gun.model);
   const [body, H] = fitAlongZ(R.file, R.len);
   const L = R.len;
   // Put the hand's place on the grip where the old guns had it, so the hands and the aim line up.
@@ -395,6 +401,6 @@ export function setExplode(g, t, highlightSlot = null) {
   }
 }
 
-export function gunKey(gun) { return gun ? JSON.stringify([gun.a || gun.archetype, gun.parts, gun.paint, realReady]) : ''; }
+export function gunKey(gun) { return gun ? JSON.stringify([gun.a || gun.archetype, gun.m || gun.model || '', gun.parts, gun.paint, realReady]) : ''; }
 /** Whether the real models are in (part of any cache key for a built gun, so they rebuild once they are). */
 export function gunsReal() { return realReady; }

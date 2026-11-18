@@ -6,9 +6,11 @@ domain). Taken from the copy in https://github.com/series-ai/jam-ready-assets
 
 | File | Source | Used for |
 | --- | --- | --- |
-| carbine.glb | Guns/AssaultRifle2_1 | Assault rifle (game key `carbine`) |
+| carbine.glb | Guns/AssaultRifle2_1 | AR-15 (assault rifle; game key `carbine`) |
+| ak47.glb | Guns/AssaultRifle_2 | AK-47 (assault rifle) |
 | smg.glb | Guns/SubmachineGun_2 | SMG |
-| dmr.glb | Guns/SniperRifle_6, scope taken off by `tools/build_dmr.mjs` | Marksman rifle |
+| dmr.glb | Guns/SniperRifle_6, scope taken off by `tools/build_dmr.mjs` | Deer rifle (marksman rifle) |
+| mini14.glb | Guns/SniperRifle_2, scope taken off by `tools/build_dmr.mjs` | Mini-14 (marksman rifle) |
 | shotgun.glb | Guns/Shotgun_1 | Shotgun |
 | lmg.glb | Guns/AssaultRifle2_3 | LMG |
 | sidearm.glb | Guns/Pistol_5 | Sidearm |
@@ -16,5 +18,5 @@ domain). Taken from the copy in https://github.com/series-ai/jam-ready-assets
 | silencer.glb, silencerShort.glb | Accessories/Silencer_1, Silencer_Short | Suppressors |
 | grip.glb | Accessories/Grip | Vertical grips |
 
-Unchanged files apart from dmr.glb; `client/gunmodel.js` turns, scales and places them, and puts the gunsmith's other
+Unchanged files apart from dmr.glb and mini14.glb; `client/gunmodel.js` turns, scales and places them, and puts the gunsmith's other
 parts on them. The rocket launcher is still built in code.

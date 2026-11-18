@@ -23,7 +23,7 @@ const angle = (o, a, b) => { const u = [a[0] - o[0], a[1] - o[1], a[2] - o[2]], 
 test('steady single shots are dead-on; rushed ones group tight; automatics stay in their cone', async (t) => {
   const spot = map.campSites.find((c) => map.terrain.height(c.x, c.z) > 1 && !map.grid.near(c.x, c.z + 20, 25).length);
   const A = 'ef'.repeat(16);
-  const dmr = makeWeapon('dmr'), carbine = makeWeapon('carbine');
+  const dmr = makeWeapon('dmr', {}, 'factory', 'deer'), carbine = makeWeapon('carbine');   // the deer rifle: a bolt-action, about a shot a second
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzacc-')), 'w.json');
   fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Shooter', x: spot.x, z: spot.z, yaw: 0, hp: 100, armor: 0, inv: { primary: dmr, primary2: carbine, secondary: null, armor: null, pack: [] }, ammo: 300, mags: { [dmr.id]: 10, [carbine.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(15), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [] } } }));
   const port = 33300 + Math.floor(Math.random() * 300);
@@ -48,10 +48,10 @@ test('steady single shots are dead-on; rushed ones group tight; automatics stay 
     return angle(m.o, m.hits[0], target);
   };
   // Steady: aimed, still, rested between shots.
-  for (let k = 0; k < 4; k++) { const a = await shoot(); assert.ok(a < 5e-4, `steady shot ${k} off by ${a.toFixed(5)} rad`); await sleep(800); }
+  for (let k = 0; k < 4; k++) { const a = await shoot(); assert.ok(a < 5e-4, `steady shot ${k} off by ${a.toFixed(5)} rad`); await sleep(1400); }
   // Rushed: right after the last one, still tight.
   const ads = weaponStats(dmr).adsSpread;
-  for (let k = 0; k < 3; k++) { const a = await shoot(); assert.ok(a <= ads * 0.35 + 5e-4, `rushed shot off by ${a.toFixed(5)}`); await sleep(560); }
+  for (let k = 0; k < 3; k++) { const a = await shoot(); assert.ok(a <= ads * 0.35 + 5e-4, `rushed shot off by ${a.toFixed(5)}`); await sleep(950); }
   // An automatic: inside its cone.
   send({ t: 'weapon', slot: 'primary2' });
   await sleep(600);
