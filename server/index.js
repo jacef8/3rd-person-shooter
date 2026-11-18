@@ -592,7 +592,7 @@ function privateState(p) {
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
     hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })), hideoutsAllowed: hideoutAllowance(p).allowed, hideoutNext: hideoutAllowance(p).next,
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
-    camoOn: !!p.camoOn, camoActive: camoActive(p), sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
+    camoOn: !!p.camoOn, camoActive: camoActive(p), camoUntil: p.camoOn ? p.camoUntil || 0 : 0, camoReadyAt: p.camoReadyAt || 0, sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying, hotLoose: !!p.hotLoose,
     food: Math.round(p.food ?? 0), foodMax: HOMESTEAD.hunger.max,
     boat: p.boat ? { id: p.boat, seat: p.seat } : null,
@@ -2671,6 +2671,13 @@ function rally(p) {
 
 // ---------------------------------------------------------------- tech: camo, tagging, sensors, hacking
 function camoActive(p) { return !!p.camoOn && !p.dead && p.tech > 0 && (p.speed || 0) < 3.2 && Date.now() > (p.camoBreakUntil || 0); }
+/** Camo off (run out or switched off): it recharges for as long as it was used, in proportion. */
+function endCamo(p, now) {
+  if (!p.camoOn) return;
+  const dur = GADGETS.camo.durationMs, used = dur - Math.max(0, (p.camoUntil || 0) - now);
+  p.camoOn = false;
+  p.camoReadyAt = now + GADGETS.camo.cooldownMs * Math.max(0.3, Math.min(1, used / dur));
+}
 function breakCamo(p, ms) { if (p.camoOn) p.camoBreakUntil = Math.max(p.camoBreakUntil || 0, Date.now() + ms); }
 function expose(target, key, ms) { target.exposed ??= {}; target.exposed[key] = Math.max(target.exposed[key] || 0, Date.now() + ms); }
 function exposedTo(target, viewer) { return (target.exposed?.[squadKey(viewer)] || 0) > Date.now(); }
@@ -5341,11 +5348,15 @@ wss.on('connection', (ws) => {
       case 'sensor': return !p.dead && throwSensor(p, msg);
       case 'stun': return !p.dead && throwStun(p, msg);
       case 'frag': return !p.dead && !p.downed && throwFrag(p, msg);
-      case 'camo':
+      case 'camo': {   // a charge that runs out, then recharges (shared/data/gadgets.json)
         if (p.dead) return;
         if (level(p) < GADGETS.camo.level) return toast(p, `Optical camo unlocks at level ${GADGETS.camo.level}`);
-        if (!p.camoOn && p.tech <= 0) return toast(p, 'No tech to power camo');
-        p.camoOn = !p.camoOn; dirty(p); return;
+        const now = Date.now();
+        if (p.camoOn) { endCamo(p, now); dirty(p); return; }
+        if (now < (p.camoReadyAt || 0)) return toast(p, `Camo recharging: ready in ${Math.ceil((p.camoReadyAt - now) / 1000)}s`);
+        if (p.tech <= 0) return toast(p, 'No tech to power camo');
+        p.camoOn = true; p.camoUntil = now + GADGETS.camo.durationMs; dirty(p); return;
+      }
       case 'leaderboard': return send(p.ws, leaderboard());
       case 'build': return !p.dead && handleBuild(p, msg);
       case 'dismantle': return !p.dead && dismantle(p, msg);
@@ -5458,10 +5469,11 @@ const loop = setInterval(() => {
     scheduleDrop(now);
     for (const [id, d] of drops) if (d.expires < now) { drops.delete(id); sendEvents(); }
     for (const p of players.values()) {
+      if (p.camoOn && now >= (p.camoUntil || 0)) { endCamo(p, now); dirty(p); toast(p, `Camo ran out: recharging (${Math.round(GADGETS.camo.cooldownMs / 1000)}s)`); continue; }
       if (!camoActive(p)) continue;
       p.camoDrain = (p.camoDrain || 0) + (hasField(p, 'camoMk2') ? 0.25 : 0.5);
       if (p.camoDrain >= 1) { p.camoDrain -= 1; p.tech = Math.max(0, p.tech - 1); dirty(p); }
-      if (p.tech <= 0) { p.camoOn = false; toast(p, 'Camo offline — out of tech'); }
+      if (p.tech <= 0) { endCamo(p, now); toast(p, 'Camo offline: out of tech'); }
     }
     for (const [tok, inv] of invites) if (inv.expires < now) invites.delete(tok);
     refillLoot(now);

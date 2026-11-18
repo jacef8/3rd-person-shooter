@@ -252,6 +252,14 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   // A sensor grenade from Eve's side would expose him again; here Frank just fires, which breaks camo.
   frank.send({ t: 'shoot', dir: [0, 0, 1] });
   await until(() => eve.snap.players.some((p) => p.id === frank.welcome.id));
+  // Camo is a charge, not a toggle you can leave on: it shows how long it has left, and switched off it
+  // has to recharge before it comes back on.
+  assert.ok(frank.you.camoUntil > Date.now() + 15000, 'about 25 s of camo');
+  frank.send({ t: 'camo' });
+  await until(() => !frank.you.camoOn && frank.you.camoReadyAt > Date.now());
+  frank.send({ t: 'camo' });
+  await frank.got((m) => m.t === 'toast' && /Camo recharging: ready in \d+s/.test(m.text));
+  assert.ok(!frank.you.camoOn);
 
   // Intel banking: Grace stands at her own stash with 5 intel and uploads it for XP.
   const grace = await conn('Grace', TOK_G);

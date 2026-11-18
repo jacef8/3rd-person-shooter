@@ -4151,7 +4151,7 @@ function updateGadgetBar() {
       : state.grenade === 'sensor'
         ? ['G', 'Sensor ⇄', GADGETS.sensor.level, me.sensorReadyAt > now ? 'cooldown' : me.tech < GADGETS.sensor.cost ? 'notech' : '']
         : ['G', 'Frag ⇄', 1, (me.parts || 0) < COMBAT_RULES.frag.costParts ? 'notech' : ''],
-    ['V', me.camoOn ? (me.camoActive ? 'Camo ON' : 'Camo (move slow)') : 'Camo', GADGETS.camo.level, me.camoOn ? 'on' : ''],
+    ['V', me.camoOn ? `${me.camoActive ? 'Camo' : 'Camo (go slow)'} ${Math.max(0, Math.ceil((me.camoUntil - now) / 1000))}s` : me.camoReadyAt > now ? `Camo ${Math.ceil((me.camoReadyAt - now) / 1000)}s` : 'Camo', GADGETS.camo.level, me.camoOn ? 'on' : me.camoReadyAt > now ? 'cooldown' : ''],
     ['T', 'Rally', GADGETS.rally.level, !leader ? 'notleader' : me.rallyReadyAt > now ? 'cooldown' : ''],
     ['B', 'Ping', 1, state.squad.id ? '' : 'notleader'],
   ];

@@ -27,7 +27,9 @@
       "level": 4,
       "cost": 1,
       "key": "V",
-      "desc": "Near-invisible while crouched or moving slowly. Drains 1 tech every 2s. Firing or taking damage breaks it."
+      "desc": "Near-invisible for 25s while still or moving slowly (a walk, crouched or prone). Drains 1 tech every 2s. Firing, taking damage or sprinting breaks it for a moment. Then it recharges: 45s after a full run, less if you switch it off early.",
+      "durationMs": 25000,
+      "cooldownMs": 45000
     },
     "doorHack": {
       "name": "Lock Bypass",

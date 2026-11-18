@@ -48,8 +48,8 @@ export function clockLabel(c) {
 
 const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const C = (h) => new THREE.Color(h);
-const DAY_SKY = C(0xdfe8f0), NIGHT_SKY = C(0x3a4f7a), DAY_GROUND = C(0x3a3530), NIGHT_GROUND = C(0x10121a);
-const SUN_HIGH = C(0xfff1dc), SUN_LOW = C(0xffa04a), MOON = C(0x9fb6e6);
+const DAY_SKY = C(0xdfe8f0), NIGHT_SKY = C(0x6478a8), DAY_GROUND = C(0x3a3530), NIGHT_GROUND = C(0x262a36);
+const SUN_HIGH = C(0xfff1dc), SUN_LOW = C(0xffa04a), MOON = C(0xaec2ec);
 const HORIZON_DAY = C(0xbfd3e3), HORIZON_DUSK = C(0xd9a27a), HORIZON_NIGHT = C(0x0d1424), HORIZON_GREY = C(0x9aa3ab);
 
 /**
@@ -107,10 +107,10 @@ export function createEnvironment(o) {
       sun.position.set(target.x + up.x * 90, target.y + up.y * 90, target.z + up.z * 90);
       sun.target.position.copy(target);
       sun.color.copy(SUN_LOW).lerp(SUN_HIGH, smooth(0.02, 0.35, el)).lerp(MOON, 1 - day);
-      sun.intensity = (2.1 * day * sunK) + (0.7 * (1 - day) * (0.5 + 0.5 * sunK));   // moonlight bright enough to play by
+      sun.intensity = (2.1 * day * sunK) + (1.35 * (1 - day) * (0.5 + 0.5 * sunK));   // moonlight: a full moon's, enough to see and shoot by
       hemi.color.copy(NIGHT_SKY).lerp(DAY_SKY, day).lerp(HORIZON_GREY, (1 - skyK) * 0.5 * day);
       hemi.groundColor.copy(NIGHT_GROUND).lerp(DAY_GROUND, day);
-      hemi.intensity = (0.85 * day * (0.75 + 0.25 * skyK) + 0.85 * (1 - day)) + flash * 2.5;
+      hemi.intensity = (0.85 * day * (0.75 + 0.25 * skyK) + 1.25 * (1 - day)) + flash * 2.5;
       // Sky: the scattering model follows the sun; clouds by the weather; a horizon colour to match.
       if (u) {
         u.sunPosition.value.copy(dir);
@@ -130,7 +130,7 @@ export function createEnvironment(o) {
       stars.position.set(camera.position.x, 0, camera.position.z);
       moon.position.set(camera.position.x + moonDir.x * 45000, moonDir.y * 45000, camera.position.z + moonDir.z * 45000); moon.lookAt(camera.position);
       moon.material.opacity = Math.max(0, (1 - day) * (1 - clouds * 0.8)) * (fog > 0.008 ? 0 : 1);
-      renderer.toneMappingExposure = 1.05;
+      renderer.toneMappingExposure = 1.05 + 0.25 * (1 - day);   // eyes adjusted to the dark
       // Rain streaks around the camera.
       rainMat.opacity = rainK * (0.35 + 0.25 * day);
       rain.visible = rainK > 0.02;
