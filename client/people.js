@@ -242,7 +242,10 @@ export function handsOnGun(holder, rig, gun, leftTo = null) {
   const gq = gun.getWorldQuaternion(new THREE.Quaternion());
   const back = V().set(0, 0, -1).transformDirection(gun.matrixWorld), gdown = V().set(0, -1, 0).transformDirection(gun.matrixWorld);
   const grip = gun.localToWorld(gun.userData.grip.clone()).addScaledVector(back, 0.05).addScaledVector(gdown, 0.03);
-  const fore = leftTo ? leftTo.clone() : gun.localToWorld((gun.userData.fore || gun.userData.grip).clone()).addScaledVector(gdown, 0.04);
+  // A pistol: the left hand wraps round the right on the grip (there's no handguard to hold).
+  const pistol = gun.userData.archetype === 'sidearm';
+  const fore = leftTo ? leftTo.clone() : pistol ? grip.clone().addScaledVector(right, -0.045).addScaledVector(gdown, 0.015).addScaledVector(back, -0.01)
+    : gun.localToWorld((gun.userData.fore || gun.userData.grip).clone()).addScaledVector(gdown, 0.04);
   const down = V().set(0, -1, 0);
   const [R, L] = rig.arms;
   ik2(R.up, R.lo, R.tip, grip, grip.clone().addScaledVector(right, 0.6).addScaledVector(down, 0.8).addScaledVector(fwd, -0.3));
@@ -251,6 +254,16 @@ export function handsOnGun(holder, rig, gun, leftTo = null) {
   setWorldQuat(L.wrist, gq.clone().multiply(rig.hands[1]));
 }
 export const CURL = { r: 0, l: 0 };
+
+/** Taking a hit: the chest knocked back and twisted to one side (`k` 0…1…0 over the flinch). */
+export function flinch(holder, rig, k, side = 1) {
+  if (k <= 0.001) return;
+  const { B } = rig;
+  const right = V().set(-1, 0, 0).transformDirection(holder.matrixWorld);
+  _q.setFromAxisAngle(right, -0.22 * k); turnWorld(B.Spine1, _q);
+  _q.setFromAxisAngle(_up, 0.18 * k * side); turnWorld(B.Spine2, _q);
+  _q.setFromAxisAngle(right, -0.12 * k); turnWorld(B.Neck, _q);
+}
 
 /** Hands on a steering wheel, handlebars or reins: right hand to `R`, left to `L` (world points),
  *  elbows bent down and out. */

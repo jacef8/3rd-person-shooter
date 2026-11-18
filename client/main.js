@@ -17,7 +17,7 @@ import { withEdits } from '/shared/edits.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
 import { createPost } from '/post.js';
 import { Sky as EnvSky } from '/addons/objects/Sky.js';
-import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople } from '/people.js';
+import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople, flinch } from '/people.js';
 import { ACT_POSE, updateAction } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
@@ -1138,7 +1138,7 @@ function gunPose(g, c, now, adt) {
     if (left && u.leftBase != null) left.rotation.x += (u.leftBase - left.rotation.x) * Math.min(1, adt * 10);
   }
   // Reloading: the gun comes in toward the chest, nose up and rolled onto its side so the mag well faces you.
-  joint.rotation.set(-0.12 * u.kick - 0.45 * env, 0.35 * env, 1.05 * env);
+  joint.rotation.set(-0.12 * u.kick - 0.45 * env + (u.gunTilt || 0), 0.35 * env, 1.05 * env);
   joint.position.set(u.gunHome.x + 0.16 * env, u.gunHome.y + 0.04 * env, u.gunHome.z - 0.05 * u.kick - 0.08 * env);
 }
 function updateCharacterMesh(g, c, dt) {
@@ -1186,6 +1186,7 @@ function updateCharacterMesh(g, c, dt) {
     const cd = camera.position.distanceTo(g.position), detail = cd < 60 ? 1 : cd < 130 ? 0.3 : 0.1;
     const pitch = c.pitch || 0;
     const fine = animatePerson(g, u.rig, { speed: still || act ? 0 : Math.hypot(u.vx, u.vz), fwd: still ? 0 : fwd, side: still ? 0 : side, crouch: crouched || !!kneel, seated, armed, aiming: aimNow && !act, pitch: act ? 0 : pitch, detail }, adt);
+    if (fine && u.hitAt && now - u.hitAt < 380) flinch(g, u.rig, Math.sin(Math.min(1, (now - u.hitAt) / 380) * Math.PI), u.hitSide);
     const acting = fine && updateAction(g, act, c.ap || 0, adt);
     if (!fine && u.props) updateAction(g, null, 0, adt);
     // The gun rides on the chest, turned with the aim; up to the eye when aiming down the sights.
@@ -1193,7 +1194,15 @@ function updateCharacterMesh(g, c, dt) {
     if (fine) chestAt(g, u.rig, u.aimPivot.position);
     else u.aimPivot.position.set(0, 1.3 - 0.36 * (crouched ? 1 : 0), 0);
     u.aimPivot.rotation.x = -Math.max(-1.1, Math.min(1.1, pitch));
-    u.gunHome = (u.gunHome || new THREE.Vector3()).set(-0.17 + 0.07 * u.aimK, 0.17 * u.aimK, 0.26 - 0.02 * u.aimK);
+    // A rifle sits at the right shoulder (up to the eye when aiming). A pistol is held out in front in both
+    // hands: low and pointed down at the ground ahead when you're just carrying it, pushed out at eye
+    // height, arms near straight, when you aim or shoot.
+    const pistol = gunObj?.userData.archetype === 'sidearm';
+    if (pistol) u.gunHome = (u.gunHome || new THREE.Vector3()).set(-0.06 + 0.02 * u.aimK, -0.2 + 0.36 * u.aimK, 0.3 + 0.22 * u.aimK);
+    else u.gunHome = (u.gunHome || new THREE.Vector3()).set(-0.17 + 0.07 * u.aimK, 0.17 * u.aimK, 0.26 - 0.02 * u.aimK);
+    u.gunTilt = pistol ? 0.55 * (1 - u.aimK) : 0;   // (nose down at low ready)
+    // Hit: a flinch, the chest knocked back and twisted for a moment.
+    if (c.hp != null) { if (u.lastHp != null && c.hp < u.lastHp - 0.5 && !c.dead) { u.hitAt = now; u.hitSide = Math.random() < 0.5 ? -1 : 1; } u.lastHp = c.hp; }
     gunPose(g, c, now, adt);
     if (acting) {
       // (posed by updateAction)
@@ -5268,7 +5277,7 @@ function frame(now) {
   const myAct = state.hack ? { act: state.hack.kind, ap: Math.min(1, (nowP - state.hack.start) / state.hack.total) }
     : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) } : {};
   setHolstered(selfMesh, !!state.me && !state.me.boat && (state.sprint || now < (state.drawUntil || 0) - 150));   // gun on your back at a sprint
-  updateCharacterMesh(selfMesh, { ...myAct, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
+  updateCharacterMesh(selfMesh, { ...myAct, hp: state.me?.hp, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY() }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   for (const [, r] of state.players) updateCharacterMesh(r.mesh, smoothed(r), dt);
@@ -5407,7 +5416,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis, houseVis };
+window.__dz = { nadeFx, nadeArc, openGunsmith, state, send, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
