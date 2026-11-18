@@ -1369,6 +1369,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     }
     return out;
   }
+  // Bristol's Veterans Memorial Park is open lawn (its pavilion, flag and railroad loop: client/places.js);
+  // the land cover has it as woods, so keep the trees off it.
+  if (realStructs) { const vp = project(30.4214, -84.9789, size); reserve({ minX: vp.x - 48, minZ: vp.z - 48, maxX: vp.x + 62, maxZ: vp.z + 50 }); }
   grid.setLoader(NATURE_TILE, (tx, tz) => { for (const b of natureTile(tx, tz)) grid.insert(b); });
 
   // Labels for the map screen (only what's on this map).
@@ -1391,6 +1394,8 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...(infra?.places || []).filter(([lat, lon, kind]) => kind !== 'landing').map(([lat, lon, kind, text]) => ({ ...project(lat, lon, size), text, kind: 'place', place: kind })).filter(onMap),
     ...airstrips.map((a) => ({ text: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, kind: 'place', place: 'airstrip' })),
     ...shops.map((sh) => ({ text: sh.name, x: sh.x, z: sh.z, kind: 'place', place: sh.kind })),
+    // Bristol's Veterans Memorial Park (behind the civic center, with its railroad: client/places.js).
+    ...(realStructs ? [{ text: 'Veterans Memorial Park', ...project(30.4214, -84.9789, size), kind: 'place', place: 'park' }].filter(onMap) : []),
   ];
   return {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: decks, landmarks, labels, contacts, terminals,

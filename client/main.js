@@ -12,6 +12,7 @@ import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
 import { attachAnimal, animateAnimal, preloadAnimals } from '/animals.js';
 import { createTownDressing } from '/towns.js';
+import { createPlaces } from '/places.js';
 import { withCounty } from '/shared/county.js';
 import { withEdits } from '/shared/edits.js';
 import { createEnvironment, worldClock, clockLabel } from '/daynight.js';
@@ -83,6 +84,8 @@ let gfxMode = (() => {
   try {
     const v = localStorage.getItem('dz_gfx');
     if (v === 'fast' && !localStorage.getItem('dz_gfx_v2')) { localStorage.setItem('dz_gfx_v2', '1'); return 'full'; }
+    // A computer's built-in graphics (no graphics card): Medium, once; your own pick after that stands.
+    if (GPU_BUILTIN && !MOBILE && !localStorage.getItem('dz_gfx_igpu')) { localStorage.setItem('dz_gfx_igpu', '1'); if (v !== 'fast') { setTimeout(() => toast('Built-in graphics: set to Medium so it runs smoothly (Settings → Graphics to change)'), 4000); return 'balanced'; } }
     if (GFX[v]) return v;
   } catch { /* private mode */ }
   return 'full';
@@ -236,6 +239,7 @@ function initWorld(m) {
   const land = sampleLand(map, MOBILE ? 120 : 75);
   state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: MOBILE, land });
   state.towns = createTownDressing(scene, map, m.realData?.businesses, ground, m.realData?.hydrants, () => state.view?.setPaved((x, z) => state.towns.pavedAt(x, z)));
+  try { state.places = createPlaces(scene, map, ground); } catch (e) { console.warn('places', e); }   // town signs, parks (client/places.js)
   state.env = createEnvironment({ scene, far: state.view.far, sky: state.view.sky, sun, hemi, renderer, camera, towns: state.towns, thunder: (x, y, z) => sfx.boom(x, y, z) });
   applyGfx();
   state.view.setOwnHouse(m.houseId);
@@ -1775,8 +1779,8 @@ function updateWhere(now) {
   where.at = now;
   const map = state.map, x = state.x, z = state.z;
   // A landmark you're in or right beside comes first, then the road underfoot.
-  let place = '';
-  for (const b of state.landmarks || []) if (x > b.minX - 12 && x < b.maxX + 12 && z > b.minZ - 12 && z < b.maxZ + 12) { place = b.name; break; }
+  let place = state.places?.placeAt(x, z) || '';
+  if (!place) for (const b of state.landmarks || []) if (x > b.minX - 12 && x < b.maxX + 12 && z > b.minZ - 12 && z < b.maxZ + 12) { place = b.name; break; }
   if (!place) {
     let best = null, bd = 5;
     for (const r of map.roadsNear(x, z, 18)) {
@@ -3931,7 +3935,7 @@ function nearestInteractable() {
   let best = null, bestD = INTERACT_RANGE;
   const consider = (d, text) => { if (d < bestD) { bestD = d; best = text; } };
   // At the foot of a ladder (a roof, a water tower, a radio tower).
-  { const y = myY(), lad = !state.hop && !state.air && ladderAt(solidsNear(state.x, state.z, 3), state.x, state.z, y); if (lad) consider(0.4, `🪜 Climb the ladder (${feet(lad.ladderTop - y)} up)`); }
+  { const y = myY(), lad = !state.hop && !state.air && ladderAt(solidsNear(state.x, state.z, 3), state.x, state.z, y); if (lad) consider(0.4, `🪜 Ladder: walk into it to climb (${feet(lad.ladderTop - y)} up)`); }
   // Boats and landing posts (boats are boarded from a little further off: they sit in the water).
   for (const [, v] of boatVis) {
     const def = BOATS[v.data.type];
@@ -5398,6 +5402,13 @@ function frame(now) {
     let pace = tilt >= 0.98 ? 1 : tilt ** 1.4;
     if (k.has('ControlLeft') || k.has('ControlRight')) pace = Math.min(pace, 0.3);
     if (!state.sprint && tilt > 0.05) { mx *= pace / tilt; mz *= pace / tilt; }
+    // Walk into a ladder and you climb it: no button. (Moving toward it, onto it, not just past it; a
+    // moment's grace after getting off one so you don't go straight back up.)
+    if (len > 0.3 && !state.hop && !state.air && !me.boat && !me.downed && !state.prone && now > (state.ladderAutoAt || 0)) {
+      const lad = ladderAt(solidsNear(state.x, state.z, 2), state.x, state.z, myY());
+      const into = lad && (!lad.ladderIn || (mx * lad.ladderIn[0] + mz * lad.ladderIn[1]) / (Math.hypot(mx, mz) || 1) > 0.45);
+      if (into && climbLadder()) state.ladderAutoAt = now + 1200;
+    }
     updateStance(dt, now);
     let want = len > 0.05 && !stunnedNow && now >= (state.stanceBusyUntil || 0) ? [mx * speed, mz * speed] : [0, 0];
     if (state.hop?.ladder) want = [0, 0];   // on a ladder: up, not about
