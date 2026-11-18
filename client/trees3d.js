@@ -122,7 +122,8 @@ function clump(b, r, at, size, cell, centre, tint, planes = 3, hang = false) {
 
 // Bark colour comes from the photos now (pine bark, oak bark): this only shades each kind a little.
 const BARK = { pine: [1, 0.97, 0.94], oak: [0.95, 0.95, 0.95], gum: [0.85, 0.87, 0.9] };
-const GREEN = { pine: [0.86, 0.9, 0.7], oak: [0.9, 0.95, 0.8], live: [0.8, 0.88, 0.7] };
+// The photo leaves and needles carry their own colour now: this only shifts each kind a little.
+const GREEN = { pine: [0.88, 1.08, 0.78], oak: [1, 1.02, 0.95], live: [0.9, 0.98, 0.84] };
 
 /** A point partway up a polyline of [x, y, z, r]. */
 function along(pts, t) {
@@ -249,7 +250,13 @@ const VARIANTS = { longleaf: 2, slash: 2, liveOak: 1, roundOak: 1 };   // pines 
  * leaves, and the two materials (bark, and alpha-cut foliage) with their shadow-casting versions.
  */
 export function makeTreeKit() {
+  // Leaves, needles and Spanish moss: photo scans (Poly Haven, CC0) built into one sheet by
+  // tools/build_foliage.py. The drawn sheet (foliageTexture) shows until it has loaded.
   const fol = foliageTexture();
+  new THREE.TextureLoader().load('/textures/foliage.png', (t) => {
+    t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+    for (const m of [leafMat, leafDepth]) { m.map = t; m.needsUpdate = true; }
+  });
   // Bark: photo scans (Poly Haven, CC0): plated red-brown pine bark, furrowed grey-brown oak bark.
   const barkPhoto = (name) => {
     const ld = new THREE.TextureLoader();

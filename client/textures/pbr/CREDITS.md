@@ -20,3 +20,6 @@ attribution needed, given anyway. Colour maps at 1024 px; `_n` are the OpenGL no
 | shingles | grey_roof_01 (asphalt shingle roofs) |
 | pinebark | pine_bark (the pines) |
 | oakbark | bark_brown_02 (the oaks) |
+
+`../foliage.png` (tree leaves, pine needles, Spanish moss) is built by `tools/build_foliage.py` from
+Poly Haven's **tree_small_02** leaf sprays and **pine_tree_01** needle sprigs (both CC0); the moss is drawn.
