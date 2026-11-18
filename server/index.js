@@ -3467,6 +3467,8 @@ function applyDamage(target, amount, attacker, isBot, headshot = false, ammo = n
   if (target.npc && (target.kind === 'trader' || target.kind === 'pawn')) return;   // traders and Lamar are left alone by everyone
   if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
   if (!isBot && !pvpAllowed(attacker, target)) return;
+  // A fight between players: both are "in combat" for a while (quitting then leaves you standing there).
+  if (!isBot && attacker && !attacker.isBot && attacker !== target && players.has(attacker.id)) target.combatAt = attacker.combatAt = Date.now();
   if (!isBot && target.downed) {
     // Shooting someone who's down finishes them off.
     target.bleedHp -= amount;
@@ -5503,14 +5505,38 @@ wss.on('connection', (ws) => {
     if (!p) return;
     if (p.boat) leaveBoat(p, true);   // nobody logs off in the middle of the river
     if (p.air) { const at = touchdownSpot(p.x, p.z); p.x = at.x; p.z = at.z; p.air = null; }   // or in the sky
-    persistCharacter(p);
-    db.lastSeen[p.token] = Date.now();
-    players.delete(p.id);
-    const crew = squadOf(p);
-    if (crew) pushSquadState(crew);   // stays in the crew, shown offline
-    feed(`${p.name} left the zone`);
+    // Quit in the middle of a fight with another player: your character stays where it is for a
+    // while (it can still be shot and looted), so pulling the plug isn't a way out. Any other time
+    // you're gone at once, with everything you carry.
+    if (!p.dead && Date.now() - (p.combatAt || 0) < COMBAT_LOG_MS) {
+      p.lingerUntil = Date.now() + COMBAT_LOG_MS;
+      p.sprint = false; p.aiming = false; p.camoOn = false; cancelHack(p);
+      feed(`${p.name} quit mid-fight: still standing there for ${COMBAT_LOG_MS / 1000}s`);
+      return;
+    }
+    logOff(p);
   });
 });
+
+/** Out of the world: saved as they are, shown offline to their crew. */
+const COMBAT_LOG_MS = Number(process.env.COMBAT_LOG_MS || 30_000);
+function logOff(p) {
+  if (!players.has(p.id)) return;
+  persistCharacter(p);
+  db.lastSeen[p.token] = Date.now();
+  players.delete(p.id);
+  const crew = squadOf(p);
+  if (crew) pushSquadState(crew);   // stays in the crew, shown offline
+  feed(`${p.name} left the zone`);
+}
+/** Characters left standing after quitting mid-fight: gone once their time is up (bled out if downed). */
+function tickLingering(now) {
+  for (const p of players.values()) {
+    if (!p.lingerUntil || p.lingerUntil > now) continue;
+    if (p.downed && !p.dead) killPlayer(p, p.downedBy, p.downedHead);
+    logOff(p);
+  }
+}
 
 // ---------------------------------------------------------------- main loop
 function snapshotFor(r, views, now) {
@@ -5573,6 +5599,7 @@ const loop = setInterval(() => {
   tickHacks(now);
   if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickSites(now); tickRides(now); }
   tickStuns(now);
+  tickLingering(now);
   tickEvents(now, dt);
   if (tick % 4 === 0) tickDefenses(now);
   for (const c of [...charges.values()]) if (c.detAt <= now) explode(c, now);
