@@ -764,7 +764,7 @@ body.touchui .tbtn.big.fire { width: 76px; height: 76px; }
 /* Looking through a scope: only what you need to shoot. The weapon strip, prompts, the tracker and the
    buttons you don't use while scoped step away (fire, aim, zoom, reload and stances stay; ammo stays). */
 body.scoped #wslots, body.scoped #tracker, body.scoped #feed, body.scoped #prompt, body.scoped #where, body.scoped #gadgets { visibility: hidden; }
-body.scoped #touch .tbtn[data-key=look], body.scoped #touch .tbtn[data-key=tag], body.scoped #touch .tbtn[data-key=nade],
+body.scoped #touch .tbtn[data-key=look], body.scoped #touch .tbtn[data-key=tag], body.scoped #touch .tbtn[data-key=stun], body.scoped #touch .tbtn[data-key=nade],
 body.scoped #touch .tbtn[data-key=heal], body.scoped #touch .tbtn[data-key=use], body.scoped #touch .ttop, body.scoped #tloot { visibility: hidden; }
 body.scoped #weapon { background: transparent; border-color: transparent; }
 
@@ -943,3 +943,6 @@ body.touchui .irow { min-height: 52px; }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(255,255,255,0.5); }
 #gpuwarn { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); z-index: 70; max-width: min(640px, calc(100vw - 32px)); padding: 12px 14px; background: var(--surface); border: 1px solid var(--accent); border-radius: 12px; color: var(--ink); font: 600 15px/1.45 var(--font-text); display: flex; gap: 12px; align-items: center; }
 #gpuwarn button { flex: none; min-width: 64px; min-height: 44px; border-radius: 10px; }
+/* The stun gun's own button (phones): under the bag, out of the way of the shooting thumb; lit while it's out. */
+body.touchui .tbtn.stun { left: calc(24px + env(safe-area-inset-left)); right: auto; top: 140px; bottom: auto; width: 52px; height: 52px; }
+body.touchui .tbtn.stun.on { background: #f2c418; border-color: #fff; color: #111; }

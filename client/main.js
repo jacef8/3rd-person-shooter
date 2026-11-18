@@ -2213,8 +2213,9 @@ function updateHud() {
   const w = me.inv[me.active];
   $('wname').textContent = me.taserOut ? 'Stun gun' : w ? `${w.name}${w.parts?.muzzle === 'suppressor' ? ' · suppressed' : ''}` : 'Unarmed';
   const tzLeft = Math.ceil(((me.taserReadyAt || 0) - Date.now()) / 1000);
-  const slotsHtml = ['primary', 'primary2', 'secondary'].map((sl, i) => { const it = me.inv[sl]; return `<span data-slot="${sl}" class="${sl === me.active && !me.taserOut ? 'on' : it ? '' : 'none'}">${i + 1} ${it ? esc(shortGun(it)) : '—'}</span>`; }).join('')
-    + `<span data-slot="taser" class="${me.taserOut ? 'on' : ''}">4 Stun gun${tzLeft > 0 ? ` ${tzLeft}s` : ''}</span>`;
+  const slotsHtml = ['primary', 'primary2', 'secondary'].map((sl, i) => { const it = me.inv[sl]; return `<span data-slot="${sl}" class="${sl === me.active && !me.taserOut ? 'on' : it ? '' : 'none'}">${i + 1} ${it ? esc(shortGun(it)) : '—'}</span>`; }).join('');
+  // The stun gun has its own button (STUN on a phone, hold RB, Y on a keyboard): lit while it's out.
+  for (const b of document.querySelectorAll('#touch .tbtn[data-act=stungun]')) { b.classList.toggle('on', !!me.taserOut); const tl = b.querySelector('.tl'); if (tl) tl.textContent = tzLeft > 0 ? `${tzLeft}s` : 'STUN'; }
   if ($('wslots').innerHTML !== slotsHtml) $('wslots').innerHTML = slotsHtml;
   $('mag').textContent = me.taserOut ? '⚡' : me.mag;
   $('reserve').textContent = me.taserOut ? (tzLeft > 0 ? `${tzLeft}s` : 'ready') : reserveFor(me);
@@ -2301,7 +2302,7 @@ const shortGun = (it) => String(it.name || it.archetype || '').replace(/ Rifle$/
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // Tap (or click) a gun in the weapon strip to take it in hand.
 $('minimap').addEventListener('click', () => doAction('map'));
-$('wslots').addEventListener('pointerdown', (e) => { const sl = e.target.closest('[data-slot]')?.dataset.slot; if (sl === 'taser') { e.stopPropagation(); doAction('slot4'); } else if (sl && state.me?.inv[sl]) { e.stopPropagation(); send({ t: 'weapon', slot: sl }); } });
+$('wslots').addEventListener('pointerdown', (e) => { const sl = e.target.closest('[data-slot]')?.dataset.slot; if (sl && state.me?.inv[sl]) { e.stopPropagation(); send({ t: 'weapon', slot: sl }); } });
 function equippedFor(item) {
   const inv = state.me.inv;
   if (item.kind === 'armor') return inv.armor;
@@ -3595,11 +3596,15 @@ function doAction(a) {
     case 'slot1': send({ t: 'weapon', slot: 'primary' }); break;
     case 'slot2': send({ t: 'weapon', slot: 'primary2' }); break;
     case 'slot3': send({ t: 'weapon', slot: 'secondary' }); break;
-    case 'slot4':   // the stun gun: pull it, or put it away (back to your gun)
+    case 'stungun': case 'stungunOn': case 'stungunOff': {   // the stun gun, on its own button: pull it, or put it away (back to your gun)
       if (state.me.boat) break;
-      send({ t: 'taser', draw: !state.me.taserOut });
-      if (!state.me.taserOut && !localStorage.getItem('dz_tip_taser')) { localStorage.setItem('dz_tip_taser', '1'); toast('Stun gun: aim at someone within 30 ft and fire to stun them, then hold USE beside them to data-hack'); }
+      const want = a === 'stungunOn' ? true : a === 'stungunOff' ? false : !state.me.taserOut;
+      if (want === !!state.me.taserOut) break;
+      state.me.taserOut = want;   // predicted; the server confirms
+      send({ t: 'taser', draw: want });
+      if (want && !localStorage.getItem('dz_tip_taser')) { localStorage.setItem('dz_tip_taser', '1'); toast('Stun gun: aim at someone within 30 ft and fire to stun them, then hold USE beside them to data-hack'); }
       break;
+    }
     case 'heal': send({ t: 'inv', action: 'use' }); break;
     case 'crouch': {
       // Crouch at a sprint: slide.
@@ -3625,8 +3630,8 @@ $('name').value = localStorage.getItem('dz_name') || '';
     hint.innerHTML = '<b class="accent">Controllers need HTTPS.</b> This page is plain HTTP, so the browser hides gamepads. Open it over HTTPS (see README) to use a Backbone One or other controller.';
   } else {
     hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<span class="more"><br />'
-      + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm), hold for the stun gun · <b>L3</b> sprint<br />'
-      + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
+      + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm) · <b>L3</b> sprint<br />'
+      + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag (hold: stun gun out, RT fires it) · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
       + 'The two small buttons: <b>⧉</b> (left) bag (Crew & settings are in it), hold to accept an invite · <b>☰</b> (right) map · <b>Ⓑ</b> always goes back</span>';
   }
   if (MOBILE) document.body.classList.add('mobile');
@@ -3686,7 +3691,7 @@ addEventListener('wheel', (e) => {
 });
 const KEY_ACTIONS = {
   KeyE: 'interact', KeyF: 'tag', KeyG: 'sensor', KeyZ: 'switchGrenade', KeyV: 'camo', KeyT: 'rally', KeyB: 'ping', KeyR: 'reload',
-  KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', Digit4: 'slot4', KeyH: 'heal', Space: 'jump',
+  KeyQ: 'swap', Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', KeyY: 'stungun', KeyH: 'heal', Space: 'jump',
 };
 addEventListener('keydown', (e) => {
   if (document.activeElement?.tagName === 'INPUT') return;
@@ -4757,12 +4762,12 @@ function pollPad(dt, now) {
       if (firing && !state.mouseDown) state.firedThisPress = false;
       state.mouseDown = firing;
     }
-    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B, BTN.Y].includes(Number(i)) && just(Number(i))) doAction(action);
-    // Ⓨ: tap for your next gun (or to put the stun gun away), hold to pull the stun gun.
-    const yb = b(BTN.Y);
-    if (yb && !pad.prev[BTN.Y]) { pad.yAt = now; pad.yHeld = false; }
-    if (yb && !pad.yHeld && now - (pad.yAt || now) > 400) { pad.yHeld = true; if (!state.me?.taserOut) doAction('slot4'); }
-    if (!yb && pad.prev[BTN.Y] && !pad.yHeld) doAction('swap');
+    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B, BTN.RB].includes(Number(i)) && just(Number(i))) doAction(action);
+    // RB: a tap tags; held, the stun gun is out (RT fires it) until you let go.
+    const rb = b(BTN.RB);
+    if (rb && !pad.prev[BTN.RB]) { pad.rbAt = now; pad.rbHeld = false; }
+    if (rb && !pad.rbHeld && now - (pad.rbAt || now) > 250) { pad.rbHeld = true; doAction('stungunOn'); }
+    if (!rb && pad.prev[BTN.RB]) { if (pad.rbHeld) doAction('stungunOff'); else doAction('tag'); }
     // Ⓑ: tap to crouch, hold to go prone (while downed, Ⓑ does nothing).
     const bb = b(BTN.B);
     if (bb && !pad.prev[BTN.B] && !pad.bEat) { pad.bAt = now; pad.bHeld = false; }
@@ -5624,6 +5629,7 @@ const TICON = {
   jump: '<path d="M6 13l6-6 6 6"/><path d="M6 19l6-6 6 6"/>',
   tag: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.2"/>',
   heal: '<path d="M12 5v14M5 12h14"/>',
+  stun: '<path d="M13 2L5 13h6l-1 9 8-11h-6z"/>',
   look: '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   zoom: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5M10.5 8v5M8 10.5h5"/>',
 };
@@ -5636,12 +5642,14 @@ const TOUCH_BTNS = [
   ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'],   // tap: crouch · hold: prone (one button for both)
   ['NADE', 'sensor', 'sm r4', 'nade'],
   ['JUMP', 'jump', 'mid jump', 'jump'], ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
+  // The stun gun: tap to pull it (FIRE shoots it), tap again to put it away.
+  ['STUN', 'stungun', 'sm stun', 'stun'],
   // Hold the eye and drag to look around without turning (you keep running the way you were going).
   ['LOOK', 'look', 'sm look', 'look'],
   // Only while looking through a sight with two zoom levels: flip between them.
   ['ZOOM', 'zoom', 'sm zoom', 'zoom'],
 ];
-const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom' };
+const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom', stun: 'stun' };
 // Top left: the bag, and ⋯ for the rest (the map: tap the minimap).
 const TOUCH_TOP = [['BAG', 'inventory'], ['⋯', 'touchMore']];   // the map: tap the minimap
 const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
@@ -5758,7 +5766,7 @@ function buildTouchUI() {
     // A tap on a gun in the weapon strip (drawn under this layer) takes that gun in hand.
     for (const chip of $('wslots').children) {
       const r = chip.getBoundingClientRect();
-      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { if (chip.dataset.slot === 'taser') doAction('slot4'); else if (state.me?.inv[chip.dataset.slot]) send({ t: 'weapon', slot: chip.dataset.slot }); e.preventDefault(); return; }
+      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { if (state.me?.inv[chip.dataset.slot]) send({ t: 'weapon', slot: chip.dataset.slot }); e.preventDefault(); return; }
     }
     e.preventDefault();
     ui.setPointerCapture(e.pointerId);
