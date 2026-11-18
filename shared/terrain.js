@@ -238,6 +238,25 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
     };
     const g = new Float32Array(N * N);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const k = j * N + i, e = dem.data[k] / 10; g[k] = e > 0 ? e + (RELIEF - 1) * Math.min(e, broadAt(i, j)) : e; }
+    // Ponds up on the land: the survey has no height for their water (it reads 0 or below), and taken
+    // as sea level, the slope limit below would drag the ground for 200 m round into a crater 100 m
+    // deep. Up there (the land about it well above the river), fill each from the lowest ground
+    // round it, a metre down: a shallow pond hollow, the land level as it really is.
+    const hole = new Uint8Array(N * N);
+    let front = [];
+    // (and a point that reads far below the land round it, under half its level: a bad reading off
+    // the water, not a real pit)
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const b = broadAt(i, j); if (b > 4 && dem.data[j * N + i] / 10 < b * 0.5) hole[j * N + i] = 1; }
+    // From the shore inward, ring by ring: the shore ring a metre under the lowest bank beside it,
+    // the rest of the pond at the level of the ring outside it (a flat-bottomed hollow).
+    const nb = (k, fn) => { const i = k % N, j = (k - i) / N; for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { if (!di && !dj) continue; const ii = i + di, jj = j + dj; if (ii >= 0 && jj >= 0 && ii < N && jj < N) fn(jj * N + ii); } };
+    for (let k = 0; k < N * N; k++) if (hole[k]) { let lo = Infinity; nb(k, (q) => { if (!hole[q] && dem.data[q] > 0 && g[q] < lo) lo = g[q]; }); if (lo !== Infinity) { g[k] = lo - 1; front.push(k); } }
+    for (const k of front) hole[k] = 0;
+    while (front.length) {
+      const next = [];
+      for (const k of front) nb(k, (q) => { if (hole[q]) { hole[q] = 0; g[q] = g[k]; next.push(q); } });
+      front = next;
+    }
     const RISE = MAX_SLOPE * dem.step, D = RISE * 1.4142;
     for (let rep = 0; rep < 2; rep++) {
       for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {

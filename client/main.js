@@ -820,6 +820,33 @@ function rideFeet(id) {
 }
 const myRide = () => { const id = state.me?.boat?.id; const v = id && boatVis.get(id); return v ? BOATS[v.data.type] : null; };
 const canStepOut = () => { if (myRide()?.land) return true; for (let r = 2; r <= BOAT_RULES.exitRange; r += 2) for (let a = 0; a < 16; a++) if (ground(state.x + Math.cos(a * Math.PI / 8) * r, state.z + Math.sin(a * Math.PI / 8) * r) > -0.6) return true; return false; };
+/**
+ * In a ride or a boat: a panel low in the middle, over the gadget bar (PUBG-style). The speed big,
+ * the ride's name and your seat, its condition as a bar (green, then amber, then red), and the keys
+ * for a few seconds after you get in; after that only the way out.
+ */
+const rideHud = { key: '', since: 0 };
+function updateRideHud(now, alive) {
+  const el = $('ridehud'), me = state.me, v = alive && me?.boat && boatVis.get(me.boat.id);
+  if (!v) { if (!el.hidden) { el.hidden = true; rideHud.key = ''; document.body.classList.remove('inride'); } return; }
+  document.body.classList.add('inride');
+  const def = BOATS[v.data.type], driving = me.boat.seat === 0;
+  if (rideHud.key !== me.boat.id) { rideHud.key = me.boat.id; rideHud.since = now; }
+  const mph = Math.round(Math.abs((state.boat && driving ? state.boat.speed : 0) || 0) * 2.237);
+  const k = Math.max(0, Math.min(1, v.data.hp / v.data.max)), col = k > 0.6 ? '#5fd17a' : k > 0.3 ? '#ffb340' : '#ff5a4a';
+  const pad = state.inputMode === 'pad', touchUi = state.inputMode === 'touch';
+  const fresh = now - rideHud.since < 8000;
+  const keys = [];
+  if (driving && fresh && !touchUi) keys.push(pad ? 'Left stick: gas, brake, steer' : 'W/S gas · A/D steer', pad ? 'Right stick: look' : 'Mouse: look around');
+  if (def.hold && !touchUi) keys.push(`<kbd>${glyph('Tab')}</kbd>${def.animal ? 'saddlebags' : def.land ? 'trunk' : 'hold'}`);
+  if (!touchUi) keys.push(`<kbd>${glyph('E')}</kbd>${def.land ? 'get off' : 'get out at the bank'}`);
+  el.innerHTML = `<div class="rh-speed">${driving ? `<b>${mph}</b><span>mph</span>` : '<span class="rh-seat">PASSENGER</span>'}</div>`
+    + `<div class="rh-main"><div class="rh-name">${def.icon || '🚤'} ${esc(def.name)}</div>`
+    + `<div class="rh-bar"><i style="width:${Math.round(k * 100)}%;background:${col}"></i></div>`
+    + `<div class="rh-cap">${def.animal ? 'Health' : def.land ? 'Condition' : 'Hull'} ${Math.round(k * 100)}%</div></div>`
+    + (keys.length ? `<div class="rh-keys">${keys.map((t) => `<span>${t}</span>`).join('')}</div>` : '');
+  el.hidden = false;
+}
 function boatHud(pkey = '') {
   const me = state.me;
   if (!me?.boat) return '';
@@ -5302,9 +5329,11 @@ function frame(now) {
       const v = boatVis.get(me.boat.id);
       if (!state.boat && v) state.boat = { id: me.boat.id, type: v.data.type, x: v.data.x, z: v.data.z, y: v.data.y, yaw: v.data.yaw, speed: 0 };
       // Driving and not looking about: the camera swings round behind the vehicle (land rides).
-      if (state.boat && BOATS[state.boat.type].land && Math.abs(state.boat.speed || 0) > 2 && now - (state.lookAt || 0) > 1200 && !state.aiming) {
+      // (With a mouse the camera stays where you put it, as in PUBG: look round freely while you drive.
+      // With a controller or on a phone, it eases back behind after 3 s of not looking.)
+      if (state.boat && BOATS[state.boat.type].land && state.inputMode !== 'kb' && Math.abs(state.boat.speed || 0) > 2 && now - (state.lookAt || 0) > 3000 && !state.aiming) {
         const back = state.boat.speed < 0 ? Math.PI : 0, d = Math.atan2(Math.sin(state.boat.yaw + back - state.yaw), Math.cos(state.boat.yaw + back - state.yaw));
-        state.yaw += d * Math.min(1, dt * 2.5);
+        state.yaw += d * Math.min(1, dt * 1.2);
       }
       if (state.boat) {
         const n = stepBoat(state.map.terrain, state.boat, free ? { throttle: f + pad.moveY + touch.moveY, steer: r + pad.moveX + touch.moveX } : {}, dt, rideEnv());
@@ -5590,7 +5619,8 @@ function frame(now) {
   state.promptText = prompt;
   // On a phone the prompt names the button to tap (the same word and hand as the USE button, lit up).
   const pkey = state.touchUI && state.inputMode !== 'pad' ? `<kbd class="tk">${ticon('use')}${useVerb(prompt)}</kbd>` : `<kbd>${glyph('E')}</kbd>`;
-  $('prompt').innerHTML = state.air && alive ? airHud() : prompt && !(alive && myRide()?.land) ? `${pkey}${prompt}` : boatHud(pkey);
+  $('prompt').innerHTML = state.air && alive ? airHud() : prompt && !(alive && me?.boat) ? `${pkey}${prompt}` : '';
+  updateRideHud(now, alive);
   drawMinimap();
   updateWhere(now);
   if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }

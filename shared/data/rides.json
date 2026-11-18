@@ -25,7 +25,7 @@
     },
     "pickup": {
       "grip": "wheel", "name": "Pickup", "icon": "🛻", "speed": 24, "offroad": 0.62, "reverse": 7, "accel": 6, "brake": 13, "turn": 1.15, "hp": 420,
-      "len": 5.4, "wid": 2.0, "h": 1.8, "hold": 8, "keys": 0.4, "seatH": 0.75, "spawn": "road", "count": 90,
+      "len": 5.4, "wid": 2.0, "h": 1.8, "hold": 8, "keys": 0.4, "seatH": 0.95, "spawn": "road", "count": 90,
       "seats": [[0.45, 0.55], [-0.45, 0.55], [0.5, -1.5], [-0.5, -1.5]],
       "colors": [16777215, 9109504, 3359829, 5793860, 2236962, 11184810, 7372944],
       "_about": "Tough, handles a pasture, two in the cab and two in the bed, big bed for loot."

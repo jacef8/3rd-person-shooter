@@ -946,3 +946,20 @@ body.touchui .irow { min-height: 52px; }
 /* The stun gun's own button (phones): under the bag, out of the way of the shooting thumb; lit while it's out. */
 body.touchui .tbtn.stun { left: calc(24px + env(safe-area-inset-left)); right: auto; top: 140px; bottom: auto; width: 52px; height: 52px; }
 body.touchui .tbtn.stun.on { background: #f2c418; border-color: #fff; color: #111; }
+
+/* In a ride: speed, name, condition (PUBG-style), low in the middle over the gadget bar. */
+#ridehud { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: grid; grid-template-columns: auto 230px; grid-template-rows: auto auto; column-gap: 14px; align-items: center; padding: 10px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; color: var(--ink); pointer-events: none; }
+#ridehud[hidden] { display: none; }
+#ridehud .rh-speed { grid-row: 1; text-align: center; min-width: 64px; font-variant-numeric: tabular-nums; }
+#ridehud .rh-speed b { display: block; font: 800 34px/1 var(--font-display, var(--font-text)); }
+#ridehud .rh-speed span { font: 700 12px/1.2 var(--font-text); letter-spacing: 0.1em; color: var(--ink-2, #c9ccd2); text-transform: uppercase; }
+#ridehud .rh-seat { font-size: 13px; }
+#ridehud .rh-name { font: 700 16px/1.3 var(--font-text); }
+#ridehud .rh-bar { height: 8px; margin: 6px 0 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+#ridehud .rh-bar i { display: block; height: 100%; border-radius: 4px; }
+#ridehud .rh-cap { font: 600 13px/1.2 var(--font-text); color: var(--ink-2, #c9ccd2); font-variant-numeric: tabular-nums; }
+#ridehud .rh-keys { grid-column: 1 / -1; display: flex; gap: 12px; justify-content: center; margin-top: 8px; font: 600 13px/1.3 var(--font-text); color: var(--ink-2, #c9ccd2); white-space: nowrap; }
+#ridehud .rh-keys kbd { background: #ff7a1a; color: var(--on-accent); padding: 0 6px; border-radius: 3px; font-weight: 700; margin-right: 4px; }
+body.touchui #ridehud { bottom: auto; top: 64px; grid-template-columns: auto 170px; padding: 6px 12px; }
+body.touchui #ridehud .rh-speed b { font-size: 26px; }
+body.inride #gadgets { display: none; }   /* (the ride's panel takes their place) */
