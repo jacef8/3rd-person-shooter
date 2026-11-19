@@ -358,8 +358,11 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const want = Math.max(1, Math.min(7, Math.round(area / 9)));
       let n = 0, k = Math.floor(rand() * kit.length);
       for (let tries = 0; tries < want * 4 && n < want; tries++, k++) {
-        const [kind, L, D, H] = kit[k % kit.length];
+        const [kind, L, D0, H] = kit[k % kit.length];
         if (ONE.has(kind) && used.has(kind)) continue;
+        // A desk's chair stands out in front of it: the solid box reaches over the chair too (the desk
+        // itself is drawn back against the wall: fo, its offset along the way it faces).
+        const reach = kind === 'desk' ? 0.62 : 0, D = D0 + reach;
         const side = Math.floor(rand() * 4);   // which wall its back is against: n, s, w, e
         const horiz = side < 2, span = horiz ? rw - 2 * IN - L : rd - 2 * IN - L;
         if (span < 0 || (horiz ? rd : rw) < D + 2 * IN + 1.2) continue;
@@ -375,18 +378,19 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
           : side === 2 ? [[bx0 - IN - 0.3, bz0 + 0.1], [bx0 - IN - 0.3, bz1 - 0.1]] : [[bx1 + IN + 0.3, bz0 + 0.1], [bx1 + IN + 0.3, bz1 - 0.1]];
         if (bk.some(([qx, qz]) => rects.some(([r0, s0, r1, s1]) => qx > r0 && qx < r1 && qz > s0 && qz < s1))) continue;
         placed.push([bx0, bz0, bx1, bz1]); used.add(kind);
-        put(bx0, bz0, bx1, bz1, H, { furn: kind, fr, fl: +L.toFixed(2), fd: D, fs: Math.floor(rand() * 1e6) });
+        put(bx0, bz0, bx1, bz1, H, { furn: kind, fr, fl: +L.toFixed(2), fd: D0, ...(reach ? { fo: -reach / 2 } : {}), fs: Math.floor(rand() * 1e6) });
         n++;
       }
       // The middle of a roomy room.
       const m = MIDDLE[type] || MIDDLE.building;
       if (m && Math.min(rw, rd) > m[2] + 3.4 && Math.max(rw, rd) > m[1] + 3.4) {
-        const [kind, L, D, H] = m, wide = rw >= rd;
+        const [kind, L, D0, H] = m, wide = rw >= rd;
+        const D = kind === 'table' ? D0 + 0.84 : D0;   // (a table's chairs, both sides, are inside its solid box)
         const cxm = (x0 + x1) / 2 + (rand() - 0.5) * 0.6, czm = (z0 + z1) / 2 + (rand() - 0.5) * 0.6;
         const hx = (wide ? L : D) / 2, hz = (wide ? D : L) / 2;
         if (clearOf(cxm - hx, czm - hz, cxm + hx, czm + hz)) {
           placed.push([cxm - hx, czm - hz, cxm + hx, czm + hz]);
-          put(cxm - hx, czm - hz, cxm + hx, czm + hz, H, { furn: kind, fr: wide ? [0, 1] : [1, 0], fl: L, fd: D, fs: Math.floor(rand() * 1e6) });
+          put(cxm - hx, czm - hz, cxm + hx, czm + hz, H, { furn: kind, fr: wide ? [0, 1] : [1, 0], fl: L, fd: D0, fs: Math.floor(rand() * 1e6) });
         }
       }
     }
@@ -398,7 +402,10 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     const W = (lx, lz) => [cx + lx * ca - lz * sa, cz + lx * sa + lz * ca];
     const y0 = base - opts.sink, storey = STOREY + opts.sink, total = h + opts.sink;
     const bldg = buildings.length + boxes.length * 7919;
-    const part = { shell: 1, bldg, real: 1 };
+    // `look`: what its paint, brick or siding and roof are picked by. The building's row in the county
+    // data, which never changes (bldg moves whenever anything earlier in the map is added or taken away).
+    const look = opts.si ?? bldg;
+    const part = { shell: 1, bldg, real: 1, look };
     const obox = (x0, z0, x1, z1, hh, yy, extra = {}) => {
       const [wx, wz] = W((x0 + x1) / 2, (z0 + z1) / 2);
       const b = orientedBox(wx, wz, (x1 - x0) / 2, (z1 - z0) / 2, ang, { id: boxes.length, h: hh, y0: yy, type, ...part, ...extra });
@@ -415,7 +422,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     if (lx1 - lx0 < 5 || lz1 - lz0 < 5) { for (const [x0, z0, x1, z1] of rects) obox(x0, z0, x1, z1, total, y0); return null; }
     const oneStorey = total < storey + 1;
     const wallH = oneStorey ? total - 0.3 : storey;
-    const rec = { ...bb, cx, cz, ang, rects, type, floor: y0, pad: base, doors: [], top: y0 + (oneStorey ? wallH + 0.3 : total), roof: opts.roof || null, bldg, real: 1, ...(opts.name ? { name: opts.name } : {}), ...(opts.si != null ? { si: opts.si } : {}) };
+    const rec = { ...bb, cx, cz, ang, rects, type, floor: y0, pad: base, doors: [], top: y0 + (oneStorey ? wallH + 0.3 : total), roof: opts.roof || null, bldg, look, real: 1, ...(opts.name ? { name: opts.name } : {}), ...(opts.si != null ? { si: opts.si } : {}) };
     buildings.push(rec);
     // Outside walls: each piece's edges, minus where another piece carries on past them.
     const EPS = 0.05, runs = [];

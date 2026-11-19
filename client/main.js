@@ -142,7 +142,8 @@ function applyGfx(mode = gfxMode) {
  */
 function renderBudget(mode) {
   if (LOW_POWER) return 1.3e6;
-  if (GPU_BUILTIN) return 2.2e6;
+  // (Built-in graphics start on Medium; picked up to High or Ultra, they get that setting's sharpness,
+  // and the slowdown guard steps it back if the chip can't keep up.)
   return { ultra: 8.3e6, full: 3.7e6 }[mode] || 2.2e6;
 }
 function sizeRender() {
@@ -3753,6 +3754,11 @@ function lockPointer() {
   try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* not supported */ }
 }
 
+/** Settings (graphics, controls, sound): the end of the crew panel, scrolled to. O on a keyboard, ⋯ on a phone. */
+function openSettings() {
+  if (!state.panelOpen) openSquadPanel();
+  requestAnimationFrame(() => $('padSettings')?.previousElementSibling?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+}
 /** One place for every gameplay action, shared by keyboard and controller. */
 /** Jump (your client shows it at once; the server runs the same arc for everyone else and for hits). */
 function jump() {
@@ -3794,6 +3800,7 @@ function doAction(a) {
   if (a === 'interact' && !state.me.dead && !state.me.downed && /^🪜/.test(state.promptText || '') && climbLadder()) return;
   switch (a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
+    case 'settings': openSettings(); return;
     case 'micToggle':   // phones: the mic on (open mic) or off, from the ⋯ menu
       tset.voiceOpen = !tset.voiceOpen; saveTset(); voiceSettings();
       if (!tset.voiceOpen) voice.talk(false);
@@ -3975,6 +3982,7 @@ addEventListener('keydown', (e) => {
   if (document.activeElement?.tagName === 'INPUT') return;
   setInputMode('kb');
   if (e.code === 'KeyP') { doAction('squadPanel'); return; }
+  if (e.code === 'KeyO') { if (state.panelOpen) closeSquadPanel(); else openSettings(); return; }
   if (e.code === 'KeyM') { doAction('map'); return; }
   if (e.code === 'Escape' && state.contactOpen) { closeContact(); return; }
   if (e.code === 'Escape' && state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) { closeMapScreen(); return; }
@@ -6009,7 +6017,7 @@ const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 
 const TOUCH_TOP = [['BAG', 'inventory'], ['⋯', 'touchMore']];   // the map: tap the minimap
 // Tag marks whoever is under your crosshair; the stun gun is pulled (FIRE shoots it; again to put it
 // away); MIC turns your microphone on for crew chat, or off.
-const TOUCH_MORE = [['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
+const TOUCH_MORE = [['⚙ SETTINGS', 'settings'], ['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +

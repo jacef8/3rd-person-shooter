@@ -102,7 +102,7 @@ export function pushFlatRoof(buf, r, wall) {
   const ca = turned ? Math.cos(r.ang) : 1, sa = turned ? Math.sin(r.ang) : 0, ox = turned ? r.cx : 0, oz = turned ? r.cz : 0;
   const lum = wall[0] * 0.3 + wall[1] * 0.59 + wall[2] * 0.11;
   const trim = lum > 0.5 ? [0.3, 0.29, 0.28] : [0.84, 0.8, 0.72];   // a cream cornice on dark walls, dark bronze on light ones
-  const tar = [0.27, 0.27, 0.28], unit = [0.66, 0.67, 0.68], top = r.top, seed = hash(r.bldg ?? `${r.minX},${r.minZ}`);
+  const tar = [0.27, 0.27, 0.28], unit = [0.66, 0.67, 0.68], top = r.top, seed = hash(r.look ?? r.bldg ?? `${r.minX},${r.minZ}`);
   const at = (x0, z0, x1, z1, y0, h, c) => {
     const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
     pushBox(buf, { ang: r.ang || 0, ca, sa, cx: ox + mx * ca - mz * sa, cz: oz + mx * sa + mz * ca, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, y0, h }, c, 0);
@@ -147,7 +147,7 @@ export function pushStorefront(buf, r, toward) {
     }
   }
   if (!best || best.score < 1) return;
-  const { nx, nz, wx, wz, len, ux, uz } = best, seed = hash(r.bldg ?? 1), floor = r.floor ?? 0, height = r.top - floor;
+  const { nx, nz, wx, wz, len, ux, uz } = best, seed = hash(r.look ?? r.bldg ?? 1), floor = r.floor ?? 0, height = r.top - floor;
   const at = (u, out, y0, h, w, d, c) => {   // a box centred `u` along the wall, `out` from it
     const px = wx + ux * u + nx * out, pz = wz + uz * u + nz * out;
     const hw = Math.abs(ux) * w / 2 + Math.abs(nx) * d / 2, hd = Math.abs(uz) * w / 2 + Math.abs(nz) * d / 2;
@@ -199,7 +199,8 @@ export const GOODS = [[0.8, 0.25, 0.2], [0.2, 0.45, 0.75], [0.9, 0.75, 0.25], [0
 export const METAL = [0.55, 0.57, 0.6], DARK = [0.12, 0.12, 0.13], WHITE = [0.9, 0.9, 0.88], STEEL_BLUE = [0.18, 0.32, 0.6], RACK_ORANGE = [0.85, 0.42, 0.12];
 export function pushFurniture(buf, b) {
   const fx = b.fr?.[0] ?? 0, fz = b.fr?.[1] ?? 1, ca = fz, sa = -fx, ang = Math.atan2(-fx, fz);
-  const cx = b.cx ?? (b.minX + b.maxX) / 2, cz = b.cz ?? (b.minZ + b.maxZ) / 2, y = b.y0 || 0;
+  const fo = b.fo || 0;   // drawn this far along the way it faces from the middle of its box (a desk: back against the wall, its chair in the box's front part)
+  const cx = (b.cx ?? (b.minX + b.maxX) / 2) + fx * fo, cz = (b.cz ?? (b.minZ + b.maxZ) / 2) + fz * fo, y = b.y0 || 0;
   const L = b.fl || 1, D = b.fd || 1, H = b.h, s = b.fs || 1;
   const pick = (list, k = 0) => list[(s >> k) % list.length];
   // A part `w` along by `d` deep, its centre `u` along and `v` out from the middle (back is -D/2).
@@ -330,7 +331,7 @@ export function pushFurniture(buf, b) {
 export function pushHouseDetail(buf, glass, r, roofColor) {
   const rects = r.rects || [[r.minX, r.minZ, r.maxX, r.maxZ]];
   const turned = !!r.rects, ca = turned ? Math.cos(r.ang) : 1, sa = turned ? Math.sin(r.ang) : 0, ox = turned ? r.cx : 0, oz = turned ? r.cz : 0;
-  const seed = hash(r.bldg ?? 7), floor = r.floor ?? 0, wallTop = r.top - (r.roof ? 0 : 0.3), wallH = wallTop - floor;
+  const seed = hash(r.look ?? r.bldg ?? 7), floor = r.floor ?? 0, wallTop = r.top - (r.roof ? 0 : 0.3), wallH = wallTop - floor;
   if (wallH < 2.2) return;
   const box = (b, lx, lz, hw, hd, y0, h, c) => pushBox(b, { ang: r.ang || 0, ca, sa, cx: ox + lx * ca - lz * sa, cz: oz + lx * sa + lz * ca, hw, hd, y0, h }, c, 0);
   // Outside wall runs: each piece's sides, minus where another piece carries on past them.
@@ -436,7 +437,7 @@ export const newBuf = (uv) => ({ pos: [], nor: [], col: [], idx: [], ...(uv ? { 
 
 /** Colour, and which wall texture, for a box. `ownHouse`: the id of your own house (its walls show apart). */
 export function paint(b, ownHouse = null) {
-  const id = b.bldg ?? b.id;
+  const id = b.look ?? b.bldg ?? b.id;
   switch (b.type) {
     // Real buildings dress by type: brick storefronts and halls, lap-sided houses, metal barns and warehouses.
     case 'building': { if (b.real) { const k = hash(id) % 6; return k < 3 ? [pick(BRICK_COLORS, id), 'brick'] : k < 5 ? [pick(STUCCO_COLORS, id), 'stucco'] : [pick(BLOCK_COLORS, id), 'block']; } const c = COLORS.building, v = hash(id) / 4294967296; return [[c[0] + (v - 0.5) * 0.15, c[1] + (v - 0.5) * 0.12, c[2] + (v - 0.5) * 0.1], 'office']; }
@@ -450,7 +451,7 @@ export function paint(b, ownHouse = null) {
     default: return [COLORS[b.type] || COLORS.cover, null];
   }
 }
-export const wallColor = (r) => paint({ type: r.type, bldg: r.bldg, real: r.real, id: r.bldg })[0];
+export const wallColor = (r) => paint({ type: r.type, bldg: r.bldg, look: r.look, real: r.real, id: r.bldg })[0];
 
 /** The buffers of one chunk's buildings, in the order the page pairs them with materials. */
 export const CHUNK_BUFS = ['office', 'siding', 'brick', 'stucco', 'block', 'metal', 'planks', 'plain', 'roof', 'shingles', 'panes', 'furn'];
@@ -475,9 +476,9 @@ export function buildChunkBuffers({ boxes, bldgs, ownHouse = null }) {
     pushBox(tex && B[tex] && UV_BUFS.has(tex) ? B[tex] : B.plain, b, c, tex ? 4 : 0);
   }
   for (const r of bldgs) {
-    if (r.roof) pushRoof(r.type === 'barn' ? B.roof : B.shingles, r, pick(r.type === 'barn' ? METAL_ROOFS : ROOF_COLORS, r.bldg), wallColor(r));
-    if (r.type === 'home') pushHouseDetail(B.plain, B.panes, r, pick(ROOF_COLORS, r.bldg).map((v) => v * 0.8));
-    else if (r.type === 'warehouse') pushRoof(B.roof, r, pick(METAL_ROOFS, r.bldg), wallColor(r), true);
+    if (r.roof) pushRoof(r.type === 'barn' ? B.roof : B.shingles, r, pick(r.type === 'barn' ? METAL_ROOFS : ROOF_COLORS, r.look ?? r.bldg), wallColor(r));
+    if (r.type === 'home') pushHouseDetail(B.plain, B.panes, r, pick(ROOF_COLORS, r.look ?? r.bldg).map((v) => v * 0.8));
+    else if (r.type === 'warehouse') pushRoof(B.roof, r, pick(METAL_ROOFS, r.look ?? r.bldg), wallColor(r), true);
     else if (r.type === 'building' || r.type === 'civic') pushFlatRoof(B.plain, r, wallColor(r));
     if (r.front) pushStorefront(B.plain, r, r.front);
     // A floor on the building's level pad (real buildings; the others stand on town paving).

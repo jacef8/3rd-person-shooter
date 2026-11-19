@@ -1082,8 +1082,8 @@ vBlade = position.y;
       pushBox(boxes, b, paint(b)[0], 0);
     }
     for (const r of buildingsIn.get(key(cx, cz)) || []) {
-      if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.bldg), wallColor(r));
-      else if (r.type === 'warehouse') pushRoof(roof, r, pick(METAL_ROOFS, r.bldg), wallColor(r), true);
+      if (r.roof) pushRoof(roof, r, pick(ROOF_COLORS, r.look ?? r.bldg), wallColor(r));
+      else if (r.type === 'warehouse') pushRoof(roof, r, pick(METAL_ROOFS, r.look ?? r.bldg), wallColor(r), true);
       else if (r.type === 'building' || r.type === 'civic') pushFlatRoof(boxes, r, wallColor(r));
     }
     const T = map.natureTileSize, trees = [], pines = [];
