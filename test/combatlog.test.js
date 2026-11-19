@@ -74,9 +74,12 @@ test('quitting mid-fight leaves you standing for a while; quitting otherwise is 
     await until(() => !sees('Eli'), 10000);   // then gone
     assert.ok(a.msgs.some((m) => m.t === 'feed' && /Eli left the zone/.test(m.text)));
 
-    // Quit mid-fight and killed before getting away: only part of what you carried is lost.
+    // Quit mid-fight and killed before getting away: what you'd picked up since you last stashed is
+    // lost (here $50); what was stashed (the $100 he started with) stays with you.
     const b2 = await conn('Eli', tokB);
     await until(() => b2.you && sees('Eli'));
+    b2.send({ t: 'dev', give: { cash: 50 } });
+    await until(() => b2.you.cash === 150);
     a.send({ t: 'shoot', dir: [0, -0.05, 1] });
     await until(() => b2.you.hp < 100);
     await b2.close();
@@ -89,7 +92,7 @@ test('quitting mid-fight leaves you standing for a while; quitting otherwise is 
     await until(() => !sees('Eli'), 10000);
     const b3 = await conn('Eli', tokB);
     await until(() => b3.you && b3.msgs.some((m) => m.t === 'awayLog'));
-    assert.equal(b3.you.cash, 70, 'kept 70% of the cash');
+    assert.equal(b3.you.cash, 100, 'kept the stashed $100, lost the $50 picked up since');
     assert.ok(b3.msgs.find((m) => m.t === 'awayLog').entries.some((e) => /quit mid-fight and were killed/.test(e.text)));
     await b3.close();
 

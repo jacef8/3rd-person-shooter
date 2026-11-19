@@ -975,3 +975,7 @@ body.inride #gadgets { display: none; }   /* (the ride's panel takes their place
 body.touchui .tbtn.talk { left: calc(24px + env(safe-area-inset-left)); right: auto; top: 200px; bottom: auto; width: 52px; height: 52px; }
 body.talking .tbtn.talk { background: #ffb27a; color: #111; }
 body.touchui #voicebar { bottom: auto; top: 262px; left: calc(8px + env(safe-area-inset-left)); }
+/* Picked up since you last stashed: lost if you die. */
+.irow.loose { border-left-color: #ffb347; }
+.irow.loose .tx small:first-of-type { color: #ffb347; font-weight: 700; }
+#inventory .loosenote { margin: 6px 0 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 179, 71, 0.12); border: 1px solid rgba(255, 179, 71, 0.45); color: var(--ink); font-size: 13px; line-height: 1.35; }

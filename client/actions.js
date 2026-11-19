@@ -25,6 +25,7 @@ export const ACT_POSE = {
   cook: 'cook', fish: 'fish',
   eat: 'eat', heal: 'bandage',
   climb: 'climb', skate: 'skate',
+  stash: 'stash',
 };
 
 const S = Math.sin, PI = Math.PI;
@@ -78,6 +79,10 @@ const POSES = {
     L: (t) => [0.46, 0.98 + 0.04 * S(t * 1.3 + 1), -0.06],
     RF: () => [-0.24, 0.03, 0.02],
     LF: (t, p) => { if (!p) return [0.24, 0.03, -0.02]; const c = (t * 1.6) % 1; return c < 0.6 ? [-0.05 + c / 0.6 * 0.65, -0.1, 0.22] : [0.6 - (c - 0.6) / 0.4 * 0.65, 0.12, 0.18]; } },
+  // Stashing the haul: kneeling at an open locker, hand over hand from your gear into it.
+  stash: { kneel: true, lean: 0.4, look: 0.4,
+    R: (t) => { const k = (1 - Math.cos(t * 3.4)) / 2; return [-0.16 + 0.1 * k, 0.95 - 0.5 * k, 0.28 + 0.4 * k]; },
+    L: (t) => { const k = (1 - Math.cos(t * 3.4 + PI)) / 2; return [0.16 - 0.1 * k, 0.95 - 0.5 * k, 0.28 + 0.4 * k]; } },
   // Rod out ahead, the tip twitching now and then.
   fish: { look: 0.05,
     R: (t) => [-0.08, 1.05 + 0.03 * Math.max(0, S(t * 1.7)) ** 8, 0.38],
@@ -165,7 +170,7 @@ function makeProps() {
   for (const k of ['crowbar', 'locker', 'flag', 'flare', 'tablet', 'medkit', 'hammer', 'pan', 'rod', 'line', 'can', 'kit']) { P[k].visible = false; P[k].traverse((o) => { if (o.isMesh) o.castShadow = true; }); }
   return P;
 }
-const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'], eat: ['can'], bandage: ['kit'], climb: [], skate: [] };
+const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'], eat: ['can'], bandage: ['kit'], climb: [], skate: [], stash: ['locker'] };
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 /** Put a prop at a hand, turned with the person (yaw) plus its own tilt. */
@@ -227,6 +232,10 @@ export function updateAction(g, kind, p, dt, extra = {}) {
   } else if (name === 'cook') {
     holder2(g, L, L, _w);
     P.pan.position.set(_w.x - 0.05, Math.max(0.02, _w.y - 0.12), _w.z + 0.05);
+  } else if (name === 'stash') {
+    P.locker.position.set(0, 0, 0.72);
+    P.locker.rotation.set(0, 0, 0);
+    P.lid.rotation.x = -1.7;   // open
   } else if (name === 'eat') {
     inHand(g, P.can, R, 0.3 + 0.9 * ((1 - Math.cos(t * 5.4)) / 2), 0, 0);   // tipped up as it reaches the mouth
   } else if (name === 'bandage') {

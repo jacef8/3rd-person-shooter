@@ -573,7 +573,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', ...RESOURCES];
+const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', 'secured', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -590,6 +590,7 @@ function privateState(p) {
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
     xp: p.xp, level: level(p), ...Object.fromEntries(RESOURCES.map((r) => [r, p[r] || 0])), comms: p.comms,
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
+    unstashed: (() => { const u = unstashed(p); return { ids: u.items.map((i) => i.id), res: u.res }; })(),   // lost if you die before you stash it
     hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })), hideoutsAllowed: hideoutAllowance(p).allowed, hideoutNext: hideoutAllowance(p).next,
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     taserOut: !!p.taserOut, taserReadyAt: p.taserReadyAt || 0, camoOn: !!p.camoOn, camoActive: camoActive(p), camoUntil: p.camoOn ? p.camoUntil || 0 : 0, camoReadyAt: p.camoReadyAt || 0, sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
@@ -3283,7 +3284,8 @@ function tickHacks(now) {
       if (isStunned(t, now)) t.stunnedUntil = Math.max(t.stunnedUntil, now + 600);
       else if (!t.downed) { cancelHack(p, 'They shook it off'); continue; }
     }
-    if (h.walk) { if (p.sprint || p.boat) { cancelHack(p, h.kind === 'eat' ? 'Stopped eating' : 'Stopped patching up'); continue; } }
+    if (h.kind === 'stash') { if (p.sprint || !atStashPoint(p)) { cancelHack(p, ''); continue; } }   // (walk about inside, just don't run off)
+    else if (h.walk) { if (p.sprint || p.boat) { cancelHack(p, h.kind === 'eat' ? 'Stopped eating' : 'Stopped patching up'); continue; } }
     else {
       if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Interrupted — you moved'); continue; }
       if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Interrupted — taking fire'); continue; }
@@ -3292,6 +3294,7 @@ function tickHacks(now) {
     p.hack = null;
     if (h.kind === 'eat') { eat(p, h.good); send(p.ws, { t: 'hack', done: true, text: '' }); continue; }
     if (h.kind === 'heal') { finishHeal(p); continue; }
+    if (h.kind === 'stash') { finishStash(p); continue; }
     if (h.kind === 'claim') { finishClaim(p, h.id); continue; }
     if (h.kind === 'claimBuilding') { finishClaimBuilding(p, h.id); continue; }
     if (h.kind === 'datahack') { finishDataHack(p, h.id); continue; }
@@ -3536,33 +3539,21 @@ function killPlayer(p, attacker, headshotKill) {
   if (p.boat) unseat(p);
   p.dead = true;
   Object.assign(p, { downed: false, downedUntil: 0, bleedHp: 0, downedBy: null });
-  const { primary, primary2, secondary, armor, pack } = p.inv;
   const keepIntel = hasField(p, 'pouch') ? Math.min(3, p.intel) : 0;
-  // Your claim marker and tools stay with you: losing them would leave you unable to start again.
-  const keep = pack.filter((i) => i && (i.kind === 'marker' || i.kind === 'tool'));
+  // What you'd stashed stays with you; what you'd picked up since (and intel not yet uploaded) goes
+  // in the bag. Your claim marker and tools always stay: losing them would leave you unable to start again.
+  const u = unstashed(p), lost = new Set(u.items.map((i) => i.id));
+  dropBag(p.x, p.z, u.items, { ...u.res, intel: p.intel - keepIntel }, `${p.name}'s bag`);
+  for (const sl of [...GUN_SLOTS, 'armor']) if (p.inv[sl] && lost.has(p.inv[sl].id)) p.inv[sl] = null;
+  p.inv.pack = p.inv.pack.filter((i) => i && !lost.has(i.id));
+  p.mags = Object.fromEntries(Object.entries(p.mags || {}).filter(([id]) => !lost.has(id)));
+  for (const r of STASH_RES) p[r] = (p[r] || 0) - (u.res[r] || 0);
+  p.intel = keepIntel;
+  p.armor = 0; p.camoOn = false;
+  if (!p.inv[p.active]) p.active = GUN_SLOTS.find((sl) => p.inv[sl]) || 'secondary';
   if (p.lingerUntil) {
-    // Killed after quitting mid-fight: only a share of what you carried goes in the bag (a random
-    // QUIT_DROP of your gear, and that share of every supply); you keep the rest for next time.
-    const gear = [['primary', primary], ['primary2', primary2], ['secondary', secondary], ['armor', armor], ...pack.filter((i) => i && !keep.includes(i)).map((i) => ['pack', i])].filter(([, i]) => i);
-    for (let i = gear.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [gear[i], gear[j]] = [gear[j], gear[i]]; }
-    const lose = gear.slice(0, Math.round(gear.length * QUIT_DROP)), kept = gear.slice(lose.length);
-    const takeRes = Object.fromEntries(RESOURCES.map((r) => [r, Math.floor((p[r] || 0) * QUIT_DROP)]));
-    const lostIntel = Math.floor((p.intel - keepIntel) * QUIT_DROP);
-    if (lose.length || Object.values(takeRes).some(Boolean) || lostIntel) dropBag(p.x, p.z, lose.map(([, i]) => i), { ...takeRes, intel: lostIntel }, `${p.name}'s bag`);
-    p.inv = { primary: null, primary2: null, secondary: null, armor: null, pack: [...keep] };
-    for (const [slot, it] of kept) { if (slot === 'pack') p.inv.pack.push(it); else p.inv[slot] = it; }
-    p.mags = Object.fromEntries(Object.entries(p.mags || {}).filter(([id]) => kept.some(([, it]) => it.id === id)));
-    for (const r of RESOURCES) p[r] = (p[r] || 0) - takeRes[r];
-    p.intel -= lostIntel;
-    p.armor = 0; p.camoOn = false;
     const away = db.characters[p.token];
-    if (away) (away.awayLog ||= []).push({ at: Date.now(), text: `You quit mid-fight and were killed before you got away: you lost ${lose.length ? lose.map(([, i]) => i.name).join(', ') : 'no gear'} and ${Math.round(QUIT_DROP * 100)}% of your supplies` });
-  } else {
-    dropBag(p.x, p.z, [primary, primary2, secondary, armor, ...pack.filter((i) => !keep.includes(i))], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
-    p.inv = { primary: null, primary2: null, secondary: null, armor: null, pack: keep };
-    p.mags = {}; p.armor = 0; p.camoOn = false;
-    for (const r of RESOURCES) p[r] = 0;
-    p.intel = keepIntel;
+    if (away) (away.awayLog ||= []).push({ at: Date.now(), text: `You quit mid-fight and were killed before you got away: you lost ${hasUnstashed(u) ? unstashedText(u) : 'nothing you had stashed'}` });
   }
   p.hotLoose = null;   // the loose cash and intel went into the bag with everything else
   cancelHack(p, 'You went down');
@@ -4553,18 +4544,23 @@ function containerAction(p, msg) {
   if (msg.action === 'take') {
     const cap = raidCap(p, kind, store);
     if (cap === false) return;
+    // Out of your own stash (or hideout): it was safe in there, and it stays safe on you.
+    const own = store === claimOf(p)?.store || (kind === 'crate' && PIECES[store.type]?.hideout && canManage(p, store));
+    if (own) p.secured ||= { ids: [], res: {} };
     const full = () => toast(p, `That's all one raid can carry off from here (${Math.round(cap.share * 100)}% of what was in it). The rest is locked in their strongbox for a day.`);
     if (RESOURCES.includes(msg.res)) {
       const n = Math.min(store[msg.res] || 0, cap ? Math.max(0, cap.res[msg.res] || 0) : Infinity);
       if (cap && n <= 0) return full();
       p[msg.res] += n; store[msg.res] = (store[msg.res] || 0) - n;
       if (cap) cap.res[msg.res] -= n;
+      if (own && msg.res !== 'intel') p.secured.res[msg.res] = (p.secured.res[msg.res] || 0) + n;
     } else {
       const idx = store.items.findIndex((i) => i.id === msg.itemId);
       if (idx < 0) return;
       if (store.items[idx].bulk) return toast(p, 'Bulk freight is too heavy to carry. It stays in the hold until you deliver it at the landing.');
       if (cap && cap.items <= 0) return full();
       if (!addToPack(p, store.items[idx])) return toast(p, 'Backpack full');
+      if (own) p.secured.ids.push(store.items[idx].id);
       store.items.splice(idx, 1);
       if (cap) cap.items--;
     }
@@ -4592,6 +4588,60 @@ function containerAction(p, msg) {
   if (kind === 'bag' && !store.items.length && !RESOURCES.some((r) => store[r])) db.bags = db.bags.filter((b) => b !== store);
   dirty(p);
   refreshContainerViewers(kind, id);
+}
+
+// ---------------------------------------------------------------- stashing: what's safe and what isn't
+// What you pick up out in the world is yours to use at once, but it isn't safe: die before you get it
+// home and it goes in your bag for whoever finds you. Walk into your stash house (or one of your
+// hideouts) and you stash it: a few seconds' work, and from then on it stays with you through any
+// death. Your claim marker and tools are always kept; intel is only ever safe once uploaded.
+const STASH_MS = 3000;
+const STASH_RES = RESOURCES.filter((r) => r !== 'intel');
+const carried = (p) => [...GUN_SLOTS.map((s) => p.inv[s]), p.inv.armor, ...p.inv.pack].filter(Boolean);
+const alwaysKept = (it) => it.kind === 'marker' || it.kind === 'tool';
+function secureAll(p) { p.secured = { ids: carried(p).map((i) => i.id), res: Object.fromEntries(STASH_RES.map((r) => [r, p[r] || 0])) }; }
+/** What you carry that isn't stashed yet: items, and supplies over what you had when you last stashed. */
+function unstashed(p) {
+  const s = p.secured || { ids: [], res: {} }, ids = new Set(s.ids);
+  const items = carried(p).filter((i) => !ids.has(i.id) && !alwaysKept(i));
+  const res = {};
+  for (const r of STASH_RES) { const n = Math.max(0, (p[r] || 0) - (s.res[r] || 0)); if (n) res[r] = n; }
+  return { items, res };
+}
+const hasUnstashed = (u) => u.items.length > 0 || Object.keys(u.res).length > 0;
+function unstashedText(u) {
+  const parts = [];
+  if (u.items.length) parts.push(u.items.length === 1 ? u.items[0].name : `${u.items.length} items`);
+  const n = Object.keys(u.res).length;
+  if (n) parts.push(u.res.cash && n === 1 ? `$${u.res.cash}` : 'supplies');
+  return parts.join(' and ');
+}
+/** At your stash house (anywhere inside it, or at its locker) or one of your hideouts. */
+function atStashPoint(p) {
+  if (p.dead) return false;
+  if (atOwnStash(p)) return true;
+  const c = claimOf(p);
+  if (c?.kind === 'home') { const h = map.houses[c.id]; if (Math.abs(p.x - h.x) < 6 && Math.abs(p.z - h.z) < 6) return true; }   // anywhere in the house
+  if (c?.kind === 'flag' && c.store.building != null && buildingAt(p.x, p.z) === c.store.building) return true;   // a claimed building: anywhere in it
+  return structsNear(p.x, p.z, INTERACT_RANGE + 2).some((st) => PIECES[st.type].hideout && !st.ruined && canManage(p, st) && Math.hypot(st.x - p.x, st.z - p.z) < INTERACT_RANGE + 0.6);
+}
+/** Twice a second: spending comes out of what's stashed first; at your stash, the haul gets stashed. */
+function tickStashing(now) {
+  for (const p of players.values()) {
+    const s = p.secured;
+    if (s) for (const r of STASH_RES) if ((s.res[r] || 0) > (p[r] || 0)) s.res[r] = p[r] || 0;
+    if (p.dead || p.downed || p.hack || p.boat || p.lingerUntil || p.sprint) continue;
+    if (!atStashPoint(p)) continue;
+    if (!hasUnstashed(unstashed(p))) continue;
+    p.hack = { kind: 'stash', id: null, start: now, until: now + STASH_MS, total: STASH_MS, x: p.x, z: p.z, walk: true };
+    send(p.ws, { t: 'hack', kind: 'stash', until: p.hack.until, total: STASH_MS });
+  }
+}
+function finishStash(p) {
+  const u = unstashed(p);
+  secureAll(p);
+  send(p.ws, { t: 'hack', done: true, text: hasUnstashed(u) ? `Stashed: ${unstashedText(u)} safe now` : '' });
+  dirty(p);
 }
 
 // ---------------------------------------------------------------- stash house: gunsmith + upgrades
@@ -4879,9 +4929,16 @@ function handleDeploy(p, msg) {
   if (rules && msg.kind !== 'home' && msg.kind !== 'house' && nearDeath(rules, at.x, at.z)) return toast(p, `Too close to where you died — that opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. Your stash house is open.`);
   if (rules && msg.kind === 'crew') p.crewDropAt = now;
   if (!p.deploying) {
-    const keepIntel = p.intel;
-    Object.assign(p, { hp: 100, armor: 0, ...starterLoadout(), food: HOMESTEAD.hunger.start });
-    p.intel = keepIntel;
+    // Back with what you'd stashed (it survived the death); a starter pistol if you've no gun at all,
+    // a medkit if you've none, and at least the starting ammo. All of it counts as stashed.
+    const kit = starterLoadout();
+    if (!GUN_SLOTS.some((sl) => p.inv[sl])) { p.inv.secondary = kit.inv.secondary; p.mags[kit.inv.secondary.id] = kit.mags[kit.inv.secondary.id]; }
+    if (!p.inv[p.active]) p.active = GUN_SLOTS.find((sl) => p.inv[sl]) || 'secondary';
+    if (!p.inv.pack.some((i) => i.kind === 'medkit')) p.inv.pack.push(makeConsumable('medkit'));
+    p.ammo = Math.max(p.ammo || 0, kit.ammo);
+    Object.assign(p, { hp: 100, food: HOMESTEAD.hunger.start });
+    p.armor = p.inv.armor ? maxArmor(p) : 0;
+    secureAll(p);
   }
   devKit(p);
   if ((msg.kind === 'house' || msg.kind === 'home') && claim.store.upg.infirmary) {
@@ -5167,6 +5224,7 @@ function handleJoin(ws, msg) {
   if (p.houseId !== null) db.houses[p.houseId].ownerName = name;
   p.mags ??= {};
   devKit(p);
+  if (!p.secured) secureAll(p);   // (characters from before stashing: what they have counts as stashed)
   for (const st of structs.values()) if (st.owner === token) st.ownerName = name;
   p.deploying = !!p.needsDeploy;
   if (p.deploying) p.dead = true;
@@ -5545,7 +5603,6 @@ wss.on('connection', (ws) => {
 
 /** Out of the world: saved as they are, shown offline to their crew. */
 const COMBAT_LOG_MS = Number(process.env.COMBAT_LOG_MS || 30_000);
-const QUIT_DROP = 0.3;   // killed while left standing after quitting: this share of what you carry is lost
 function logOff(p) {
   if (!players.has(p.id)) return;
   persistCharacter(p);
@@ -5626,6 +5683,7 @@ const loop = setInterval(() => {
   if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickSites(now); tickRides(now); }
   tickStuns(now);
   tickLingering(now);
+  if (tick % Math.max(1, Math.round(TICK_HZ / 2)) === 0) tickStashing(now);
   tickEvents(now, dt);
   if (tick % 4 === 0) tickDefenses(now);
   for (const c of [...charges.values()]) if (c.detAt <= now) explode(c, now);

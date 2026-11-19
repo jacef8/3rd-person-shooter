@@ -2214,7 +2214,7 @@ function handle(m) {
       toast(m.hot ? `🔥 ${m.text} · ${distText(Math.hypot(m.x - state.x, m.z - state.z))} away` : `⚠ ${m.text} nearby`);
       break;
     case 'hack':
-      if (m.cancel) { state.hack = null; toast(m.reason); }
+      if (m.cancel) { state.hack = null; if (m.reason) toast(m.reason); }
       else if (m.done) { state.hack = null; if (m.text) toast(m.text); }
       // Progress can speed up mid-way (crewmates helping), so work back from the finish time.
       else state.hack = { start: performance.now() - Math.max(0, m.total - (m.until - Date.now())), total: m.total, kind: m.kind, helpers: m.helpers || 0 };
@@ -2346,7 +2346,8 @@ function updateHud() {
   const medkits = me.inv.pack.filter((i) => i.kind === 'medkit').length;
   $('wextra').textContent = `${me.reloading ? 'RELOADING… · ' : ''}Medkits ${medkits} · Kills ${me.kills}`;
   $('housestatus').textContent = (me.claim ? `⌂ ${me.claim.name} · Lv${me.claim.level}${me.claim.ruined ? ' · RUIN: rebuild it at the stash' : ''}` : 'No stash house — plant a claim marker')
-    + (me.shield ? ` · 🛡 New-player shield until level ${me.shieldLevel}` : '');
+    + (me.shield ? ` · 🛡 New-player shield until level ${me.shieldLevel}` : '')
+    + (unstashedSummary(me) ? ` · ⚠ Not stashed: ${unstashedSummary(me)}` : '');
   const goodsHud = ['seeds', 'corn', 'peanuts', 'cotton', 'fish', 'meat', 'meals', 'honey', 'shine', 'hide'].filter((g) => me[g] && GOODS[g]).map((g) => `<span><b>${me[g]}</b> ${GOODS[g].name.toLowerCase()}</span>`).join('');
   // What you carry, in words. Zeros are left out to keep it short; cash always shows.
   const carried = [[`$${me.cash || 0}`, 'cash'], [me.parts, 'parts'], [me.tech, 'tech'], [me.salvage, 'salvage'], [me.wood, 'wood'], [me.stone, 'stone'], [me.intel, 'intel'], [me.comms, '★ medals']];
@@ -2451,6 +2452,16 @@ const RES_USE = {
 const RES_ICON = { food: '🍽️', trade: '📦', cash: '💵', parts: '⚙️', tech: '🔌', salvage: '🔩', ammo: '🟡', rockets: '🚀', wood: '🪵', stone: '🪨', intel: '💾', seeds: '🌱', corn: '🌽', peanuts: '🥜', cotton: '☁️', fish: '🐟', meat: '🍖', meals: '🍲', honey: '🍯', shine: '🫙', hide: '🟫' };
 const GUN_BADGE = { sidearm: 'PISTOL', smg: 'SMG', carbine: 'RIFLE', dmr: 'DMR', shotgun: 'SHOTGUN', lmg: 'LMG', launcher: 'RPG' };
 const KEY_ICON = { gunsmith: '🛠', intel: '💾', travel: '🗺', takeall: '⬇️', putall: '⬆️', ruin: '🔨', abandon: '⚠️', devgunsmith: '🛠', 'g-all': '⬇️' };
+/** What you carry that you haven't stashed yet, in a few words ("2 items, $40, 30 parts"), or ''. */
+function unstashedSummary(me) {
+  const u = me?.unstashed;
+  if (!u) return '';
+  const parts = [];
+  if (u.ids?.length) parts.push(u.ids.length === 1 ? '1 item' : `${u.ids.length} items`);
+  for (const [r, n] of Object.entries(u.res || {}).slice(0, 3)) parts.push(resText(r, n));
+  if (Object.keys(u.res || {}).length > 3) parts.push('more');
+  return parts.join(', ');
+}
 /** The picture for a line: a gun's type in its paint colour, or an emoji for everything else. */
 function tileIcon(key, o) {
   const it = o.item;
@@ -2471,10 +2482,11 @@ function tileIcon(key, o) {
  */
 function invRow(key, o) {
   if (o.hot) o = { ...o, tag: 'HOT · extract to keep' };
+  else if (o.loose) o = { ...o, tag: `Not stashed${o.tag ? ` · ${o.tag}` : ''}` };
   invUi.rows.set(key, o);
   const t = document.createElement('button');
   const acts = o.acts || {};
-  t.className = 'irow' + (o.big ? ' big' : '') + (o.mini ? ' mini' : '') + (invUi.sel === key ? ' sel' : '') + (o.hot ? ' hot' : '') + (acts.a || acts.x || acts.y || o.more?.length ? '' : ' idle') + (o.inHand ? ' inhand' : '');
+  t.className = 'irow' + (o.big ? ' big' : '') + (o.mini ? ' mini' : '') + (invUi.sel === key ? ' sel' : '') + (o.hot ? ' hot' : '') + (o.loose && !o.hot ? ' loose' : '') + (acts.a || acts.x || acts.y || o.more?.length ? '' : ' idle') + (o.inHand ? ' inhand' : '');
   t.dataset.pad = key;
   t.style.setProperty('--bar', o.color || '#5a5f68');
   t.innerHTML = `<span class="ic">${tileIcon(key, o)}</span><span class="tx"><b>${o.title}</b>${o.tag ? `<small>${o.tag}</small>` : ''}${o.chips || ''}${acts.a ? `<span class="qa"><kbd class="padonly">Ⓐ</kbd> ${acts.a[0]}</span>` : ''}</span>`;
@@ -2547,6 +2559,7 @@ function buildInvColumns() {
   const put = !!c?.canPut;
   const drop = (it) => ['Drop', () => send({ t: 'inv', action: 'drop', itemId: it.id })];
   const gunColor = (it) => (it.kind === 'weapon' ? (PAINTS[it.paint]?.color || '#888') : it.kind === 'armor' ? '#5aa8ff' : '#5a5f68');
+  const loose = new Set(me.unstashed?.ids || []);   // picked up since you last stashed: lost if you die
   // ---- what you have on: the three guns (with their parts) and armor
   const you = $('youCol'); you.innerHTML = '';
   you.append(head('Equipped'));
@@ -2558,7 +2571,7 @@ function buildInvColumns() {
     const acts = it.kind === 'weapon'
       ? { a: me.active === slot ? partsAction(it) : ['Hold it', () => send({ t: 'weapon', slot })], x: unequip, y: me.active === slot ? null : partsAction(it) }
       : { x: unequip };
-    you.append(...invRow(`eq-${slot}`, { item: it, tag: me.active === slot ? '' : statLine(it).split(' · ').slice(0, 2).join(' · '), inHand: me.active === slot, hot: !!it.hot, big: it.kind === 'weapon', title: it.name, chips: attachmentChips(it), detail: `${label} · ${statLine(it)}`, extra: attachmentLine(it), color: gunColor(it), acts }));
+    you.append(...invRow(`eq-${slot}`, { item: it, loose: loose.has(it.id), tag: me.active === slot ? '' : statLine(it).split(' · ').slice(0, 2).join(' · '), inHand: me.active === slot, hot: !!it.hot, big: it.kind === 'weapon', title: it.name, chips: attachmentChips(it), detail: `${label} · ${statLine(it)}`, extra: attachmentLine(it), color: gunColor(it), acts }));
   }
   if (state.devKit) you.append(...invRow('devgunsmith', { title: 'Gunsmith (testing: works anywhere)', detail: 'Try every scope, part and paint on any gun you carry', color: '#ff7a1a', acts: { a: ['Open', openGunsmith] } }));
   // ---- your backpack, then your supplies
@@ -2569,6 +2582,7 @@ function buildInvColumns() {
   bar.className = `capbar${full >= 1 ? ' full' : full > 0.8 ? ' near' : ''}`;
   bar.innerHTML = `<i style="width:${Math.min(100, full * 100).toFixed(1)}%"></i>`;
   packEl.append(bar);
+  if (unstashedSummary(me)) packEl.append(Object.assign(document.createElement('div'), { className: 'loosenote', textContent: `⚠ Not stashed yet: ${unstashedSummary(me)}. Use it as you like, but it's lost if you die. Get back to your stash house (or a hideout) and it's stashed for good.` }));
   if (!inv.pack.length) packEl.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'Nothing in your backpack.' }));
   // Grouped by what it is: guns, armor, healing, throwables and explosives, flares, tools, the rest.
   const PACK_GROUPS = [['Guns', (it) => it.kind === 'weapon'], ['Armor', (it) => it.kind === 'armor'], ['Health', (it) => it.kind === 'medkit'],
@@ -2598,7 +2612,7 @@ function buildInvColumns() {
     if (it.kind === 'lockbox') acts.a = ['Break it open', () => { send({ t: 'inv', action: 'breakbox', itemId: it.id }); closeInventory(); }];
     if (it.kind === 'flare') acts.a = ['Fire it', () => { send({ t: 'inv', action: 'flare', itemId: it.id }); closeInventory(); }];
     if (it.kind === 'hotflare') acts.a = ['Fire it: hot drop', () => { send({ t: 'inv', action: 'hotdrop', itemId: it.id }); closeInventory(); }];
-    packEl.append(...invRow(`pk-${it.id}`, { item: it, hot: !!it.hot, title: it.name, tag: it.kind === 'weapon' ? statLine(it) : '', chips: attachmentChips(it, false), detail: statLine(it), extra: attachmentLine(it), color: gunColor(it), acts, more }));
+    packEl.append(...invRow(`pk-${it.id}`, { item: it, loose: loose.has(it.id), hot: !!it.hot, title: it.name, tag: it.kind === 'weapon' ? statLine(it) : '', chips: attachmentChips(it, false), detail: statLine(it), extra: attachmentLine(it), color: gunColor(it), acts, more }));
   }
   const carried = RES_UI.filter((r) => me[r]);
   packEl.append(head('Supplies'));
@@ -4325,7 +4339,7 @@ function drawMarkers() {
     hb.hidden = false;
     const f = Math.min(1, (now - state.hack.start) / state.hack.total);
     hb.querySelector('i').style.width = `${f * 100}%`;
-    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING', breakbox: 'PRYING OPEN THE LOCKER', rebuild: 'REBUILDING', selfrevive: 'PATCHING YOURSELF UP', eat: 'EATING', heal: 'USING MEDKIT' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + (state.hack.kind === 'eat' || state.hack.kind === 'heal' ? ' — walking is fine, sprinting stops it' : ' — hold still');
+    hb.querySelector('span').textContent = { terminal: 'HACKING TERMINAL', door: 'BYPASSING LOCK', gatehack: 'BYPASSING LOCK', drop: 'OPENING SUPPLY DROP', crate: 'RECOVERING CRATE', revive: 'REVIVING', datahack: 'DATA HACK', claim: 'PLANTING CLAIM MARKER', harvest: 'GATHERING', upgrade: 'BUILDING', raid: 'BREAKING IN', claimBuilding: 'CLAIMING BUILDING', cook: 'COOKING', fish: 'FISHING', hotwire: 'HOTWIRING', breakbox: 'PRYING OPEN THE LOCKER', rebuild: 'REBUILDING', selfrevive: 'PATCHING YOURSELF UP', eat: 'EATING', heal: 'USING MEDKIT', stash: 'STASHING YOUR HAUL' }[state.hack.kind] + (state.hack.helpers ? ` · ${state.hack.helpers} helping` : '') + (state.hack.kind === 'stash' ? ' — stay inside' : state.hack.kind === 'eat' || state.hack.kind === 'heal' ? ' — walking is fine, sprinting stops it' : ' — hold still');
   } else hb.hidden = true;
   // Stun flash fades out over the stun.
   const sf = $('stunfx'), sLeft = (state.stunnedUntil || 0) - performance.now();
