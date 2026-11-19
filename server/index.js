@@ -1829,12 +1829,69 @@ function boatState(p, msg) {
     const inst = Math.min(def.speed * 1.3, Math.hypot(x - b.x, z - b.z) / Math.max(dt, 0.05));
     rt.speed += (inst - rt.speed) * (dt > 0.03 ? 0.6 : 0.3);
     rt.rev = (x - b.x) * Math.sin(msg.boat.yaw) + (z - b.z) * Math.cos(msg.boat.yaw) < -0.01;   // backing up
+    const ox = b.x, oz = b.z;
     b.x = x; b.z = z; b.yaw = msg.boat.yaw;
     if (!ok || Math.hypot(x - msg.boat.x, z - msg.boat.z) > (def.land ? 3 : 1.5)) send(p.ws, { t: 'boatFix', x, z, yaw: b.yaw });
     placeOccupants(b);
+    if (def.land) rideHits(p, b, rt, def, ox, oz);
   }
   p.speed = rt.speed;
   if (rt.speed > 0.5) p.lastActive = now;
+}
+/**
+ * A moving ride hits whoever (and whatever) is in its path. Under walking pace it only shoves them
+ * aside; above that the harm grows with speed, deadly at highway speed. Deer and hogs hit this way
+ * are yours to butcher, and a big animal dents the ride. Safe zones, new players' shields and your
+ * own crew are spared (applyDamage's rules, as for a bullet). Bicycles and skateboards hurt no one.
+ */
+const RUN_OVER = { harmless: 4.5, perMs: 9, max: 220, everyMs: 900 };
+function rideHits(p, b, rt, def, ox = b.x, oz = b.z) {
+  if (def.pedal || def.stand) return;
+  const speed = rt.speed || 0;
+  if (speed < 2) return;
+  const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw), hl = def.len / 2 + 0.45, hw = def.wid / 2 + 0.45, y = rideY(b), now = Date.now();
+  // The whole stretch it covered since the last update, not just where it ended up (at speed an
+  // update can cover several metres: someone in between still gets hit).
+  const travel = Math.min(30, Math.hypot(b.x - ox, b.z - oz)), reach = hl + travel + 1;
+  const riders = new Set(rtOf(b).seats.filter(Boolean));
+  const struck = (o) => {
+    if (o.dead || riders.has(o.id) || o.boat || Math.abs(o.x - b.x) > reach || Math.abs(o.z - b.z) > reach) return null;
+    const dx = o.x - b.x, dz = o.z - b.z, along = dx * fx + dz * fz, side = dx * fz - dz * fx;
+    if (Math.abs(side) > hw) return null;
+    // From where the bumper was to where it is now (the end you're driving with: the back, reversing).
+    if (rt.rev ? along < -hl || along > travel + hl * 0.3 : along > hl || along < -travel - hl * 0.3) return null;
+    const oy = o.y !== undefined && o.yx === o.x && o.yz === o.z ? o.y : terrain.height(o.x, o.z);
+    if (Math.abs(oy - y) > 2.2) return null;   // under a bridge, up on a roof
+    const hits = (o.rideHits ??= {});
+    if (now - (hits[b.id] || 0) < RUN_OVER.everyMs) return null;
+    hits[b.id] = now;
+    return side >= 0 ? 1 : -1;
+  };
+  const dmg = Math.min(RUN_OVER.max, (speed - RUN_OVER.harmless) * RUN_OVER.perMs);
+  // Everyone aboard feels it: a thud and a jolt (harder the faster).
+  const bump = (o) => { for (const id of riders) { const r = players.get(id); if (r) send(r.ws, { t: 'rideBump', x: o.x, z: o.z, hard: Math.min(1, Math.max(0.15, dmg / 120)) }); } };
+  for (const o of players.values()) {
+    const way = struck(o);
+    if (!way) continue;
+    if (sameSquad(o, p)) continue;
+    bump(o);
+    if (dmg > 0) {
+      o.hitHow = { how: 'ride', at: now };
+      applyDamage(o, dmg, p, false);
+      if (!o.dead) toast(o, `Hit by ${p.name}'s ${rideWord(b)}`);
+    }
+  }
+  for (const o of bots.values()) {
+    const way = struck(o);
+    if (!way) continue;
+    bump(o);
+    // Knocked clear of the bumper either way (bots stand where the server says).
+    o.x += fz * way * (hw + 0.6); o.z -= fx * way * (hw + 0.6);
+    if (dmg <= 0) continue;
+    applyDamage(o, dmg, p, true);
+    if (o.animal && (o.kind === 'deer' || o.kind === 'hog')) damageBoat(b, speed * (o.kind === 'hog' ? 1.2 : 2), null);
+    if (b.gone) return;
+  }
 }
 /** Boats, rides and landing posts within reach, as an interactable: { d, run }. */
 function riverInteractable(p) {
@@ -3585,7 +3642,8 @@ function killPlayer(p, attacker, headshotKill) {
     again.set(p.token, { at: Date.now(), n: streak });
     award(attacker, Math.round((XP.playerKill + 20 * level(p) + (headshotKill ? XP.headshotKill : 0)) / 2 ** streak), `Killed ${p.name}`, true);
   }
-  feed(`${by} ➜ ${p.name}`);
+  const runOver = p.hitHow?.how === 'ride' && Date.now() - p.hitHow.at < 1500;
+  feed(runOver ? `${by} ran over ${p.name}` : `${by} ➜ ${p.name}`);
   send(p.ws, { t: 'died', by, deploy: deployOptions(p) });
   dirty(p);
 }

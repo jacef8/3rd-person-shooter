@@ -209,3 +209,35 @@ test('one you are standing in (just got out) lets you step clear', () => {
   const car = { id: 'c1', type: 'car', x: 0, z: 0, yaw: 0 };
   assert.equal(rideSolids([car], 0.3, 0, 6, () => 0).length, 0);
 });
+
+test('a ride hits people in its way: a shove when slow, harm that grows with speed', async () => {
+  const r = straightRoad();
+  const fx = Math.sin(r.yaw), fz = Math.cos(r.yaw);
+  const at = { x: r.x1 + fx * 10, z: r.z1 + fz * 10 };
+  const tokA = hex('c3'), tokB = hex('d4');
+  const s = await server('runover', { [tokA]: character('Jace', at.x + fz * 3, at.z - fx * 3), [tokB]: character('Eli', at.x + fx * 40, at.z + fz * 40) });
+  try {
+    const a = await conn(s.port, 'Jace', tokA), b = await conn(s.port, 'Eli', tokB);
+    await until(() => a.you && b.you);
+    a.send({ t: 'dev', spawnRide: { type: 'pickup', x: at.x, z: at.z, yaw: r.yaw } });
+    const id = (await until(() => a.dev)).id;
+    await until(() => a.snap?.boats?.some((v) => v.id === id));
+    a.send({ t: 'interact' });
+    await until(() => a.you?.boat?.id === id, 10000);
+    // Creep into him at walking pace: no harm.
+    await b.tp(at.x + fx * 6, at.z + fz * 6);
+    for (let i = 1; i <= 30; i++) { a.send({ t: 'state', x: 0, z: 0, yaw: r.yaw, pitch: 0, boat: { x: at.x + fx * i * 0.15, z: at.z + fz * i * 0.15, yaw: r.yaw } }); await sleep(50); }
+    await sleep(300);
+    assert.equal(b.you.hp, 100, 'a slow bump hurts no one');
+    assert.equal(b.you.armor, b.you.maxArmor, 'not even the armor');
+    // Now at speed down the road, straight through him.
+    const from = a.snap.boats.find((v) => v.id === id);
+    await b.tp(from.x + fx * 25, from.z + fz * 25);
+    const before = b.you.hp + b.you.armor;
+    // About 27 mph: badly hurt (much faster than this knocks you down outright).
+    for (let i = 1; i <= 70; i++) { a.send({ t: 'state', x: 0, z: 0, yaw: r.yaw, pitch: 0, boat: { x: from.x + fx * i * 0.6, z: from.z + fz * i * 0.6, yaw: r.yaw } }); await sleep(50); }
+    await until(() => b.you.hp + b.you.armor < before, 4000);
+    assert.ok(before - (b.you.hp + b.you.armor) > 40 && !b.you.dead, `hit hard at speed: lost ${before - (b.you.hp + b.you.armor)} (armor takes it first, as with a bullet)`);
+    assert.ok(b.msgs.some((m) => m.t === 'toast' && /Hit by Jace's pickup/.test(m.text)), 'told who hit him');
+  } finally { s.proc.kill(); }
+});

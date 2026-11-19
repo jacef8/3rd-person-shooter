@@ -2132,6 +2132,10 @@ function handle(m) {
       setCharacterStowed(selfMesh, stowedOf(m));
       break;
     }
+    case 'rideBump':   // your ride hit someone (or something): a thud and a jolt
+      sfx.impact(m.x, myY() + 0.8, m.z, 'body');
+      state.shake = Math.max(state.shake || 0, 0.35 * (m.hard || 0.3));
+      break;
     case 'boatFix':
       if (state.boat) Object.assign(state.boat, { x: m.x, z: m.z, yaw: m.yaw, speed: (state.boat.speed || 0) * 0.6, y: undefined });   // put back where the server has it, still rolling
       break;
