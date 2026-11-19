@@ -634,6 +634,7 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
     return { mesh: m, wet };
   }
 
+  const bridgeCells = [];   // { x, z, near, far }: the bridges in 400 m pieces (just below)
   // Bridges: each deck follows its road line from bank to bank, a level above the ground, on concrete
   // bents over the swamp and big piers in the river. The Trammell Bridge's 1938 span carries a steel
   // through-truss over the channel; the 1998 span is a plain concrete high-rise. Drawn with instanced
@@ -683,15 +684,28 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
         }
       }
     }
-    for (const [k, list] of Object.entries(parts)) {
-      if (!list.length) continue;
-      const im = new THREE.InstancedMesh(unit, mats[k], list.length);
-      list.forEach((mm, i) => im.setMatrixAt(i, mm));
-      im.instanceMatrix.needsUpdate = true;
-      im.castShadow = true; im.receiveShadow = true;
-      im.computeBoundingSphere();
-      scene.add(im);
-      far.add(im.clone());
+    // In 400 m pieces, so what's off screen is skipped, and each piece is drawn once: in the near
+    // scene when it's within the near range, in the far scene beyond it (see update).
+    const CELL = 400, cells = new Map(), p = new THREE.Vector3();
+    for (const [k, list] of Object.entries(parts)) for (const mm of list) {
+      p.setFromMatrixPosition(mm);
+      const ck = `${Math.floor(p.x / CELL)},${Math.floor(p.z / CELL)}`;
+      if (!cells.has(ck)) cells.set(ck, { x: (Math.floor(p.x / CELL) + 0.5) * CELL, z: (Math.floor(p.z / CELL) + 0.5) * CELL, parts: {} });
+      (cells.get(ck).parts[k] ??= []).push(mm);
+    }
+    for (const c of cells.values()) {
+      c.near = new THREE.Group(); c.far = new THREE.Group();
+      for (const [k, list] of Object.entries(c.parts)) {
+        const im = new THREE.InstancedMesh(unit, mats[k], list.length);
+        list.forEach((mm, i) => im.setMatrixAt(i, mm));
+        im.instanceMatrix.needsUpdate = true;
+        im.castShadow = true; im.receiveShadow = true;
+        im.computeBoundingSphere();
+        c.near.add(im); c.far.add(im.clone());
+      }
+      c.parts = null;
+      scene.add(c.near); far.add(c.far);
+      bridgeCells.push(c);
     }
   }
 
@@ -1163,6 +1177,7 @@ vBlade = position.y;
       primed.length = 0;
       const prime = (g) => g?.traverse((o) => { if ((o.isMesh || o.isInstancedMesh) && o.frustumCulled && o.visible) { o.frustumCulled = false; primed.push(o); } });
       sky.position.set(px, 0, pz);
+      for (const c of bridgeCells) { const nearBy = Math.hypot(c.x - px, c.z - pz) < viewRange + 300; c.near.visible = nearBy; c.far.visible = !nearBy; }
       waterTime.value = performance.now() / 1000;
       // Grass blades are laid out around you as you move. At driving speed they'd be laid out again
       // several times a second (a stutter on a phone) for blades nobody can see go by: hide them, and

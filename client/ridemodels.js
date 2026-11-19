@@ -12,6 +12,12 @@ import { animalModel } from '/animals.js';
 // that has loaded; kinds with no real model keep the boxes.
 const REAL = { car: ['sedan', 'suv', 'classic'], pickup: ['pickup'], motorcycle: ['motorcycle'], dirtbike: ['motorcycle'], tractor: ['tractor'] };
 const gltf = new GLTFLoader(), realCache = new Map();
+// Each has a light copy, <name>_lo.glb (~2,000 triangles against 7-9,000; tools/build_vehicle_lods.mjs):
+// a phone only ever uses those; a computer shows the full one up close and the light one past LO_AT.
+const HAS_LO = new Set(['sedan', 'suv', 'classic', 'pickup', 'motorcycle', 'bus']), LO_AT = 28;
+let lowOnly = false;
+/** Phones and TV boxes: the light vehicle models only (set once at the start, before any are made). */
+export function vehicleDetail(low) { lowOnly = !!low; }
 function realModel(name) {
   if (!realCache.has(name)) realCache.set(name, gltf.loadAsync(`/models/vehicles/${name}.glb`).then((g) => {
     const m = mergeByMaterial(g.scene);
@@ -78,11 +84,13 @@ function faded(name, src) {
 }
 /** Swap a ride's box model for the real one, `len` metres long. */
 function useReal(g, name, len, { fade = false } = {}) {
-  realModel(name).then((src) => {
+  const lo = HAS_LO.has(name), names = lo && lowOnly ? [`${name}_lo`] : lo ? [name, `${name}_lo`] : [name];
+  Promise.all(names.map(realModel)).then(([src, srcLo]) => {
     if (!src || g.userData.disposed) return;
-    const m = src.clone();
+    const dress = (n, s) => { const c = s.clone(); if (fade) { const mats = faded(n, s); c.traverse((o) => { if (o.isMesh) o.material = mats.get(o.material) || o.material; }); } return c; };
+    let m = dress(names[0], src);
+    if (srcLo) { const l = new THREE.LOD(); l.addLevel(m, 0); l.addLevel(dress(names[1], srcLo), LO_AT); m = l; }
     m.scale.setScalar(len);
-    if (fade) { const mats = faded(name, src); m.traverse((o) => { if (o.isMesh) o.material = mats.get(o.material) || o.material; }); }
     const body = g.userData.body;
     for (const c of body.children) c.visible = false;
     body.add(m);
@@ -90,7 +98,7 @@ function useReal(g, name, len, { fade = false } = {}) {
   });
 }
 /** Start fetching the real models early. */
-export function preloadVehicles() { for (const list of [...Object.values(REAL), ['bus']]) for (const n of list) realModel(n); }
+export function preloadVehicles() { for (const list of [...Object.values(REAL), ['bus']]) for (const n of list) { if (!lowOnly || !HAS_LO.has(n)) realModel(n); if (HAS_LO.has(n)) realModel(`${n}_lo`); } }
 
 // Shared bits for the ride models (built once, reused by every ride).
 const RIDE_MAT = {

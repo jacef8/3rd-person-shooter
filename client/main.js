@@ -9,7 +9,7 @@ import {
 } from '/shared/items.js';
 import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
 import * as sfx from '/sound.js';
-import { buildRideModel, preloadVehicles } from '/ridemodels.js';
+import { buildRideModel, preloadVehicles, vehicleDetail } from '/ridemodels.js';
 import { attachAnimal, animateAnimal, preloadAnimals, stepAnimal } from '/animals.js';
 import { createTownDressing } from '/towns.js';
 import { createPlaces } from '/places.js';
@@ -64,6 +64,23 @@ const GPU_SOFTWARE = /swiftshader|llvmpipe|softpipe|software|basic render/i.test
 // (Phone and TV-box chips count too, and the Android app (the Shield) whatever it reports: they start on Medium.)
 const GPU_BUILTIN = (/intel|uhd|iris|radeon\(tm\) graphics|radeon graphics|vega \d|adreno|mali|tegra|powervr|apple gpu/i.test(GPU_NAME) && !/arc/i.test(GPU_NAME)) || /DeadzoneApp/.test(navigator.userAgent);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// Phones and TV boxes (the Shield): light vehicle models, no bloom chain below Ultra, smaller shadow
+// maps. Their graphics chips are short of memory bandwidth, so whole-screen passes cost the most.
+const LOW_POWER = MOBILE || /adreno|mali|tegra|powervr|apple gpu/i.test(GPU_NAME) || /DeadzoneApp/.test(navigator.userAgent);
+vehicleDetail(LOW_POWER);
+// Asking the graphics chip whether each new shader compiled makes it finish compiling there and then
+// (a stall every time something new comes into view, worst on phones): only with ?debug.
+renderer.debug.checkShaderErrors = /[?&]debug\b/.test(location.search);
+// The colour grade (a touch more contrast, richness and warmth) done in the tone mapping every material
+// already does, for when the picture is drawn straight to the screen (Low, and phones below Ultra):
+// the same look as the post-processing grade without its extra whole-screen pass.
+THREE.ShaderChunk.tonemapping_pars_fragment = THREE.ShaderChunk.tonemapping_pars_fragment.replace('vec3 CustomToneMapping( vec3 color ) { return color; }', `vec3 CustomToneMapping( vec3 color ) {
+  vec3 c = pow( ACESFilmicToneMapping( color ), vec3( 1.0 / 2.2 ) );
+  c = ( c - 0.5 ) * 1.1 + 0.5;
+  float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
+  c = mix( vec3( l ), c, 1.08 ) + vec3( 0.025, 0.00875, -0.025 );
+  return pow( clamp( c, 0.0, 1.0 ), vec3( 2.2 ) );
+}`);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // soft-edged shadows
 renderer.toneMapping = THREE.ACESFilmicToneMapping;  // film-like light: bright sky without washing out the ground
@@ -100,7 +117,8 @@ function applyGfx(mode = gfxMode) {
   const pixCap = Math.sqrt((MOBILE ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight));
   renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, pixCap)));
   sun.castShadow = g.shadows && !perf.noShadows;
-  if (sun.shadow.mapSize.x !== g.shadowMap) { sun.shadow.mapSize.set(g.shadowMap, g.shadowMap); sun.shadow.map?.dispose(); sun.shadow.map = null; }
+  const shadowMap = LOW_POWER && mode !== 'ultra' ? Math.min(1024, g.shadowMap) : g.shadowMap;
+  if (sun.shadow.mapSize.x !== shadowMap) { sun.shadow.mapSize.set(shadowMap, shadowMap); sun.shadow.map?.dispose(); sun.shadow.map = null; }
   const reach = mode === 'ultra' ? 110 : 70;
   Object.assign(sun.shadow.camera, { left: -reach, right: reach, top: reach, bottom: -reach, far: reach * 3 });
   sun.shadow.camera.updateProjectionMatrix();
@@ -109,6 +127,9 @@ function applyGfx(mode = gfxMode) {
   state.view?.setGrass((g.grass || 0) * (perf.grassCut ? 0.5 : 1));
   post ??= createPost(renderer, scene, camera, drawWorld);
   post.setQuality(postQuality(mode));
+  // (Drawn straight to the screen: the grade goes into the tone mapping. Through the post-processing,
+  // that does its own grade after plain ACES.)
+  renderer.toneMapping = post.on ? THREE.ACESFilmicToneMapping : THREE.CustomToneMapping;
   dispatchEvent(new Event('resize'));
 }
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 800);
@@ -120,7 +141,7 @@ const farCamera = new THREE.PerspectiveCamera(70, 1, 20, 130000);
 const POST_STEPS = ['off', 'medium', 'high'];
 const perf = { cap: 2, ratioCap: 0, frames: [], at: 0, since: 0 };
 const postQuality = (mode) => {
-  const want = /[?&]nopost\b/.test(location.search) || mode === 'fast' ? 0 : mode === 'ultra' && !MOBILE ? 2 : 1;
+  const want = /[?&]nopost\b/.test(location.search) || mode === 'fast' || (LOW_POWER && mode !== 'ultra') ? 0 : mode === 'ultra' && !MOBILE ? 2 : 1;
   return POST_STEPS[Math.min(want, perf.cap)];
 };
 let post = null;
@@ -5909,7 +5930,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, openInventory, state, send, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
+window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, openInventory, state, send, renderer, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
