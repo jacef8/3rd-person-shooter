@@ -7,6 +7,10 @@
 //     Railroad with its little engine.
 //   - Torreya State Park: the brown state park sign at the road in (the park's ranger station is part
 //     of the map: shared/world.js).
+//   - Every other named park, overlook and campground in the map data (Blountstown's parks, Alum Bluff,
+//     the Torreya campsites, the RV parks by the Bristol landing): its sign at the road, and a picnic
+//     pavilion, playground and benches (parks), a railed wooden deck (overlooks), or campsites with
+//     a tent pad, picnic table and fire ring (campgrounds; hookup posts at RV parks).
 // Decoration only: none of it is solid or changes the map. Built once, at the start.
 import * as THREE from 'three';
 import { project } from '/shared/geography.js';
@@ -120,6 +124,47 @@ export function createPlaces(scene, map, ground) {
     }
     return best;
   };
+  /** A picnic table (with its benches) standing at (x, y, z). */
+  function picnicTable(x, y, z) {
+    part(BOX, MAT.wood, x, y + 0.75, z, 1.9, 0.07, 0.8);   // top
+    for (const s of [-1, 1]) part(BOX, MAT.wood, x, y + 0.45, z + s * 0.62, 1.9, 0.05, 0.28);   // benches
+    for (const s of [-1, 1]) part(BOX, MAT.wood, x + s * 0.75, y + 0.37, z, 0.08, 0.74, 1.4);   // legs
+  }
+  /** A picnic pavilion: posts, a roof with a raised middle, four tables under it. p: { x, y, z }. */
+  function pavilion(p) {
+    for (const [a, b] of [[-4.5, -3], [4.5, -3], [-4.5, 3], [4.5, 3]]) part(BOX, MAT.wood, p.x + a, p.y + 1.5, p.z + b, 0.25, 3, 0.25);
+    const roof = part(BOX, MAT.roof, p.x, p.y + 3.25, p.z, 10.4, 0.25, 7.4); roof.receiveShadow = true;
+    part(BOX, MAT.roof, p.x, p.y + 3.7, p.z, 8, 0.6, 5);   // the roof's raised middle
+    for (const [a, b] of [[-2.4, -1.3], [2.4, -1.3], [-2.4, 1.3], [2.4, 1.3]]) picnicTable(p.x + a, p.y, p.z + b);
+  }
+  /** A park bench, facing `yaw`. */
+  function bench(x, z, yaw) {
+    const g = new THREE.Group(); g.position.set(x, ground(x, z), z); g.rotation.y = yaw; root.add(g);
+    part(BOX, MAT.wood, 0, 0.45, 0, 1.6, 0.06, 0.45, g);
+    part(BOX, MAT.wood, 0, 0.8, -0.22, 1.6, 0.4, 0.05, g);
+    for (const s of [-1, 1]) part(BOX, MAT.post, s * 0.7, 0.4, 0, 0.06, 0.8, 0.5, g);
+  }
+  /** A swing set and a slide. */
+  function playground(x, z, yaw) {
+    const g = new THREE.Group(); g.position.set(x, ground(x, z), z); g.rotation.y = yaw; root.add(g);
+    const steel = M(0x2f6db5, { metalness: 0.4, roughness: 0.5 }), seat = M(0x1d1d1f), yellow = M(0xe9b81c, { roughness: 0.5 });
+    for (const s of [-1, 1]) for (const k of [-1, 1]) { const leg = part(CYL, steel, s * 2.2 + k * 0.5, 1.15, 0, 0.05, 2.45, 0.05, g); leg.rotation.z = -k * 0.42; }   // A-frames
+    const beam = part(CYL, steel, 0, 2.3, 0, 0.06, 4.4, 0.06, g); beam.rotation.z = Math.PI / 2;
+    for (const sx of [-1, 1]) { for (const k of [-0.22, 0.22]) part(CYL, MAT.post, sx * 1.0 + k, 1.55, 0, 0.012, 1.5, 0.012, g); part(BOX, seat, sx * 1.0, 0.8, 0, 0.5, 0.04, 0.22, g); }
+    // The slide: a ladder up to a little deck, and the chute down.
+    const sl = new THREE.Group(); sl.position.set(0, 0, 4.5); g.add(sl);
+    for (const s of [-1, 1]) part(CYL, steel, s * 0.3, 0.75, -0.8, 0.04, 1.5, 0.04, sl);
+    part(BOX, yellow, 0, 1.5, -0.6, 0.8, 0.06, 0.6, sl);
+    const chute = part(BOX, yellow, 0, 0.8, 0.75, 0.6, 0.05, 2.4, sl); chute.rotation.x = 0.6;
+  }
+  /** A ring of stones round a fire pit. */
+  function fireRing(x, z) {
+    const y = ground(x, z), stone = M(0x7d7a72, { roughness: 0.95 });
+    const ring = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.16, 0), stone, 10), m4 = new THREE.Matrix4();
+    for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2; ring.setMatrixAt(i, m4.makeTranslation(x + Math.cos(a) * 0.55, y + 0.08, z + Math.sin(a) * 0.55)); }
+    root.add(ring);
+    part(CYL, M(0x2a2420, { roughness: 1 }), x, y + 0.02, z, 0.45, 0.04, 0.45);   // the ash
+  }
   /** A park's sign beside the road nearest (x, z), facing the road. */
   const parkSign = (x, z, tex, w, h) => {
     const n = nearestRoad(x, z, 400);
@@ -160,18 +205,7 @@ export function createPlaces(scene, map, ground) {
           flag.position.set(p.x + 0.97, p.y + 11.3, p.z); root.add(flag);
         } }
       // The picnic pavilion and its tables.
-      { const p = at(0, -10, 6);
-        if (p) {
-          for (const [a, b] of [[-4.5, -3], [4.5, -3], [-4.5, 3], [4.5, 3]]) part(BOX, MAT.wood, p.x + a, p.y + 1.5, p.z + b, 0.25, 3, 0.25);
-          const roof = part(BOX, MAT.roof, p.x, p.y + 3.25, p.z, 10.4, 0.25, 7.4); roof.receiveShadow = true;
-          part(BOX, MAT.roof, p.x, p.y + 3.7, p.z, 8, 0.6, 5);   // the roof's raised middle
-          for (const [a, b] of [[-2.4, -1.3], [2.4, -1.3], [-2.4, 1.3], [2.4, 1.3]]) {
-            const x = p.x + a, z = p.z + b, y = p.y;
-            part(BOX, MAT.wood, x, y + 0.75, z, 1.9, 0.07, 0.8);   // top
-            for (const s of [-1, 1]) part(BOX, MAT.wood, x, y + 0.45, z + s * 0.62, 1.9, 0.05, 0.28);   // benches
-            for (const s of [-1, 1]) part(BOX, MAT.wood, x + s * 0.75, y + 0.37, z, 0.08, 0.74, 1.4);   // legs
-          }
-        } }
+      { const p = at(0, -10, 6); if (p) pavilion(p); }
       // One of the rec department's ball fields (its diamonds are here).
       { const p = at(-88, 0, 3); if (p) ballField(p.x, p.z, 0); }
       // The railroad: a loop of track and the little engine and its cars on it.
@@ -243,6 +277,57 @@ export function createPlaces(scene, map, ground) {
       for (let k = 0; k < len - 2; k += 4) for (const s of [-1, 1]) part(CYL, MAT.wood, s * 1, -0.8, k, 0.12, 2.2, 0.12, deck);
       parkSign(d.x - ux * 25, d.z - uz * 25, signFace([['ESTIFFANULGA', 170], ['COUNTY PARK', 130], ['Boat Ramp', 80]], '#1e4d2b', 1024, 560), 3.4, 1.9);
       places.push({ name: 'Estiffanulga County Park', x: d.x, z: d.z, r: 70 });
+    }
+  }
+
+  // ---- every other named park, overlook and campground from the map data: a sign at the road, and
+  // what you'd find there. (The ones above are built by hand; anything within their reach is left.)
+  // Placed on open ground near the label point; nothing is put where a building or wall stands.
+  const spot = (x, z, r) => {
+    for (const [dx, dz] of [[0, 0], [12, 0], [-12, 0], [0, 12], [0, -12], [20, 20], [-20, -20], [20, -20], [-20, 20], [30, 0], [-30, 0]]) {
+      const px = x + dx, pz = z + dz;
+      if (!solidNear(px, pz, r) && ground(px, pz) > 0.3) return { x: px, z: pz, y: ground(px, pz) };
+    }
+    return null;
+  };
+  const BROWN = '#6b4423', GREEN = '#1e4d2b';
+  for (const l of map.labels || []) {
+    if (l.kind !== 'place' || !['park', 'overlook', 'campground'].includes(l.place)) continue;
+    if (places.some((p) => Math.hypot(p.x - l.x, p.z - l.z) < 60) || /Torreya State Park|Veterans Memorial|Hosford Rec/i.test(l.text)) continue;
+    const words = l.text.toUpperCase().split(' ');
+    const head = words.slice(0, Math.ceil(words.length / 2)).join(' '), tail = words.slice(Math.ceil(words.length / 2)).join(' ');
+    if (l.place === 'park') {
+      parkSign(l.x, l.z, signFace([[head, 170], [tail || 'PARK', 130]], GREEN, 1024, 520), 3.2, 1.6);
+      const pv = spot(l.x, l.z, 6); if (pv) pavilion(pv);
+      const pg = spot(l.x + 16, l.z - 10, 4); if (pg) playground(pg.x, pg.z, (l.x * 7) % Math.PI);
+      for (let k = 0; k < 3; k++) { const b = spot(l.x - 10 + k * 7, l.z + 14, 1.2); if (b) bench(b.x, b.z, Math.PI); }
+      places.push({ name: l.text, x: l.x, z: l.z, r: 60 });
+    } else if (l.place === 'overlook') {
+      // A wooden deck at the bluff's edge with a rail round three sides, a bench, and the sign.
+      const p = spot(l.x, l.z, 4);
+      if (p) {
+        const g = new THREE.Group(); g.position.set(p.x, p.y, p.z); g.rotation.y = (l.x * 3) % (Math.PI * 2); root.add(g);
+        part(BOX, MAT.wood, 0, 0.5, 0, 6, 0.12, 4, g);
+        for (const [a, b] of [[-2.8, -1.8], [2.8, -1.8], [-2.8, 1.8], [2.8, 1.8]]) part(BOX, MAT.wood, a, 0.25, b, 0.18, 0.6, 0.18, g);
+        for (const [x, z, w, d] of [[0, 1.95, 6, 0.08], [-2.95, 0, 0.08, 4], [2.95, 0, 0.08, 4]]) { part(BOX, MAT.wood, x, 1.55, z, w, 0.08, d, g); part(BOX, MAT.wood, x, 1.05, z, w, 0.06, d, g); }
+        for (const x of [-2.9, -1, 1, 2.9]) part(BOX, MAT.wood, x, 1.05, 1.95, 0.1, 1.1, 0.1, g);
+        part(BOX, MAT.wood, 0, 0.98, -0.6, 1.6, 0.06, 0.4, g);   // a bench on the deck
+      }
+      parkSign(l.x, l.z, signFace([[head, 150], [tail, 130]], BROWN, 1024, 480), 3.0, 1.4);
+      places.push({ name: l.text, x: l.x, z: l.z, r: 40 });
+    } else {
+      // Campsites: a gravel tent pad, a picnic table and a fire ring at each; an RV park's have a hookup post.
+      parkSign(l.x, l.z, signFace([[head, 150], [tail || 'CAMPGROUND', 120]], BROWN, 1024, 480), 3.2, 1.5);
+      const rv = /RV/.test(l.text);
+      for (let k = 0; k < 4; k++) {
+        const p = spot(l.x + (k % 2 ? 14 : -14), l.z + (k < 2 ? -10 : 10), 3.5);
+        if (!p) continue;
+        part(BOX, M(0x9c9486, { roughness: 1 }), p.x, p.y + 0.03, p.z, 4, 0.06, 4).receiveShadow = true;   // the pad
+        picnicTable(p.x + 3.2, p.y, p.z);
+        fireRing(p.x - 3.2, p.z + 1.5);
+        if (rv) { part(BOX, MAT.post, p.x + 2.4, p.y + 0.6, p.z - 2.4, 0.25, 1.2, 0.25); part(BOX, MAT.white, p.x + 2.4, p.y + 1.0, p.z - 2.27, 0.2, 0.25, 0.02); }
+      }
+      places.push({ name: l.text, x: l.x, z: l.z, r: 50 });
     }
   }
 
