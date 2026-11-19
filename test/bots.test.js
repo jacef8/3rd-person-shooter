@@ -28,7 +28,7 @@ test('shot from out of their sight, rogues turn, close in, fire back, and call t
   const A = 'ad'.repeat(16);
   const w = makeWeapon('carbine');
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzbot-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Shooter', x: spot.x, z: spot.z, yaw: 0, hp: 100, armor: 0, inv: { primary: w, primary2: null, secondary: null, armor: null, pack: [] }, ammo: 300, mags: { [w.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(10), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [] } } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Shooter', x: spot.x, z: spot.z, yaw: 0, hp: 100, armor: 0, inv: { primary: w, primary2: null, secondary: null, armor: null, pack: [] }, ammo: 300, mags: { [w.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(10), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [] } } }));
   const port = 33700 + Math.floor(Math.random() * 300);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', HOTZONE_FIRST_MS: '99999999', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));

@@ -1,10 +1,13 @@
 package com.deadzone.game;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -13,11 +16,14 @@ import android.webkit.WebViewClient;
 
 /**
  * Deadzone as an app: the live game, full screen, landscape, screen kept on. Controllers reach the
- * game through the browser's gamepad support, and sound plays without a tap first.
+ * game through the browser's gamepad support, and sound plays without a tap first. Voice chat gets
+ * the microphone: Android asks once, the first time you talk.
  */
 public class MainActivity extends Activity {
     private static final String GAME = "https://deadzone-server-production-c9ff7400.up.railway.app/";
     private WebView web;
+    private static final int MIC = 7;
+    private PermissionRequest pendingMic;   // the game's request for the microphone, waiting on Android's answer
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -29,7 +35,23 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);                    // keeps your character on this device
         s.setMediaPlaybackRequiresUserGesture(false);    // sound starts without touching the screen
         s.setUserAgentString(s.getUserAgentString() + " DeadzoneApp/1");
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(final PermissionRequest req) {
+                runOnUiThread(() -> {
+                    boolean audio = false;
+                    for (String r : req.getResources()) if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) audio = true;
+                    if (!audio) { req.deny(); return; }
+                    if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                        req.grant(new String[] { PermissionRequest.RESOURCE_AUDIO_CAPTURE });
+                    } else {
+                        if (pendingMic != null) pendingMic.deny();
+                        pendingMic = req;
+                        requestPermissions(new String[] { Manifest.permission.RECORD_AUDIO }, MIC);
+                    }
+                });
+            }
+        });
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
@@ -66,6 +88,15 @@ public class MainActivity extends Activity {
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
         web.saveState(out);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(code, perms, results);
+        if (code != MIC || pendingMic == null) return;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) pendingMic.grant(new String[] { PermissionRequest.RESOURCE_AUDIO_CAPTURE });
+        else pendingMic.deny();
+        pendingMic = null;
     }
 
     @Override

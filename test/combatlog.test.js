@@ -48,7 +48,7 @@ function clearSpot() {
 test('quitting mid-fight leaves you standing for a while; quitting otherwise is instant', async () => {
   const at = clearSpot();
   const tokA = hex('a7'), tokB = hex('b8'), tokC = hex('c9');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: {
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses: {}, bags: [], structures: [], characters: {
     [tokA]: character('Jace', at.x, at.z), [tokB]: character('Eli', at.x, at.z + 6), [tokC]: character('Sam', at.x + 8, at.z) } }));
   const proc = spawn(process.execPath, ['server/index.js'], {
     env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', RIDES: '0', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999', COMBAT_LOG_MS: '6000', ALLOW_DEV: '1' },

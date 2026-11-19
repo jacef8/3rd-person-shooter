@@ -23,7 +23,7 @@ test('respawn: a growing wait; home or a town, but not near where you died; fast
   const A = 'a7'.repeat(16);
   const ct = map.contacts[0], home = map.houses.find((h) => h.kind === 'house' && Math.hypot(h.x - ct.x, h.z - ct.z) < 1200);
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzresp-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [],
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [],
     houses: { [home.id]: { owner: A, ownerName: 'Again', items: [], doorHp: 1500, upg: {} } },
     characters: { [A]: { name: 'Again', x: ct.x + 4, z: ct.z + 4, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), cash: 50, comms: 0, food: 90, field: [], discovered: map.contacts.map((c) => c.id), contracts: [] } } }));
   const port = 29900 + Math.floor(Math.random() * 80);
@@ -55,7 +55,7 @@ test('respawn: a growing wait; home or a town, but not near where you died; fast
   send({ t: 'deploy', kind: 'town', id: 0 });   // the town you died in
   await toast(/Too close to where you died/);
   send({ t: 'deploy', kind: 'lz', id: 0 });
-  await toast(/come back at your stash house, a hideout or a town/);
+  await toast(/come back at your stash house, a hideout, a town or a crewmate/);
   assert.ok(you.dead, 'not back yet');
   send({ t: 'deploy', kind: 'home' });
   await until(() => !you.dead);
@@ -85,7 +85,7 @@ test('respawn: a growing wait; home or a town, but not near where you died; fast
 test('respawn with no stash house: any town outside the circle round where you died', async (t) => {
   const B = 'b8'.repeat(16), ct = map.contacts[0];
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzresp2-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {},
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {},
     characters: { [B]: { name: 'Homeless', x: ct.x + 4, z: ct.z + 4, yaw: 0, hp: 100, armor: 0, inv: { primary: null, primary2: null, secondary: makeWeapon('sidearm'), armor: null, pack: [] }, ammo: 90, mags: {}, active: 'secondary', dead: false, kills: 0, xp: xpForLevel(6), cash: 50, comms: 0, food: 90, field: [], discovered: [ct.id], contracts: [] } } }));
   const port = 29990 + Math.floor(Math.random() * 9);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', RESPAWN_WAIT_S: '0', RESPAWN_KEEPAWAY_M: '' }, stdio: ['ignore', 'pipe', 'inherit'] });

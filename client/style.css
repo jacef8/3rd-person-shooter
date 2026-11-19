@@ -994,3 +994,21 @@ body.touchui #voicebar { bottom: auto; top: 262px; left: calc(8px + env(safe-are
    column of single words, under the buttons). */
 #padSettings .item:has(> button:nth-of-type(4)) { flex-wrap: wrap; row-gap: 8px; }
 #padSettings .item:has(> button:nth-of-type(4)) .meta { flex: 1 1 100%; }
+
+/* Text chat: the log above the voice chips (lower left), the box under it while typing. */
+#chatlog { position: absolute; left: 12px; bottom: 236px; width: min(440px, 46vw); display: flex; flex-direction: column; gap: 3px; z-index: 7; pointer-events: none; }
+#chatlog .cl { font: 600 15px/1.35 var(--font-text); color: var(--ink); background: rgba(16, 19, 26, 0.92); border: 1px solid var(--line); border-left: 4px solid #8fb4ff; border-radius: 10px; padding: 4px 10px; overflow-wrap: anywhere; transition: opacity 0.6s; }
+#chatlog .cl.crew { border-left-color: #7dff9a; }
+#chatlog .cl.old { opacity: 0.35; }
+#chatlog .cl b { font-weight: 800; margin-right: 4px; }
+#chatlog .cl b i { font-style: normal; color: #7dff9a; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 2px; }
+#chatlog.open { pointer-events: auto; max-height: 40vh; overflow-y: auto; }
+#chatbox { position: absolute; left: 12px; bottom: 190px; width: min(440px, calc(100vw - 24px)); display: flex; gap: 6px; z-index: 30; }
+#chatbox[hidden] { display: none; }
+#chatbox input { flex: 1; min-width: 0; font: 600 16px var(--font-text); color: var(--ink); background: var(--surface); border: 2px solid var(--accent); border-radius: 12px; padding: 8px 12px; outline: none; }
+#chatbox button { min-height: 44px; border-radius: 12px; padding: 0 14px; font: 800 14px var(--font-text); }
+#chatbox #chatCh { background: #1d2a44; color: #cfe0ff; border: 1px solid #8fb4ff; min-width: 82px; }
+#chatbox #chatCh.crew { background: #12301e; color: #b8ffcb; border-color: #7dff9a; }
+body.touchui #chatlog { bottom: auto; top: 92px; width: min(360px, 44vw); }
+body.touchui #chatlog .cl { font-size: 14px; }
+body.touchui #chatbox { bottom: auto; top: 10px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); }

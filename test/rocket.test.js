@@ -28,7 +28,7 @@ test('a rocket bursts where it lands: splash damage, and the launcher reloads fr
   const rl = makeWeapon('launcher');
   const person = (name, x, z, extra) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(15), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [], ...extra });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzrk-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: {
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: {
     [A]: person('Gunner', spot.x, spot.z, { inv: { primary: rl, primary2: null, secondary: null, armor: null, pack: [] }, mags: { [rl.id]: 1 }, rockets: 2 }),
     [B]: person('Target', spot.x + 14, spot.z) } }));
   const port = 32500 + Math.floor(Math.random() * 300);
@@ -68,7 +68,7 @@ test('a frag grenade: costs parts, flies, and bursts after its fuse, hurting who
   const A = 'ab'.repeat(16), B = 'cd'.repeat(16);
   const person = (name, x, z, extra = {}) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(15), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [], parts: 20, ...extra });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzfg-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: person('Thrower', spot.x, spot.z), [B]: person('Target', spot.x + 10, spot.z) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: person('Thrower', spot.x, spot.z), [B]: person('Target', spot.x + 10, spot.z) } }));
   const port = 32800 + Math.floor(Math.random() * 100);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', HOTZONE_FIRST_MS: '99999999', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));
@@ -110,7 +110,7 @@ test('a blast stops at a wall: a grenade outside doesn\'t hurt someone just insi
   const A = 'ef'.repeat(16), B = '01'.repeat(16);
   const person = (name, x, z) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(15), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [], parts: 20 });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzwl-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: person('Thrower', spot.x, spot.from), [B]: person('Inside', spot.x, spot.inZ) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: person('Thrower', spot.x, spot.from), [B]: person('Inside', spot.x, spot.inZ) } }));
   const port = 32900 + Math.floor(Math.random() * 90);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', RIDES: '0', HOTZONE_FIRST_MS: '99999999', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));

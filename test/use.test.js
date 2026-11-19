@@ -46,7 +46,7 @@ test('eating and medkits take time, and only count when they finish', async () =
   const tok = hex('e5');
   const ch = character('Jace', 40, 40);
   ch.hp = 50; ch.inv.pack.push({ id: 'mk1', kind: 'medkit', name: 'Medkit' });
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: { [tok]: ch } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses: {}, bags: [], structures: [], characters: { [tok]: ch } }));
   const proc = await start();
   try {
     const a = await conn('Jace', tok);

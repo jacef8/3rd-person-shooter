@@ -41,7 +41,7 @@ test('base alerts: a test push, and a real one when your base is hit while you a
   const w = makeWeapon('carbine');
   const ch = (name, x, z) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: w, secondary: null, armor: null, pack: [{ id: 'th', kind: 'tool', tool: 'hammer', name: 'hammer' }] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(8), parts: 100, tech: 50, salvage: 100, cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [] });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzpush-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: { [O]: ch('Owner', spot.x, spot.z + 3), [I]: ch('Raider', spot.x + 40, spot.z) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses: {}, bags: [], structures: [], characters: { [O]: ch('Owner', spot.x, spot.z + 3), [I]: ch('Raider', spot.x + 40, spot.z) } }));
   const port = 32900 + Math.floor(Math.random() * 300);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', DEV_KIT: '0', HOTZONE_FIRST_MS: '99999999', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999', NODE_TLS_REJECT_UNAUTHORIZED: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));

@@ -22,7 +22,7 @@ const T = ACT.airTaxi;
 
 async function world(characters, extra = {}, env = {}) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzheli-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters, ...extra }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses: {}, bags: [], structures: [], characters, ...extra }));
   const port = 29100 + Math.floor(Math.random() * 400);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', TAXI_WAIT_MS: '600', EXTRACT_HOLD_MS: '500', EVENT_FIRST_MS: '99999999', SUPPLY_EVERY_MS: '99999999', JUMP_ALT: '70', ...env }, stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));

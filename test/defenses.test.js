@@ -32,7 +32,7 @@ test('find a base\'s defenses with a sensor, disarm a mine, step on another, set
   assert.ok(spot, 'room for the layout');
   const O = 'c7'.repeat(16), I = 'd8'.repeat(16);
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzdef-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: { [O]: character('Owner', spot.x, spot.z + 3), [I]: character('Intruder', spot.x + 70, spot.z) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses: {}, bags: [], structures: [], characters: { [O]: character('Owner', spot.x, spot.z + 3), [I]: character('Intruder', spot.x + 70, spot.z) } }));
   const port = 32100 + Math.floor(Math.random() * 300);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', DEV_KIT: '0', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999', HOTZONE_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));

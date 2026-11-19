@@ -54,8 +54,34 @@ export function createVoice({ send, myId, posOf, onTalking }) {
       p.src.connect(p.gain);
       if (p.panner) { p.gain.connect(p.panner); p.panner.connect(m.out); } else p.gain.connect(m.out);
     };
-    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') pc.restartIce?.(); };
+    // A connection that fails (the network changed, a phone slept): try again with fresh routes; if
+    // that doesn't take within a few seconds, start the line over.
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState !== 'failed') return;
+      pc.restartIce?.();
+      setTimeout(() => { const q = peers.get(id); if (q === p && pc.connectionState === 'failed') { const crew = p.crew; drop(id); connect(id, crew); } }, 6000);
+    };
     return p;
+  }
+  async function handle(p, from, data) {
+    const pc = p.pc;
+    if (peers.get(from) !== p) return;   // dropped meanwhile
+    try {
+      if (data.description) {
+        await pc.setRemoteDescription(data.description);
+        for (const c of p.early || []) await pc.addIceCandidate(c).catch(() => {});
+        p.early = null;
+        if (data.description.type === 'offer') {
+          p.tr = pc.getTransceivers()[0] || null;
+          if (p.tr) { p.tr.direction = 'sendrecv'; if (mic) await p.tr.sender.replaceTrack(mic.getAudioTracks()[0]); }
+          await pc.setLocalDescription();
+          send({ t: 'rtc', to: from, data: { description: pc.localDescription } });
+        }
+      } else if (data.candidate) {
+        if (!pc.remoteDescription) (p.early ||= []).push(data.candidate);   // before the offer/answer: keep it for then
+        else await pc.addIceCandidate(data.candidate);
+      }
+    } catch { /* a bad message: the next one sorts it out */ }
   }
   function drop(id) {
     const p = peers.get(id);
@@ -73,22 +99,14 @@ export function createVoice({ send, myId, posOf, onTalking }) {
       for (const id of [...peers.keys()]) if (!want.has(id)) drop(id);
       for (const [id, crew] of want) { const p = peers.get(id); if (p) p.crew = crew; else connect(id, crew); }
     },
-    /** A message from a peer, passed on by the server (perfect negotiation). */
-    async signal(from, data) {
+    /** A message from a peer, passed on by the server. Handled one at a time, in order: a network
+     *  route (candidate) that arrives while the offer is still being taken in waits for it, instead
+     *  of being thrown away (which left some pairs never hearing each other). */
+    signal(from, data) {
       const p = peers.get(from);
       if (!p) return;
-      const pc = p.pc;
-      try {
-        if (data.description) {
-          await pc.setRemoteDescription(data.description);
-          if (data.description.type === 'offer') {
-            p.tr = pc.getTransceivers()[0] || null;
-            if (p.tr) { p.tr.direction = 'sendrecv'; if (mic) await p.tr.sender.replaceTrack(mic.getAudioTracks()[0]); }
-            await pc.setLocalDescription();
-            send({ t: 'rtc', to: from, data: { description: pc.localDescription } });
-          }
-        } else if (data.candidate) await pc.addIceCandidate(data.candidate);
-      } catch { /* a bad message: the next one sorts it out */ }
+      p.queue = (p.queue || Promise.resolve()).then(() => handle(p, from, data));
+      return p.queue;
     },
     /** Push to talk (or the open-mic toggle). */
     async talk(on) {

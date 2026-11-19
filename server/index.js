@@ -73,7 +73,7 @@ const packSize = (p) => (kitPlayer(p) ? 80 : COMBAT.packSize);
 const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
-const DB_VERSION = 12;   // 12: real towns have no made-up compound (the stash-house list changed; v11 saves carry over, see loadDb)
+const DB_VERSION = 13;   // 13: a fresh start (everyone back to level 1, no stash houses, nothing built). 12: real towns have no made-up compound
 const SQUAD_MAX = COMBAT.crewMax;
 const GOODS = Object.keys(HOMESTEAD.goods);   // cash, seeds, crops, fish, meat, meals
 const RESOURCES = ['ammo', 'rockets', 'parts', 'tech', 'intel', 'salvage', 'wood', 'stone', ...GOODS];   // carried; all drop on death, all stealable
@@ -124,15 +124,11 @@ function freshDb() {
 function loadDb() {
   try {
     const db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    // 11 -> 12: the towns' made-up compounds went, so the stash-house list was renumbered. Characters,
-    // crews, claimed real buildings, boats and Lamar's case carry over; only house claims reset.
-    if (db.seed === SEED && db.size === WORLD_SIZE && db.version === 11 && DB_VERSION === 12) {
-      db.houses = {};
-      for (const c of Object.values(db.characters || {})) c.needsDeploy = true;
-      db.version = 12;
-      console.log('Save moved to version 12: characters kept, stash houses reset');
+    if (db.seed !== SEED || db.version !== DB_VERSION || db.size !== WORLD_SIZE) {
+      // Starting fresh: the old save is kept beside the new one (world.json.v12.bak), just in case.
+      try { const bak = `${DATA_FILE}.v${db.version}.bak`; if (!fs.existsSync(bak)) { fs.copyFileSync(DATA_FILE, bak); console.log(`Old save (version ${db.version}) kept as ${path.basename(bak)}; starting a fresh world`); } } catch { /* read-only: nothing to keep */ }
+      throw new Error('incompatible save');
     }
-    if (db.seed !== SEED || db.version !== DB_VERSION || db.size !== WORLD_SIZE) throw new Error('incompatible save');
     return db;
   } catch {
     return { seed: SEED, version: DB_VERSION, size: WORLD_SIZE, ...freshDb() };
@@ -674,6 +670,7 @@ function damageHouseDoor(houseId, dmg, by, how = 'breached') {
   if (h.doorHp <= 0) return;
   dmg *= raidMul(h, by);
   if (dmg <= 0) return;
+  if (h.owner) markRaid(h.owner, by, map.houses[houseId].x, map.houses[houseId].z);
   h.doorHp = Math.max(0, h.doorHp - dmg);
   h.lastDamaged = Date.now();
   const who = by ? by.name : 'Someone';
@@ -3131,6 +3128,27 @@ function behind(p, t) {
 // ---- voice chat (client/voice.js): crewmates who both have crew chat on; anyone within VOICE_NEAR
 // who both have nearby chat on. The server only says who may talk to whom and passes the introductions
 // along; the voices go straight between players.
+// ---- text chat: to your crew (wherever they are) or to whoever is nearby (CHAT_NEAR). No all-server
+// channel: the game is played by families and kids, so what you type reaches only your crew and the
+// people right around you. A few words are starred out; a burst of messages is slowed down.
+const CHAT_NEAR = 90, CHAT_MAX = 160;
+const CHAT_MASK = /\b(f+u+c+k+\w*|sh+i+t+\w*|b+i+t+c+h+\w*|a+ss+h+o+l+e+\w*|c+u+n+t+\w*|d+i+c+k+(?:head)?s?|p+u+s+s+y+|n+i+g+g+\w*|f+a+g+\w*|wh+o+r+e+s?|sl+u+t+s?|r+e+t+a+r+d+\w*)\b/gi;
+function textChat(p, msg) {
+  let text = String(msg.text || '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e]/g, '').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+  if (!text) return;
+  const now = Date.now();
+  p.chatAllow = Math.min(5, (p.chatAllow ?? 5) + (now - (p.chatAt || now)) / 1500);
+  p.chatAt = now;
+  if (p.chatAllow < 1) return toast(p, 'Slow down a little');
+  p.chatAllow -= 1;
+  text = text.replace(CHAT_MASK, (w) => '*'.repeat(w.length));
+  const crew = squadOf(p);
+  const ch = msg.ch === 'crew' && crew ? 'crew' : 'near';
+  const out = { t: 'chat', id: p.id, from: p.name, ch, text };
+  if (ch === 'crew') for (const m of squadMembersOnline(p)) send(m.ws, out);
+  else for (const o of players.values()) if (o === p || Math.hypot(o.x - p.x, o.z - p.z) < CHAT_NEAR) send(o.ws, out);
+  if (msg.ch === 'crew' && !crew) toast(p, 'You\'re not in a crew yet: that went to the people near you');
+}
 const VOICE_NEAR = 80;
 function voiceLink(a, b) {
   if (!a.voice || !b.voice || a.dead || b.dead) return null;
@@ -4307,10 +4325,18 @@ function homeBuildXp(p, st, reason) {
   if (!c || PIECES[st.type].claim) return;
   if (Math.hypot(st.x - c.x, st.z - c.z) <= homePerks(homeLevel(c.store.hxp)).radius) addHomeXp(c, HOME_XP.build, reason);
 }
+/** A raid under way: the raider is busy raiding, and the people who live there are busy defending. */
+function markRaid(ownerToken, by, x, z) {
+  if (!by || by.isBot || by.token === ownerToken || tokenInSquadWith(by, ownerToken)) return;
+  const now = Date.now();
+  by.raidingAt = now;
+  for (const tok of teamTokensOf(ownerToken)) { const o = onlineByToken(tok); if (o) o.defending = { t: now, x, z }; }
+}
 function damageStruct(st, dmg, by) {
   if (!structs.has(st.id) || st.ruined || st.broken) return;
   dmg *= raidMul(baseOf(st), by);
   if (dmg <= 0) return;
+  markRaid(st.owner, by, st.x, st.z);
   st.hp -= dmg;
   if (PIECES[st.type].defense === 'mine' && st.hp <= 0) return mineBlast(st, null);
   const owner = onlineByToken(st.owner);
@@ -5003,19 +5029,51 @@ const SPAWN_TOWNS = [
   ...map.contacts.map((c) => ({ name: map.towns[c.townId].name, county: map.towns[c.townId].county || null, x: c.x + 3, z: c.z + 3, contact: c.id })),
   ...map.communities.map((c) => ({ name: c.name, county: c.county || null, x: c.x, z: c.z, contact: null })),
 ];
+/**
+ * Can a crewmate be spawned on right now? Not while they're busy with something you'd be dropping in
+ * to help with: a firefight (shooting or shot at in the last CREW_SPAWN.calmS), a raid (breaking into
+ * someone's base, or defending their own), a contract or a world event (riot, convoy, hog hunt) near
+ * where it's happening, the hot zone or hot loot, or a hack, harvest or other job in progress. Nor
+ * when they're dead, downed, deploying, up in the air or out on the water. Returns why not, or null.
+ */
+const CREW_SPAWN = { calmS: Number(process.env.CREW_CALM_S || 30), raidS: 120, nearM: 300 };
+function crewSpawnBlock(m, now = Date.now()) {
+  if (!m || m.dead || m.deploying) return `${m?.name || 'They'} can't take you right now`;
+  if (m.downed) return `${m.name} is down`;
+  if (m.air) return `${m.name} is up in the air`;
+  if (m.boat) { const b = db.boats.find((q) => q.id === m.boat); if (b && !isLand(b.type)) return `${m.name} is out on the water`; }
+  const calm = CREW_SPAWN.calmS * 1000;
+  if (now - (m.lastHit || 0) < calm || now - (m.lastShot || 0) < calm) return `${m.name} is in a fight`;
+  if (now - (m.raidingAt || 0) < CREW_SPAWN.raidS * 1000) return `${m.name} is on a raid`;
+  if (m.defending && now - m.defending.t < CREW_SPAWN.raidS * 1000 && Math.hypot(m.x - m.defending.x, m.z - m.defending.z) < CREW_SPAWN.nearM) return `${m.name}'s base is under attack`;
+  if (inHotZone(m) || (hotZone && nearHotZone(m.x, m.z))) return `${m.name} is at the hot zone`;
+  if (m.inv?.pack?.some((i) => i.hot)) return `${m.name} is carrying hot loot`;
+  if ((m.contracts || []).some((c) => !c.ready && Math.hypot(m.x - c.x, m.z - c.z) < CREW_SPAWN.nearM)) return `${m.name} is on a contract`;
+  for (const e of worldEvents.values()) if (['riot', 'convoy', 'hoghunt'].includes(e.type) && Math.hypot(m.x - e.x, m.z - e.z) < Math.max(CREW_SPAWN.nearM, (e.radius || 0) + 100)) return `${m.name} is at the ${e.name || e.type}`;
+  if (m.hack) return `${m.name} is busy`;
+  return null;
+}
+/** Your crew, for the deploy map: where each one is and whether you can spawn on them right now. */
+const crewSpawnList = (p, now = Date.now()) => squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.deploying)
+  .map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z), busy: crewSpawnBlock(m, now) }));
+// The deploy map stays current while you're choosing: who of your crew you can spawn on changes as
+// they get into and out of fights.
+setInterval(() => {
+  for (const p of players.values()) if ((p.dead || p.deploying) && p.ws.readyState === 1 && squadOf(p)) send(p.ws, { t: 'deployOpts', deploy: deployOptions(p) });
+}, 3000).unref?.();
 function deployOptions(p) {
   const own = claimOf(p)?.kind === 'home' ? claimOf(p).id : null;
   const c = claimOf(p);
   return {
     houseId: own,
     claim: c ? { kind: c.kind, id: c.id, x: c.x, z: c.z, name: claimName(c) } : null,
-    // First time in: any town, landing zone or crewmate. After a death: your stash house or any
-    // town; landing zones and your crew are fast travel from home.
+    // First time in: any town, landing zone or crewmate. After a death: your stash house, a hideout,
+    // any town, or a crewmate who isn't in the middle of something (crewSpawnBlock).
     towns: SPAWN_TOWNS.map((t, i) => ({ id: i, name: t.name, county: t.county, x: Math.round(t.x), z: Math.round(t.z) })),
     contacts: [],
     hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })),
     lzs: p.deploying ? map.landingZones.map((l) => l.id) : [],
-    crew: p.deploying ? squadMembersOnline(p).filter((m) => m !== p && !m.dead && !m.downed && !m.deploying).map((m) => ({ id: m.id, name: m.name, x: Math.round(m.x), z: Math.round(m.z) })) : [],
+    crew: crewSpawnList(p),
     crates: [],
     respawn: (() => {
       if (p.deploying) return null;
@@ -5037,7 +5095,7 @@ function handleDeploy(p, msg) {
   const claim = claimOf(p);
   const now = Date.now(), rules = p.deploying ? null : respawnRules(p, now);
   if (rules && now < rules.readyAt) return toast(p, `You can redeploy in ${Math.ceil((rules.readyAt - now) / 1000)}s`);
-  if (rules && !['home', 'house', 'town', 'contact', 'hideout'].includes(msg.kind)) return toast(p, 'After a death you come back at your stash house, a hideout or a town. From your stash house, fast travel takes you to landing zones and your crew.');
+  if (rules && !['home', 'house', 'town', 'contact', 'hideout', 'crew'].includes(msg.kind)) return toast(p, 'After a death you come back at your stash house, a hideout, a town or a crewmate. From your stash house, fast travel takes you to landing zones.');
   let at = null;
   if (msg.kind === 'claim') {
     return toast(p, 'Deploy first, then plant your claim marker where you want your stash house');
@@ -5067,16 +5125,15 @@ function handleDeploy(p, msg) {
     else at = nth(map.landingZones, msg.id);
     if (!at) return;
   } else if (msg.kind === 'crew') {
-    // Drop in next to a crewmate (not while they're in a firefight).
+    // Spawn next to a crewmate, as long as they aren't in the middle of something (crewSpawnBlock).
     const m = players.get(msg.id);
-    if (!m || !sameSquad(m, p) || m === p || m.dead || m.downed || m.deploying) return toast(p, 'They can\'t take you right now');
-    if (Date.now() - (m.lastHit || 0) < 10_000) return toast(p, `${m.name} is in a fight — try again in a moment`);
-    if (rules && now < rules.crewAt) return toast(p, `You can drop in on your crew again in ${minsLeft(rules.crewAt - now)}`);
-    at = { x: m.x + 1.5, z: m.z + 1.5 };
+    if (!m || !sameSquad(m, p) || m === p) return toast(p, 'They can\'t take you right now');
+    const why = crewSpawnBlock(m, now);
+    if (why) { send(p.ws, { t: 'deployOpts', deploy: deployOptions(p) }); return toast(p, `${why}: you can't spawn on them till that's over`); }
+    at = touchdownSpot(m.x + 1.5, m.z + 1.5);
   } else return;
-  if (msg.kind !== 'home' && msg.kind !== 'house' && hotZone && nearHotZone(at.x, at.z)) return toast(p, `Too close to the ${hotZone.name} hot zone: you have to get there yourself. Your stash house is open.`);
-  if (rules && msg.kind !== 'home' && msg.kind !== 'house' && nearDeath(rules, at.x, at.z)) return toast(p, `Too close to where you died — that opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. Your stash house is open.`);
-  if (rules && msg.kind === 'crew') p.crewDropAt = now;
+  if (msg.kind !== 'home' && msg.kind !== 'house' && msg.kind !== 'crew' && hotZone && nearHotZone(at.x, at.z)) return toast(p, `Too close to the ${hotZone.name} hot zone: you have to get there yourself. Your stash house is open.`);
+  if (rules && msg.kind !== 'home' && msg.kind !== 'house' && msg.kind !== 'crew' && nearDeath(rules, at.x, at.z)) return toast(p, `Too close to where you died — that opens again in ${minsLeft(rules.away.t + RESPAWN.keepAwayMin * 60_000 - now)}. Your stash house is open.`);
   if (!p.deploying) {
     // Back with what you'd stashed (it survived the death); a starter pistol if you've no gun at all,
     // a medkit if you've none, and at least the starting ammo. All of it counts as stashed.
@@ -5129,12 +5186,11 @@ function handleTravel(p, msg) {
     placeAt(p, at.x, at.z);
   } else if (msg.kind === 'squad') {
     const m = players.get(msg.id);
-    if (!m || !sameSquad(p, m) || m === p || m.dead) return;
-    if (Date.now() - (m.lastHit || 0) < 10_000) return toast(p, `${m.name} is in combat`);
-    if (now < rules.crewAt) return toast(p, `You can join your crew by fast travel again in ${minsLeft(rules.crewAt - now)}`);
-    if (closed(m.x, m.z)) return;
-    p.crewDropAt = now;
-    placeAt(p, m.x + 1.5, m.z + 1.5);
+    if (!m || !sameSquad(p, m) || m === p) return;
+    const why = crewSpawnBlock(m, now);
+    if (why) return toast(p, `${why}: you can't join them till that's over`);
+    const at = touchdownSpot(m.x + 1.5, m.z + 1.5);
+    placeAt(p, at.x, at.z);
   } else return;
   p.protectedUntil = Date.now() + 5000;
   p.openContainer = null;
@@ -5647,6 +5703,7 @@ wss.on('connection', (ws) => {
       case 'shoot': return handleShoot(p, msg);
       case 'taser': return handleTaser(p, msg);
       case 'voice': p.voice = { crew: !!msg.crew, near: !!msg.near }; p.voiceAt = 0; return;   // voice chat settings
+      case 'chat': return textChat(p, msg);
       case 'rtc': {   // voice chat: a connection message for one player, only to someone you may talk to
         const o = players.get(msg.to);
         if (!o || o === p || !msg.data || JSON.stringify(msg.data).length > 12000 || !(voiceLink(p, o) || p.voicePeers?.[o.id])) return;

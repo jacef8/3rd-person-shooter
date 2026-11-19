@@ -37,7 +37,7 @@ test('a tree chopped out comes down to a stump for everyone, and grows back', as
   const tool = (k) => ({ id: `t${k}`, kind: 'tool', tool: k, name: k });
   const person = (name, x, z) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [tool('hatchet')] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), cash: 50, comms: 0, food: 90, field: [], discovered: [], contracts: [], wood: 0 });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzfell-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: person('Logger', sx, sz), [B]: person('Watcher', sx + 6, sz + 6) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: person('Logger', sx, sz), [B]: person('Watcher', sx + 6, sz + 6) } }));
   const port = 30500 + Math.floor(Math.random() * 300);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', HARVEST_REGROW_MS: '4000' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));
@@ -96,7 +96,7 @@ test('a rock mined out crumbles to rubble for everyone', async (t) => {
   assert.ok(rock, 'found a lone rock');
   const A = 'f4'.repeat(16), sx = rock.maxX + 1.2, sz = (rock.minZ + rock.maxZ) / 2;
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzrock-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Miner', x: sx, z: sz, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [{ id: 'tp', kind: 'tool', tool: 'pickaxe', name: 'pickaxe' }] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), cash: 50, comms: 0, food: 90, field: [], discovered: [], contracts: [], stone: 0 } } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Miner', x: sx, z: sz, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [{ id: 'tp', kind: 'tool', tool: 'pickaxe', name: 'pickaxe' }] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), cash: 50, comms: 0, food: 90, field: [], discovered: [], contracts: [], stone: 0 } } }));
   const port = 30850 + Math.floor(Math.random() * 100);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));

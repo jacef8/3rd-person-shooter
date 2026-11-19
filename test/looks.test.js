@@ -51,7 +51,7 @@ test('looks: only real outfits and colours', () => {
 
 test('wardrobe: what you pick is seen by others and kept for next time', async () => {
   const tokA = hex('a7'), tokB = hex('b8');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: { [tokA]: character('Jace', 40, 40), [tokB]: character('Eli', 45, 40) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses: {}, bags: [], structures: [], characters: { [tokA]: character('Jace', 40, 40), [tokB]: character('Eli', 45, 40) } }));
   let proc = await start();
   try {
     const a = await conn('Jace', tokA), b = await conn('Eli', tokB);

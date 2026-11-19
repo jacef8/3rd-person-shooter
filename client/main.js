@@ -2309,6 +2309,16 @@ function handle(m) {
       toast(`${m.from} rallied the squad — armor restored, +20% damage`);
       break;
     case 'toast': toast(m.text); break;
+    case 'chat': addChat(m); break;
+    case 'deployOpts':
+      // Fresh deploy options while you're choosing (your crew's spawn status changes as they fight).
+      if (m.deploy && state.mapOpen && (state.mapMode === 'first' || state.mapMode === 'redeploy')) {
+        const keepAt = state.deployOpts?.at;
+        state.deployOpts = { ...m.deploy, at: performance.now() };
+        if (!m.deploy.respawn && keepAt) state.deployOpts.at = keepAt;
+        renderMapScreen();
+      }
+      break;
     case 'died':
       if (state.nadeAim) putNadeAway();
       if (build.on) toggleBuild();   // back to shooting after you respawn
@@ -3255,6 +3265,10 @@ function mapTargets() {
   for (const o of mapOptions()) if (o.group) for (const id of o.group) { const lz = state.map.landingZones[id]; out.push({ label: `🪂 ${lz.name}`, x: lz.x, z: lz.z, msg: { t: o.t || 'deploy', kind: 'lz', id }, color: '#e0e0e0' }); }
   return out;
 }
+/** Spawn on a crewmate: greyed out, with why, while they're in a fight, a raid, a contract or an event. */
+function crewRows(list) {
+  return (list || []).map((m) => ({ label: `👥 Spawn on ${m.name} (crew)`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a', ...(m.busy ? { disabled: true, why: m.busy.replace(`${m.name} `, '') } : {}) }));
+}
 function mapOptions() {
   const map = state.map, o = state.deployOpts || {};
   const town = (h) => homeLabel(h);
@@ -3262,7 +3276,7 @@ function mapOptions() {
     // First deploy: any real town, or a landing zone out in the wilds. You claim a stash house
     // afterwards by planting your claim marker.
     return [
-      ...(o.crew || []).map((m) => ({ label: `👥 Deploy with ${m.name} (crew)`, x: m.x, z: m.z, msg: { t: 'deploy', kind: 'crew', id: m.id }, color: '#7dff9a' })),
+      ...crewRows(o.crew),
       ...townRows(o.towns),
       ...lzRows(map.landingZones.map((lz) => lz.id)),
     ];
@@ -3277,6 +3291,7 @@ function mapOptions() {
       return opt;
     };
     const list = [];
+    for (const r of crewRows(o.crew)) list.push(r.disabled ? r : shut(r, { home: true }));   // (crew: no keep-away from where you died; their own state decides)
     if (o.claim) list.push(shut({ label: `⌂ ${o.claim.name}`, x: o.claim.x, z: o.claim.z, msg: { t: 'deploy', kind: 'home' }, color: '#4fbf6a' }, { home: true }));
     for (const h of o.hideouts || []) list.push(shut({ label: `⛺ Hideout ${h.n}`, x: h.x, z: h.z, msg: { t: 'deploy', kind: 'hideout', id: h.id }, color: '#9fe39f' }));
     for (const r of townRows(o.towns)) list.push(shut(r));
@@ -3801,6 +3816,7 @@ function doAction(a) {
   switch (a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
     case 'settings': openSettings(); return;
+    case 'chat': openChat(); return;
     case 'micToggle':   // phones: the mic on (open mic) or off, from the ⋯ menu
       tset.voiceOpen = !tset.voiceOpen; saveTset(); voiceSettings();
       if (!tset.voiceOpen) voice.talk(false);
@@ -3946,6 +3962,61 @@ addEventListener('wheel', (e) => {
   const i = Math.max(0, slots.indexOf(me.active));
   send({ t: 'weapon', slot: slots[(i + (e.deltaY > 0 ? 1 : slots.length - 1)) % slots.length] });
 });
+// ---- text chat: to your crew (anywhere) or to whoever's nearby. Enter (or ⋯ → CHAT) to type, Tab or
+// the channel button to switch, Enter to send, Esc to close. Lines fade after a while; open, the last
+// dozen show. Someone you've muted (voice chips) is muted here too.
+const chat = { open: false, ch: 'crew', lines: [] };
+const chatLog = Object.assign(document.createElement('div'), { id: 'chatlog' });
+const chatForm = Object.assign(document.createElement('form'), { id: 'chatbox', hidden: true });
+chatForm.innerHTML = '<button type="button" id="chatCh"></button><input id="chatIn" maxlength="160" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" placeholder="Say something…"><button type="submit" id="chatSend">Send</button>';
+document.body.append(chatLog, chatForm);
+function chatChLabel() { const b = $('chatCh'); b.textContent = chat.ch === 'crew' ? 'Crew' : 'Nearby'; b.className = chat.ch; }
+function openChat() {
+  if (!state.me || chat.open) return;
+  if (!state.squad?.id) chat.ch = 'near';
+  chat.open = true; chatForm.hidden = false; chatLog.classList.add('open');
+  state.keys.clear(); kbRun.on = false;
+  document.exitPointerLock?.();
+  chatChLabel(); renderChat();
+  setTimeout(() => $('chatIn').focus(), 0);
+}
+function closeChat() {
+  if (!chat.open) return;
+  chat.open = false; chatForm.hidden = true; chatLog.classList.remove('open');
+  $('chatIn').value = ''; $('chatIn').blur();
+  renderChat();
+  if (!state.mapOpen && !state.panelOpen && !state.invOpen) lockPointer();
+}
+chatForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = $('chatIn').value.trim();
+  if (text) send({ t: 'chat', ch: chat.ch, text });
+  closeChat();
+});
+$('chatCh').addEventListener('click', () => {
+  if (chat.ch === 'near' && !state.squad?.id) { toast('Join a crew (P) to chat with your crew anywhere on the map'); $('chatIn').focus(); return; }
+  chat.ch = chat.ch === 'crew' ? 'near' : 'crew'; chatChLabel(); $('chatIn').focus();
+});
+$('chatIn').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); closeChat(); }
+  else if (e.key === 'Tab') { e.preventDefault(); $('chatCh').click(); }
+  e.stopPropagation();
+});
+function addChat(m) {
+  if (voice.isMuted(m.id)) return;
+  chat.lines.push({ ...m, at: performance.now() });
+  if (chat.lines.length > 50) chat.lines.shift();
+  if (m.id !== state.id) sfx.click?.(true);
+  renderChat();
+}
+function renderChat() {
+  const now = performance.now();
+  const show = chat.open ? chat.lines.slice(-12) : chat.lines.filter((l) => now - l.at < 20000).slice(-6);
+  chatLog.hidden = !show.length;
+  chatLog.innerHTML = show.map((l) => `<div class="cl ${l.ch}${!chat.open && now - l.at > 16000 ? ' old' : ''}"><b>${l.ch === 'crew' ? '<i>Crew</i> ' : ''}${esc(l.from)}</b> ${esc(l.text)}</div>`).join('');
+}
+setInterval(() => { if (chat.lines.length) renderChat(); }, 1000);
+
 // ---- voice chat (client/voice.js). Crew chat on unless turned off; nearby chat off unless turned on.
 // Hold N to talk (or the TALK button on a phone); "open mic" in Settings keeps the mic on instead.
 const voice = createVoice({
@@ -3981,6 +4052,7 @@ const KEY_ACTIONS = {
 addEventListener('keydown', (e) => {
   if (document.activeElement?.tagName === 'INPUT') return;
   setInputMode('kb');
+  if (e.key === 'Enter' && state.me && !state.mapOpen && !state.panelOpen && !state.invOpen && !state.gunsmithOpen && !state.contactOpen) { e.preventDefault(); openChat(); return; }
   if (e.code === 'KeyP') { doAction('squadPanel'); return; }
   if (e.code === 'KeyO') { if (state.panelOpen) closeSquadPanel(); else openSettings(); return; }
   if (e.code === 'KeyM') { doAction('map'); return; }
@@ -6073,7 +6145,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, openInventory, state, send, renderer, boatVis, structVis, houseVis, me: () => selfMesh };   // (me(): your character as it is now)
+window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, openInventory, state, send, renderer, boatVis, structVis, houseVis, voice, openChat, me: () => selfMesh };   // (me(): your character as it is now)
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
@@ -6130,7 +6202,7 @@ const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 
 const TOUCH_TOP = [['BAG', 'inventory'], ['⋯', 'touchMore']];   // the map: tap the minimap
 // Tag marks whoever is under your crosshair; the stun gun is pulled (FIRE shoots it; again to put it
 // away); MIC turns your microphone on for crew chat, or off.
-const TOUCH_MORE = [['⚙ SETTINGS', 'settings'], ['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
+const TOUCH_MORE = [['⚙ SETTINGS', 'settings'], ['💬 CHAT', 'chat'], ['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +

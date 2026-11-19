@@ -22,7 +22,7 @@ test('take one thing off the ground by tapping it in the list; out of reach is r
   const A = 'a7'.repeat(16);
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzloot-')), 'w.json');
   const me = { name: 'Picker', x: sp.x + 2, z: sp.z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [] };
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: me } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: me } }));
   const port = 31200 + Math.floor(Math.random() * 300);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));

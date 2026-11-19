@@ -26,7 +26,7 @@ test('a hot zone: crate loot is hot, pinged, refused by the taxi, and secured at
   const A = 'b1'.repeat(16), B = 'b2'.repeat(16);
   const person = (name, x, z, pack = []) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(8), cash: 1000, comms: 0, food: 90, field: [], discovered: [], contracts: [] });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzhot-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [],
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [],
     houses: { [h.id]: { owner: A, ownerName: 'Raider', items: [], doorHp: 100, upg: {} } },
     characters: { [A]: person('Raider', h.x, h.z), [B]: person('Jumper', h.x + 40, h.z + 40, [{ id: 'hf1', kind: 'hotflare', name: 'Hot-drop flare' }]) } }));
   const port = 31600 + Math.floor(Math.random() * 300);

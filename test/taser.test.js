@@ -60,7 +60,7 @@ function clearSpot() {
 test('stun gun: stuns someone close (no damage), recharges, misses out of range', async () => {
   const at = clearSpot();
   const tokA = hex('c3'), tokB = hex('d4');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: { [tokA]: character('Jace', at.x, at.z), [tokB]: character('Eli', at.x, at.z + 6) } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses: {}, bags: [], structures: [], characters: { [tokA]: character('Jace', at.x, at.z), [tokB]: character('Eli', at.x, at.z + 6) } }));
   const proc = await start();
   try {
     const a = await conn('Jace', tokA), b = await conn('Eli', tokB);

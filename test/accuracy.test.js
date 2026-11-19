@@ -25,7 +25,7 @@ test('steady single shots are dead-on; rushed ones group tight; automatics stay 
   const A = 'ef'.repeat(16);
   const dmr = makeWeapon('dmr', {}, 'factory', 'deer'), carbine = makeWeapon('carbine');   // the deer rifle: a bolt-action, about a shot a second
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzacc-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Shooter', x: spot.x, z: spot.z, yaw: 0, hp: 100, armor: 0, inv: { primary: dmr, primary2: carbine, secondary: null, armor: null, pack: [] }, ammo: 300, mags: { [dmr.id]: 10, [carbine.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(15), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [] } } }));
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [], houses: {}, characters: { [A]: { name: 'Shooter', x: spot.x, z: spot.z, yaw: 0, hp: 100, armor: 0, inv: { primary: dmr, primary2: carbine, secondary: null, armor: null, pack: [] }, ammo: 300, mags: { [dmr.id]: 10, [carbine.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(15), cash: 0, comms: 0, food: 90, field: [], discovered: [], contracts: [] } } }));
   const port = 33300 + Math.floor(Math.random() * 300);
   const proc = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, PORT: port, DATA_FILE: file, BOTS: '0', ALLOW_DEV: '1', REAL_DATA: '0', DEV_KIT: '0', HOTZONE_FIRST_MS: '99999999', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999' }, stdio: ['ignore', 'pipe', 'inherit'] });
   t.after(() => proc.kill('SIGKILL'));

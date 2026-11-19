@@ -27,7 +27,7 @@ const home = map.houses[5];
 const houses = Object.fromEntries(map.houses.map((h) => [h.id, { owner: null, ownerName: null, doorHp: 1500, doorOpen: false, items: [], parts: 0, tech: 0, intel: 0, salvage: 0, upg: {} }]));
 houses[home.id] = { ...houses[home.id], owner: TOK_Q, ownerName: 'Quinn', hxp: 300 };
 const w = makeWeapon('carbine');
-fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses, bags: [], characters: {
+fs.writeFileSync(FILE, JSON.stringify({ seed: 1337, version: 13, size: 30000, houses, bags: [], characters: {
   [TOK_Q]: { name: 'Quinn', x: home.crate.x, z: home.crate.z + 1.2, yaw: 0, hp: 100, armor: 0, inv: { primary: w, secondary: null, armor: null, pack: [] },
     ammo: 300, mags: { [w.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(6), parts: 100, tech: 50, intel: 0, salvage: 0, comms: 0,
     field: [], discovered: [], contracts: [] },
@@ -154,7 +154,7 @@ test('open world loop: deploy, contracts, supply drop, upgrades, fast travel, de
   assert.equal(q.you.comms, 2, 'commendations are kept on death');
   assert.ok(q.you.field.includes('intSup'), 'field unlocks are kept on death');
   q.send({ t: 'deploy', kind: 'lz', id: 2 });
-  await q.got((m) => m.t === 'toast' && /come back at your stash house, a hideout or a town/.test(m.text));
+  await q.got((m) => m.t === 'toast' && /come back at your stash house, a hideout, a town or a crewmate/.test(m.text));
   q.send({ t: 'deploy', kind: 'home' });
   await until(() => !q.you.dead);
   void carried;

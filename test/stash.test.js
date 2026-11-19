@@ -24,7 +24,7 @@ test('stashing: loot is lost on death until you get it home; stashed gear surviv
   const A = 'e5'.repeat(16);
   const gun = makeWeapon('carbine');
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzstash-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [],
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [],
     houses: { [home.id]: { owner: A, ownerName: 'Hauler', items: [], doorHp: 1500, upg: {} } },
     characters: { [A]: { name: 'Hauler', x: home.x + 300, z: home.z + 300, yaw: 0, hp: 100, armor: 0, inv: { primary: gun, primary2: null, secondary: null, armor: null, pack: [] }, ammo: 90, mags: { [gun.id]: 30 }, active: 'primary', dead: false, kills: 0, xp: xpForLevel(8), cash: 50, comms: 0, food: 90, field: [], discovered: [], contracts: [] } } }));
   const port = 30600 + Math.floor(Math.random() * 300);

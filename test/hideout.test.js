@@ -40,7 +40,7 @@ test('hideouts: unlocked by level, a stash in the field, a respawn point and a f
   const tool = (k) => ({ id: `t${k}`, kind: 'tool', tool: k, name: k });
   const person = (name, x, z, extra) => ({ name, x, z, yaw: 0, hp: 100, armor: 0, inv: { primary: makeWeapon('carbine'), primary2: null, secondary: null, armor: null, pack: [tool('hammer')] }, ammo: 90, mags: {}, active: 'primary', dead: false, kills: 0, xp: xpForLevel(9), cash: 50, comms: 0, food: 90, field: [], discovered: [], contracts: [], wood: 200, parts: 200, stone: 0, salvage: 40, ...extra });
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dzhide-')), 'w.json');
-  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, bags: [], structures: [],
+  fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 13, size: 30000, bags: [], structures: [],
     houses: { [home.id]: { owner: A, ownerName: 'Camper', items: [], doorHp: 1500, upg: {} } },
     characters: { [A]: person('Camper', spot.x, spot.z + 2.6), [B]: person('Drifter', spot.x + 30, spot.z + 2.6) } }));
   const port = 30100 + Math.floor(Math.random() * 300);
