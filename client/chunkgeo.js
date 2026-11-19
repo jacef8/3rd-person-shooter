@@ -457,7 +457,7 @@ export const CHUNK_BUFS = ['office', 'siding', 'brick', 'stucco', 'block', 'meta
 const UV_BUFS = new Set(['office', 'siding', 'brick', 'stucco', 'block', 'metal', 'planks']);
 /** Does a map box get drawn into the chunk's building buffers? (Trees, rocks, tanks, vehicles and the rest are drawn apart.) */
 export function isChunkBox(b) {
-  if (b.type === 'terminal' || b.type === 'rail' || b.type === 'tree' || b.type === 'pine' || b.type === 'canopy' || b.type === 'tank' || b.type === 'car' || b.type === 'vehiclebody') return false;
+  if (b.type === 'terminal' || b.type === 'rail' || b.type === 'tree' || b.type === 'pine' || b.type === 'canopy' || b.type === 'tank' || b.type === 'car' || b.type === 'vehiclebody' || b.type === 'scrub') return false;
   return !(b.nature && (b.type === 'rock' || b.type === 'boulder'));
 }
 /**

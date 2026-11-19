@@ -701,6 +701,40 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
 
   // Each drawn tree's place in its chunk's instanced meshes, so one can be cut to a stump (or regrow) in place.
   const treeSlots = new WeakMap(), tm = new THREE.Matrix4();
+  // Brush: saw palmetto, the fan-leaved scrub under the pines all over North Florida. One clump of
+  // fronds (each a stem and a pleated fan) made once; every bush in a chunk is an instance of it,
+  // turned, sized to its box and tinted a little differently.
+  const palmettoGeo = (() => {
+    const pos = [], col = [], rnd = (() => { let s = 7; return () => ((s = (s * 16807) % 2147483647) / 2147483647); })();
+    const FRONDS = 8, RIBS = 10;
+    for (let f = 0; f < FRONDS; f++) {
+      const az = (f / FRONDS) * Math.PI * 2 + rnd() * 0.5, el = 0.45 + rnd() * 0.65, len = 0.45 + rnd() * 0.3;
+      const ox = Math.cos(az), oz = Math.sin(az), ce = Math.cos(el), se = Math.sin(el);
+      const tip = [ox * ce * len, se * len, oz * ce * len];
+      // the stem: a thin blade from the ground to the fan
+      const sw = 0.025;
+      pos.push(-oz * sw, 0, ox * sw, oz * sw, 0, -ox * sw, ...tip);
+      for (let k = 0; k < 3; k++) col.push(0.12, 0.1, 0.04);   // (linear colours: a dull tan stem)
+      // the fan, opening outward and up from the stem's end: ribs fanned through ~200 degrees
+      const v = [ox * Math.cos(el + 0.35), Math.sin(el + 0.35), oz * Math.cos(el + 0.35)], u = [-oz, 0, ox], n = [v[1] * u[2] - v[2] * u[1], v[2] * u[0] - v[0] * u[2], v[0] * u[1] - v[1] * u[0]];
+      const R = 0.42 + rnd() * 0.18, ribs = [];
+      for (let i = 0; i <= RIBS; i++) {
+        const t = -1.75 + (3.5 * i) / RIBS, c = Math.cos(t), sn = Math.sin(t), pleat = (i % 2 ? 1 : -1) * 0.035, droop = -0.12 * sn * sn;
+        ribs.push([tip[0] + (v[0] * c + u[0] * sn) * R + n[0] * pleat, tip[1] + (v[1] * c + u[1] * sn) * R + n[1] * pleat + droop, tip[2] + (v[2] * c + u[2] * sn) * R + n[2] * pleat]);
+      }
+      for (let i = 0; i < RIBS; i++) {
+        pos.push(...tip, ...ribs[i], ...ribs[i + 1]);
+        col.push(0.034, 0.065, 0.022, 0.13, 0.2, 0.07, 0.13, 0.2, 0.07);   // darker at the heart, a lighter silvery green at the tips (#34482a -> #657a45, linear)
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.computeVertexNormals();
+    return g;
+  })();
+  const palmettoMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide });
+  shared.add(palmettoGeo);   // (one for every chunk: never freed with a chunk)
   const rockGeo = new THREE.DodecahedronGeometry(0.62, 0), rockMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
   function setTreeMatrix(t) {
     const sl = treeSlots.get(t);
@@ -873,11 +907,31 @@ vBlade = position.y;
   /** A chunk's ground and roads (the heavier half of wrapping one up, so it can go in a frame of its own). */
   function groundOf(cx, cz) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
-    return { ground: buildTerrain(x0, z0), roads: map.roadGrid && buildRoads(x0, z0) };
+    return { ground: buildTerrain(x0, z0), roads: map.roadGrid && buildRoads(x0, z0), palms: understory(x0, z0) };
+  }
+  /**
+   * Saw palmetto under the pines: clumps scattered through the woods (and scrub and marsh edges),
+   * decoration you walk through like the grass, the same for everyone (placed by a hash of where).
+   * Kept off roads, out of buildings and from right against a tree. [x, y, z, size, turn] each.
+   */
+  function understory(x0, z0) {
+    if (!terrain.hasCover) return [];
+    const out = [], STEP = mobile ? 9 : 6.5, roads = map.roadsNear(x0 + CHUNK / 2, z0 + CHUNK / 2, CHUNK);
+    const nearRoad = (x, z) => roads.some((r) => { const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2)); return Math.hypot(r.x1 + dx * t - x, r.z1 + dz * t - z) < (r.width || 8) / 2 + 2; });
+    for (let gx = x0; gx < x0 + CHUNK; gx += STEP) for (let gz = z0; gz < z0 + CHUNK; gz += STEP) {
+      const h1 = hash((Math.floor(gx * 7.3) * 73856093) ^ (Math.floor(gz * 7.3) * 19349663)) / 4294967296;
+      const c = terrain.cover(gx, gz), want = c === COVER.woods ? 0.42 : c === COVER.scrub ? 0.6 : c === COVER.marsh ? 0.25 : 0;
+      if (h1 >= want) continue;
+      const h2 = hash(Math.floor(h1 * 1e9)) / 4294967296, h3 = hash(Math.floor(h2 * 1e9) + 7) / 4294967296;
+      const x = gx + (h2 - 0.5) * STEP * 0.9, z = gz + (h3 - 0.5) * STEP * 0.9, y = terrain.drawn(x, z);
+      if (y < 0.4 || nearRoad(x, z) || map.grid.near(x, z, 1.2).some((b) => !b.nature || Math.hypot((b.minX + b.maxX) / 2 - x, (b.minZ + b.maxZ) / 2 - z) < 1.0)) continue;
+      out.push(x, y, z, 0.75 + h2 * 0.7, h3 * Math.PI * 2);
+    }
+    return out;
   }
   function finishChunk(cx, cz, bufs, list, pre = groundOf(cx, cz)) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
-    const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [];
+    const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [], brush = [];
     for (const b of list) {
       if (b.type === 'tree') trees.push(b);
       else if (b.nature && (b.type === 'rock' || b.type === 'boulder')) rocks.push(b);
@@ -885,6 +939,7 @@ vBlade = position.y;
       else if (b.type === 'canopy') canopies.push(b);
       else if (b.type === 'tank') tanks.push(b);
       else if (b.type === 'car' || b.type === 'vehiclebody') rigs.push(b);   // drawn as real vehicles, below
+      else if (b.type === 'scrub') brush.push(b);
     }
     const group = new THREE.Group();
     const { ground, roads } = pre;
@@ -933,6 +988,25 @@ vBlade = position.y;
       trunks.castShadow = !mobile;
       group.add(trunks);
     };
+    const palms = pre.palms || [], nPalm = palms.length / 5;
+    if (brush.length || nPalm) {
+      const im = new THREE.InstancedMesh(palmettoGeo, palmettoMat, brush.length + nPalm), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), v = new THREE.Vector3(), sc = new THREE.Vector3();
+      brush.forEach((b, i) => {   // brush the map stands up as solid (scrub boxes)
+        const x = (b.minX + b.maxX) / 2, z = (b.minZ + b.maxZ) / 2, w = (b.maxX - b.minX) * 0.62, h = b.h * 0.85, k = 0.85 + ((b.id * 7) % 6) * 0.05;
+        q.setFromAxisAngle(up, (b.id * 2.399) % (Math.PI * 2));
+        im.setMatrixAt(i, tm.compose(v.set(x, b.y0 ?? terrain.drawn(x, z), z), q, sc.set(w * 1.7, h * 1.35, w * 1.7)));
+        im.setColorAt(i, tint.setRGB(k, k * (0.97 + ((b.id * 3) % 5) * 0.015), k * 0.9));
+      });
+      for (let j = 0; j < nPalm; j++) {   // the understory
+        const [x, y, z, s, yaw] = palms.slice(j * 5, j * 5 + 5), k = 0.82 + (s - 0.75) * 0.3, i = brush.length + j;
+        q.setFromAxisAngle(up, yaw);
+        im.setMatrixAt(i, tm.compose(v.set(x, y - 0.05, z), q, sc.set(1.5 * s, 1.15 * s, 1.5 * s)));
+        im.setColorAt(i, tint.setRGB(k, k * (0.95 + (yaw % 0.1)), k * 0.88));
+      }
+      im.castShadow = !mobile; im.receiveShadow = true;
+      im.computeBoundingSphere();
+      group.add(im);
+    }
     // Rocks you can mine: chunky stones, one batch per chunk, so a mined-out one can crumble in place.
     if (rocks.length) {
       const im = new THREE.InstancedMesh(rockGeo, rockMat, rocks.length);
