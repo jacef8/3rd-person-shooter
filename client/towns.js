@@ -47,10 +47,15 @@ const isGas = (cat, name) => /gas_station|fueling/.test(cat) || /chevron|exxon|\
 const wantsParking = (cat) => /store|grocery|market|restaurant|food|sandwich|gas|fuel|pharmacy|bank|hardware|auto|shop|discount|motel|cafe/i.test(cat);
 const hash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; };
 
-/** A sign face (canvas texture) with the name fitted to it. */
+/**
+ * A sign face (canvas texture) with the name fitted to it. Drawn in 1024 x 256 units onto a canvas
+ * half that size: read from the street it looks the same, and each takes a quarter of the memory
+ * (and of the time to send to the graphics chip) as a street of shops comes into view.
+ */
 function signTexture(name, st, sub = '') {
-  const c = document.createElement('canvas'); c.width = 1024; c.height = 256;
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
   const g = c.getContext('2d');
+  g.scale(0.5, 0.5);
   g.fillStyle = st.bg; g.fillRect(0, 0, 1024, 256);
   if (st.stripe) { g.fillStyle = st.stripe; g.fillRect(0, 214, 1024, 42); }
   g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 10; g.strokeRect(5, 5, 1014, 246);
