@@ -82,7 +82,11 @@ THREE.ShaderChunk.tonemapping_pars_fragment = THREE.ShaderChunk.tonemapping_pars
   return pow( clamp( c, 0.0, 1.0 ), vec3( 2.2 ) );
 }`);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // soft-edged shadows
+renderer.shadowMap.type = LOW_POWER ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;   // soft-edged shadows (phones: the cheaper filter)
+// Phones and TV boxes redraw the shadows every third frame, not every frame: drawing them is a second
+// pass over everything near you. The sun barely moves; a moving shadow trails by a frame or two.
+renderer.shadowMap.autoUpdate = !LOW_POWER;
+let shadowTick = 0;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;  // film-like light: bright sky without washing out the ground
 renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene();
@@ -114,7 +118,7 @@ function applyGfx(mode = gfxMode) {
   try { localStorage.setItem('dz_gfx', mode); } catch { /* private mode */ }
   const g = GFX[mode];
   // Never more than about 2.2 million pixels a frame (1.3 million on a phone): a 4K TV at 2x would be 8.3.
-  const pixCap = Math.sqrt((MOBILE ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight));
+  const pixCap = Math.sqrt((LOW_POWER ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight));
   renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, pixCap)));
   sun.castShadow = g.shadows && !perf.noShadows;
   const shadowMap = LOW_POWER && mode !== 'ultra' ? Math.min(1024, g.shadowMap) : g.shadowMap;
@@ -158,6 +162,7 @@ function drawWorld() {
     renderer.render(state.view.far, farCamera);
     renderer.clearDepth();
   }
+  if (LOW_POWER) renderer.shadowMap.needsUpdate = shadowTick++ % 3 === 0;
   renderer.render(scene, camera);
 }
 const hemi = new THREE.HemisphereLight(0xdfe8f0, 0x3a3530, 0.85);
@@ -170,7 +175,7 @@ sun.shadow.normalBias = 0.35;   // keeps sloped roofs and siding from shadowing 
 scene.add(sun, sun.target);
 
 function resize() {
-  try { const g = GFX[gfxMode]; if (g) renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, Math.sqrt((MOBILE ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight))))); } catch { /* still starting up */ }
+  try { const g = GFX[gfxMode]; if (g) renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, Math.sqrt((LOW_POWER ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight))))); } catch { /* still starting up */ }
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
