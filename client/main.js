@@ -952,8 +952,9 @@ function makeCharacter(kind, name, look = null) {
   const aimPivot = joint(0, 1.3, 0, g);
   const gun = joint(-0.17, -0.06, 0.24, aimPivot);
   // Slung guns: across the back, diagonally, muzzles over a shoulder.
-  const sling = [joint(-0.02, 1.25, -0.2, g), joint(0.02, 1.22, -0.23, g)];
-  for (const [i, sl] of sling.entries()) { sl.rotation.order = 'ZXY'; sl.rotation.set(-Math.PI / 2, 0, i ? -1.0 : 1.0); }
+  // (Out behind the vest's back, which is about 0.25 m behind the middle; the second a little further.)
+  const sling = [joint(-0.02, 1.25, -0.31, g), joint(0.02, 1.22, -0.37, g)];
+  // (No turn on the joints themselves: slungPose lays each gun along the back by its own shape.)
   const thigh = joint(-0.1, 0.9, 0, g);
   const holster = joint(-0.1, -0.12, 0.02, thigh);
   holster.rotation.x = Math.PI / 2;
@@ -1093,7 +1094,7 @@ function setCharacterStowed(g, list) {
   for (const w of list || []) {
     const model = buildGunModel(w);
     if (w.slot === 'secondary') g.userData.holster.add(model);
-    else if (back < 2) g.userData.sling[back++].add(model);
+    else if (back < 2) { g.userData.sling[back].add(model); slungPose(model, back++); }
   }
 }
 /** Your own stowed guns, from your inventory. */
@@ -1193,7 +1194,41 @@ function setHolstered(g, on) {
   const pistol = /sidearm/.test(u.gunKey || '');
   const to = pistol ? (u.holster.children.length ? null : u.holster) : u.sling.find((sl) => !sl.children.length) || null;
   u.holstered = { model, to, pos: model.position.clone(), q: model.quaternion.clone() };
-  if (to) to.add(model); else u.gun.remove(model);   // nowhere free on your back: out of sight
+  if (to) { to.add(model); if (!pistol) slungPose(model, u.sling.indexOf(to)); } else u.gun.remove(model);   // nowhere free on your back: out of sight
+}
+/**
+ * A rifle on the back lies flat against it: its long side runs diagonally up the back (muzzle over
+ * a shoulder, the two guns crossing), its thinnest side against the back, centred on the sling point.
+ * Worked out from the gun's own shape, so every model sits right however it was built.
+ */
+const _sm = new THREE.Matrix4(), _sb = new THREE.Box3(), _sv = new THREE.Vector3();
+function slungPose(model, i = 0) {
+  // The gun's size along its own axes.
+  model.position.set(0, 0, 0); model.quaternion.identity(); model.updateMatrixWorld(true);
+  const inv = _sm.copy(model.matrixWorld).invert();
+  _sb.makeEmpty();
+  model.traverse((m) => {
+    if (!m.isMesh || !m.geometry) return;
+    m.geometry.computeBoundingBox?.();
+    const bb = m.geometry.boundingBox.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    _sb.union(bb);
+  });
+  if (_sb.isEmpty()) return model;
+  const size = _sb.getSize(new THREE.Vector3()), centre = _sb.getCenter(new THREE.Vector3());
+  const axes = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+  const order = [0, 1, 2].sort((a, b) => [size.x, size.y, size.z][b] - [size.x, size.y, size.z][a]);   // long, middle, thin
+  // Where each goes on the back: long → diagonal up, thin → straight back (out from the body).
+  const tilt = 0.6 * (i ? -1 : 1), up = new THREE.Vector3(Math.sin(tilt), Math.cos(tilt), 0), out = new THREE.Vector3(0, 0, -1);
+  const side = new THREE.Vector3().crossVectors(out, up);   // (so up × side = out: a proper rotation)
+  const want = [up, side, out];
+  // A rotation taking the gun's long/middle/thin axes to those (kept right-handed).
+  const from = new THREE.Matrix4().makeBasis(axes[order[0]], axes[order[1]], axes[order[2]]);
+  if (from.determinant() < 0) side.negate();
+  const to = new THREE.Matrix4().makeBasis(want[0], want[1], want[2]);
+  model.quaternion.setFromRotationMatrix(to.multiply(from.invert()));
+  // Its middle on the sling point.
+  model.position.copy(_sv.copy(centre).applyQuaternion(model.quaternion).negate());
+  return model;
 }
 function setCharacterGun(g, gun) {
   const key = gunKey(gun);
