@@ -345,10 +345,11 @@ function vehicleDoor(def, d) {
   g.userData = { panel, paint: panel.material.color.clone() };
   return g;
 }
-// Lanterns by the doors of the homes people have claimed: they glow and flicker at night. The four
-// nearest also light up what's around them (a fixed set of lights, so nothing recompiles).
+// Lanterns by the doors of the homes people have claimed: they glow and flicker at night. The two
+// nearest also light up what's around them (a fixed set of lights, so nothing recompiles; every light
+// in the scene costs every lit pixel on screen, lit or not, so there are only two).
 const LANTERN = { frame: new THREE.MeshStandardMaterial({ color: 0x2b2620, roughness: 0.6, metalness: 0.4 }), geo: new THREE.BoxGeometry(0.16, 0.24, 0.16), cap: new THREE.ConeGeometry(0.13, 0.1, 4) };
-const lanternLights = [0, 1, 2, 3].map(() => { const l = new THREE.PointLight(0xffa040, 0, 18, 1.5); scene.add(l); return l; });
+const lanternLights = [0, 1].map(() => { const l = new THREE.PointLight(0xffa040, 0, 18, 1.5); scene.add(l); return l; });
 function makeLantern(def, d) {
   const g = new THREE.Group();
   const glass = new THREE.Mesh(LANTERN.geo, new THREE.MeshStandardMaterial({ color: 0xffd8a0, emissive: 0xff9a30, emissiveIntensity: 0, roughness: 0.3 }));
