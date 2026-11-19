@@ -2660,7 +2660,7 @@ function buildInvColumns() {
     if (!it) { you.append(...invRow(`eq-${slot}`, { title: 'Empty', tag: '', big: slot !== 'armor', detail: `Nothing in ${label.toLowerCase()}. Equip one from your backpack.`, why: 'Highlight something in your backpack and press its button to equip it.' })); continue; }
     const unequip = ['Unequip', () => send({ t: 'inv', action: 'unequip', slot })];
     const acts = it.kind === 'weapon'
-      ? { a: me.active === slot ? partsAction(it) : ['Hold it', () => send({ t: 'weapon', slot })], x: unequip, y: me.active === slot ? null : partsAction(it) }
+      ? { a: me.active === slot ? partsAction(it) : ['Use this gun', () => send({ t: 'weapon', slot })], x: unequip, y: me.active === slot ? null : partsAction(it) }
       : { x: unequip };
     you.append(...invRow(`eq-${slot}`, { item: it, loose: loose.has(it.id), tag: me.active === slot ? '' : statLine(it).split(' · ').slice(0, 2).join(' · '), inHand: me.active === slot, hot: !!it.hot, big: it.kind === 'weapon', title: it.name, chips: attachmentChips(it), detail: `${label} · ${statLine(it)}`, extra: attachmentLine(it), color: gunColor(it), acts }));
   }

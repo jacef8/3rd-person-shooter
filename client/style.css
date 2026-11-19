@@ -988,3 +988,9 @@ body.touchui #voicebar { bottom: auto; top: 262px; left: calc(8px + env(safe-are
 #lockmark i:nth-child(2) { right: 0; top: 0; border-top-width: 3px; border-right-width: 3px; }
 #lockmark i:nth-child(3) { left: 0; bottom: 0; border-bottom-width: 3px; border-left-width: 3px; }
 #lockmark i:nth-child(4) { right: 0; bottom: 0; border-bottom-width: 3px; border-right-width: 3px; }
+
+/* A setting with many choices (outfit, clothes colour): its name and note on their own line, the
+   choices in a row beneath that wraps as it needs to (squeezed beside them, the note ran down in a
+   column of single words, under the buttons). */
+#padSettings .item:has(> button:nth-of-type(4)) { flex-wrap: wrap; row-gap: 8px; }
+#padSettings .item:has(> button:nth-of-type(4)) .meta { flex: 1 1 100%; }
