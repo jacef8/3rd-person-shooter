@@ -342,10 +342,10 @@ export function poseAction(holder, rig, pose, t, p) {
     ik2(R.up, R.lo, R.tip, rf, rf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
     ik2(L.up, L.lo, L.tip, lf, lf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
   }
-  if (pose.feet) {   // feet on their own spots (a ladder's rungs), knees out ahead
+  if (pose.feet) {   // feet on their own spots (a ladder's rungs), knees out ahead (or where the pose says)
     const [L, R] = rig.legs, rf = at(...pose.RF(t, p)), lf = at(...pose.LF(t, p));
-    ik2(R.up, R.lo, R.tip, rf, rf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
-    ik2(L.up, L.lo, L.tip, lf, lf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
+    ik2(R.up, R.lo, R.tip, rf, pose.RK ? at(...pose.RK(t, p)) : rf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
+    ik2(L.up, L.lo, L.tip, lf, pose.LK ? at(...pose.LK(t, p)) : lf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
   }
   if (pose.lean) for (const [bone, share] of [[B.Spine, 0.35], [B.Spine1, 0.35], [B.Spine2, 0.3]]) { _q.setFromAxisAngle(right, -pose.lean * share); turnWorld(bone, _q); }
   if (pose.look) { _q.setFromAxisAngle(right, -pose.look); turnWorld(B.Neck, _q); }
@@ -353,7 +353,7 @@ export function poseAction(holder, rig, pose, t, p) {
   const [AR, AL] = rig.arms;
   const r = pose.R(t, p), l = pose.L(t, p);
   const rw = at(...r), lw = at(...l);
-  ik2(AR.up, AR.lo, AR.tip, rw, rw.clone().addScaledVector(right, 0.7).addScaledVector(down, pose.elbowUp ? -0.6 : 0.8).addScaledVector(fwd, -0.3));
-  ik2(AL.up, AL.lo, AL.tip, lw, lw.clone().addScaledVector(right, -0.7).addScaledVector(down, pose.elbowUp ? -0.2 : 0.8).addScaledVector(fwd, -0.3));
+  ik2(AR.up, AR.lo, AR.tip, rw, pose.RE ? at(...pose.RE(t, p)) : rw.clone().addScaledVector(right, 0.7).addScaledVector(down, pose.elbowUp ? -0.6 : 0.8).addScaledVector(fwd, -0.3));
+  ik2(AL.up, AL.lo, AL.tip, lw, pose.LE ? at(...pose.LE(t, p)) : lw.clone().addScaledVector(right, -0.7).addScaledVector(down, pose.elbowUp ? -0.2 : 0.8).addScaledVector(fwd, -0.3));
   return [AR.wrist.getWorldPosition(V()), AL.wrist.getWorldPosition(V())];
 }

@@ -1350,7 +1350,9 @@ function updateCharacterMesh(g, c, dt) {
     const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming) || now - (u.firedAt || 0) < 900;   // shooting brings the gun up to the shoulder, as aiming does
     // Busy with something that takes a while (a locker, a flag, a flare…): the gun goes away for the pose.
     const fallenFor = c.dead ? now - (u.diedAt || now) : -1;
-    const act = c.dead ? (fallenFor < DEAD_SHOWN_MS ? 'fallen' : null) : c.skate ? 'skate' : c.lad && !c.boat ? 'climb'
+    // On your belly and moving (prone, or downed and dragging yourself): crawling, hand over hand.
+    const crawling = (c.prone || c.downed) && !c.boat && !c.air && u.speed > 0.25;
+    const act = c.dead ? (fallenFor < DEAD_SHOWN_MS ? 'fallen' : null) : c.skate ? 'skate' : c.lad && !c.boat ? 'climb' : crawling ? 'crawl'
       : c.act && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] && !(['rummage', 'pickup', 'putdown', 'getup'].includes(c.act) && u.speed > 0.6) ? c.act : null;   // (these only standing still: walking on, you just walk)
     const kneel = act && ['pry', 'revive', 'cook'].includes(ACT_POSE[act]);
     const armed = !!gunObj && !act && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');

@@ -24,7 +24,7 @@ export const ACT_POSE = {
   upgrade: 'hammer', rebuild: 'hammer', harvest: 'hammer',
   cook: 'cook', fish: 'fish',
   eat: 'eat', heal: 'bandage',
-  climb: 'climb', skate: 'skate',
+  climb: 'climb', skate: 'skate', crawl: 'crawl',
   stash: 'stash',
   pickup: 'pickup', putdown: 'pickup', rummage: 'rummage', getup: 'getup', fallen: 'fallen',
 };
@@ -68,6 +68,19 @@ const POSES = {
     R: (t) => [-0.02 + 0.07 * S(t * 4), 1.05 + 0.05 * S(t * 8), 0.3 + 0.04 * Math.cos(t * 4)],
     L: () => [0.14, 1.0, 0.32] },
   // Up a ladder: hand over hand, each foot stepping up a rung as the other hand reaches.
+  // Crawling on your belly (prone, or downed and dragging yourself): in the body's own frame, lying
+  // face down (y runs along the ground toward the head, +z into the ground). Hand over hand, each
+  // reaching out past the head and pulling back to the shoulder, elbows out; the knee on the same
+  // side draws up beside the body as that hand pulls.
+  crawl: { feet: true, look: -0.9,
+    R: (t) => { const c = S(t * 4.2); return [-0.24, 1.62 + 0.26 * c, 0.06 - 0.08 * Math.max(0, Math.cos(t * 4.2))]; },
+    L: (t) => { const c = S(t * 4.2 + PI); return [0.24, 1.62 + 0.26 * c, 0.06 - 0.08 * Math.max(0, Math.cos(t * 4.2 + PI))]; },
+    RE: (t) => [-0.62, 1.3 + 0.12 * S(t * 4.2), 0.3],
+    LE: (t) => [0.62, 1.3 + 0.12 * S(t * 4.2 + PI), 0.3],
+    RF: (t) => { const k = Math.max(0, -S(t * 4.2)); return [-0.14 - 0.16 * k, 0.04 + 0.3 * k, 0.06]; },
+    LF: (t) => { const k = Math.max(0, -S(t * 4.2 + PI)); return [0.14 + 0.16 * k, 0.04 + 0.3 * k, 0.06]; },
+    RK: (t) => [-0.75, 0.55 + 0.15 * Math.max(0, -S(t * 4.2)), 0],
+    LK: (t) => [0.75, 0.55 + 0.15 * Math.max(0, -S(t * 4.2 + PI)), 0] },
   climb: { look: -0.25, feet: true,
     R: (t) => [-0.17, 1.62 + 0.22 * S(t * 5.5), 0.3],
     L: (t) => [0.17, 1.62 + 0.22 * S(t * 5.5 + PI), 0.3],
@@ -186,7 +199,7 @@ function makeProps() {
   for (const k of ['crowbar', 'locker', 'flag', 'flare', 'tablet', 'medkit', 'hammer', 'pan', 'rod', 'line', 'can', 'kit']) { P[k].visible = false; P[k].traverse((o) => { if (o.isMesh) o.castShadow = true; }); }
   return P;
 }
-const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'], eat: ['can'], bandage: ['kit'], climb: [], skate: [], stash: ['locker'], pickup: [], rummage: [], getup: [], fallen: [] };
+const PROPS_OF = { pry: ['crowbar'], plant: ['flag'], flare: ['flare'], tablet: ['tablet'], revive: ['medkit'], hammer: ['hammer'], cook: ['pan'], fish: ['rod', 'line'], eat: ['can'], bandage: ['kit'], climb: [], skate: [], crawl: [], stash: ['locker'], pickup: [], rummage: [], getup: [], fallen: [] };
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 /** Put a prop at a hand, turned with the person (yaw) plus its own tilt. */
