@@ -71,12 +71,13 @@ HALF = args.size / 2
 
 
 # ------------------------------------------------------------------ building footprints
-def footprint(g, lon0, lat0, m_lon, m_lat, res=0.5):
+def footprint(g, lon0, lat0, m_lon, m_lat, res=0.25):
     """A building's footprint in its own frame: (angle in degrees, width, depth, pieces or None).
 
     The angle comes from the smallest rectangle around the real outline, turned so it stays within
     45 degrees of east (so nearly-square buildings keep a small angle). The outline is then covered
-    with up to six rectangles (an L is two, a T three); pieces is None when one rectangle does."""
+    with up to ten rectangles (an L is two, a T three, plus porches, garages and bump-outs down to
+    1.8 m across); pieces is None when one rectangle does (the outline fills 96% of it)."""
     poly = g if g.geom_type == 'Polygon' else max(getattr(g, 'geoms', [g]), key=lambda q: q.area)
     if poly.geom_type != 'Polygon' or poly.area <= 0:
         return None
@@ -103,7 +104,7 @@ def footprint(g, lon0, lat0, m_lon, m_lat, res=0.5):
     if w < 2.5 or d < 2.5:
         return None
     full = [round(x0, 1), round(z0, 1), round(x1, 1), round(z1, 1)]
-    if loc.area >= 0.9 * w * d or w * d < 40:
+    if loc.area >= 0.96 * w * d or w * d < 30:
         return ang, w, d, None
     # Fill a 0.5 m grid with the outline and take the biggest rectangles until it's covered.
     nx, nz = max(1, int(math.ceil(w / res))), max(1, int(math.ceil(d / res)))
@@ -113,17 +114,17 @@ def footprint(g, lon0, lat0, m_lon, m_lat, res=0.5):
     grid = shapely.contains_xy(loc, gx, gz)
     total = grid.sum()
     rects, covered = [], 0
-    while len(rects) < 6 and covered < 0.92 * total:
+    while len(rects) < 10 and covered < 0.96 * total:
         best = max_rect(grid)
         if not best:
             break
         area, (i0, j0, i1, j1) = best
-        if area * res * res < max(6, 0.04 * total * res * res):
+        if area * res * res < max(3.5, 0.025 * total * res * res):
             break
         grid[i0:i1, j0:j1] = False
         covered += area
         rects.append([round(x0 + j0 * res, 1), round(z0 + i0 * res, 1), round(x0 + j1 * res, 1), round(z0 + i1 * res, 1)])
-    rects = [q for q in rects if q[2] - q[0] >= 2.5 and q[3] - q[1] >= 2.5]
+    rects = [q for q in rects if q[2] - q[0] >= 1.8 and q[3] - q[1] >= 1.8]
     if len(rects) <= 1:
         return ang, w, d, None
     return ang, w, d, rects
