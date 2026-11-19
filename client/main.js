@@ -854,10 +854,16 @@ function boatSeat(me) {
 /** Where a driver's hands go, from the seat: a wheel ahead of the chest, handlebars wide and lower,
  *  reins held close. `half`: how far apart the hands are; `turn`: how far a wheel turns them. */
 const RIDE_GRIP = { wheel: { fwd: 0.42, up: 0.42, half: 0.18, turn: 0.6 }, bars: { fwd: 0.5, up: 0.32, half: 0.3, turn: 0.25 }, reins: { fwd: 0.42, up: 0.18, half: 0.1, turn: 0.1 }, none: null };
-function rideFeet(id) {
+const seatV = new THREE.Vector3();
+function rideFeet(id, seat = null) {
   const v = boatVis.get(id);
   if (!v || !BOATS[v.data.type].land) return 0.15;
-  return riderFeet(v.data.type, v.mesh.position.y);
+  const def = BOATS[v.data.type], at = seat != null && def.seatAt[seat];
+  if (!at) return riderFeet(v.data.type, v.mesh.position.y);
+  // Your seat as the ride sits now, tipped nose-up on a bank or rocking over rough ground: you stay
+  // in the cab instead of rising through the roof as it pitches.
+  v.mesh.updateMatrixWorld();
+  return v.mesh.localToWorld(seatV.set(at[0], riderFeet(v.data.type, 0), at[1])).y;
 }
 const myRide = () => { const id = state.me?.boat?.id; const v = id && boatVis.get(id); return v ? BOATS[v.data.type] : null; };
 const canStepOut = () => { if (myRide()?.land) return true; for (let r = 2; r <= BOAT_RULES.exitRange; r += 2) for (let a = 0; a < 16; a++) if (ground(state.x + Math.cos(a * Math.PI / 8) * r, state.z + Math.sin(a * Math.PI / 8) * r) > -0.6) return true; return false; };
@@ -1315,7 +1321,7 @@ function updateCharacterMesh(g, c, dt) {
   const k = c.smooth ? 1 : Math.min(1, dt * 12);
   g.position.x += (c.x - g.position.x) * k;
   g.position.z += (c.z - g.position.z) * k;
-  g.position.y = c.boat ? rideFeet(c.boat) : (c.y ?? ground(g.position.x, g.position.z)) + (c.alt || 0);
+  g.position.y = c.boat ? rideFeet(c.boat, onRide ? c.seat : null) : (c.y ?? ground(g.position.x, g.position.z)) + (c.alt || 0);
   // On a bike or a horse you lean (and tip on a slope) with it.
   g.rotation.z = onRide ? rv.mesh.rotation.z * (BOATS[rv.data.type].lean ? 1 : 0.6) : 0;
   let dy = c.yaw - g.rotation.y;
