@@ -51,7 +51,7 @@ test('quitting mid-fight leaves you standing for a while; quitting otherwise is 
   fs.writeFileSync(file, JSON.stringify({ seed: 1337, version: 12, size: 30000, houses: {}, bags: [], structures: [], characters: {
     [tokA]: character('Jace', at.x, at.z), [tokB]: character('Eli', at.x, at.z + 6), [tokC]: character('Sam', at.x + 8, at.z) } }));
   const proc = spawn(process.execPath, ['server/index.js'], {
-    env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', RIDES: '0', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999', COMBAT_LOG_MS: '2500' },
+    env: { ...process.env, REAL_DATA: '0', PORT: port, DATA_FILE: file, BOTS: '0', RIDES: '0', SUPPLY_EVERY_MS: '99999999', EVENT_FIRST_MS: '99999999', COMBAT_LOG_MS: '6000', ALLOW_DEV: '1' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((r) => proc.stdout.on('data', (d) => { if (String(d).includes('Deadzone server')) r(); }));
@@ -71,8 +71,35 @@ test('quitting mid-fight leaves you standing for a while; quitting otherwise is 
     await until(() => a.msgs.some((m) => m.t === 'feed' && /Eli quit mid-fight/.test(m.text)));
     await sleep(800);
     assert.ok(sees('Eli'), 'still standing there');
-    await until(() => !sees('Eli'), 5000);   // then gone
+    await until(() => !sees('Eli'), 10000);   // then gone
     assert.ok(a.msgs.some((m) => m.t === 'feed' && /Eli left the zone/.test(m.text)));
+
+    // Quit mid-fight and killed before getting away: only part of what you carried is lost.
+    const b2 = await conn('Eli', tokB);
+    await until(() => b2.you && sees('Eli'));
+    a.send({ t: 'shoot', dir: [0, -0.05, 1] });
+    await until(() => b2.you.hp < 100);
+    await b2.close();
+    await until(() => a.msgs.filter((m) => m.t === 'feed' && /Eli quit mid-fight/.test(m.text)).length >= 2);
+    for (let i = 0; i < 40 && !a.msgs.some((m) => m.t === 'feed' && /Jace ➜ Eli/.test(m.text)); i++) {
+      a.send({ t: 'reload' }); await sleep(120);
+      a.send({ t: 'shoot', dir: [0, -0.05, 1] }); await sleep(180);
+    }
+    await until(() => a.msgs.some((m) => m.t === 'feed' && /Jace ➜ Eli/.test(m.text)));
+    await until(() => !sees('Eli'), 10000);
+    const b3 = await conn('Eli', tokB);
+    await until(() => b3.you && b3.msgs.some((m) => m.t === 'awayLog'));
+    assert.equal(b3.you.cash, 70, 'kept 70% of the cash');
+    assert.ok(b3.msgs.find((m) => m.t === 'awayLog').entries.some((e) => /quit mid-fight and were killed/.test(e.text)));
+    await b3.close();
+
+    // A Rogue taking aim at you is a fight too, before it fires.
+    const c2 = await conn('Sam', tokC);
+    await until(() => c2.you);
+    c2.send({ t: 'dev', spawnBots: [{ x: at.x + 8, z: at.z + 10, hp: 9999 }] });
+    await sleep(1500);
+    await c2.close();
+    await until(() => a.msgs.some((m) => m.t === 'feed' && /Sam quit mid-fight/.test(m.text)));
     await a.close();
   } finally { proc.kill('SIGTERM'); }
 });

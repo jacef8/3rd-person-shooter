@@ -3467,8 +3467,13 @@ function applyDamage(target, amount, attacker, isBot, headshot = false, ammo = n
   if (target.npc && (target.kind === 'trader' || target.kind === 'pawn')) return;   // traders and Lamar are left alone by everyone
   if (!isBot && (target.protectedUntil || 0) > Date.now()) return;
   if (!isBot && !pvpAllowed(attacker, target)) return;
-  // A fight between players: both are "in combat" for a while (quitting then leaves you standing there).
-  if (!isBot && attacker && !attacker.isBot && attacker !== target && players.has(attacker.id)) target.combatAt = attacker.combatAt = Date.now();
+  // In a fight (quitting then leaves you standing there a while): hit by anyone (a player, a Rogue, a
+  // hog), or shooting at anyone but a deer.
+  if (attacker && attacker !== target) {
+    const now = Date.now();
+    if (!isBot) target.combatAt = now;
+    if (!attacker.isBot && players.has(attacker.id) && !(isBot && target.animal && target.kind === 'deer')) attacker.combatAt = now;
+  }
   if (!isBot && target.downed) {
     // Shooting someone who's down finishes them off.
     target.bleedHp -= amount;
@@ -3535,11 +3540,30 @@ function killPlayer(p, attacker, headshotKill) {
   const keepIntel = hasField(p, 'pouch') ? Math.min(3, p.intel) : 0;
   // Your claim marker and tools stay with you: losing them would leave you unable to start again.
   const keep = pack.filter((i) => i && (i.kind === 'marker' || i.kind === 'tool'));
-  dropBag(p.x, p.z, [primary, primary2, secondary, armor, ...pack.filter((i) => !keep.includes(i))], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
-  p.inv = { primary: null, primary2: null, secondary: null, armor: null, pack: keep };
-  p.mags = {}; p.armor = 0; p.camoOn = false;
-  for (const r of RESOURCES) p[r] = 0;
-  p.intel = keepIntel;
+  if (p.lingerUntil) {
+    // Killed after quitting mid-fight: only a share of what you carried goes in the bag (a random
+    // QUIT_DROP of your gear, and that share of every supply); you keep the rest for next time.
+    const gear = [['primary', primary], ['primary2', primary2], ['secondary', secondary], ['armor', armor], ...pack.filter((i) => i && !keep.includes(i)).map((i) => ['pack', i])].filter(([, i]) => i);
+    for (let i = gear.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [gear[i], gear[j]] = [gear[j], gear[i]]; }
+    const lose = gear.slice(0, Math.round(gear.length * QUIT_DROP)), kept = gear.slice(lose.length);
+    const takeRes = Object.fromEntries(RESOURCES.map((r) => [r, Math.floor((p[r] || 0) * QUIT_DROP)]));
+    const lostIntel = Math.floor((p.intel - keepIntel) * QUIT_DROP);
+    if (lose.length || Object.values(takeRes).some(Boolean) || lostIntel) dropBag(p.x, p.z, lose.map(([, i]) => i), { ...takeRes, intel: lostIntel }, `${p.name}'s bag`);
+    p.inv = { primary: null, primary2: null, secondary: null, armor: null, pack: [...keep] };
+    for (const [slot, it] of kept) { if (slot === 'pack') p.inv.pack.push(it); else p.inv[slot] = it; }
+    p.mags = Object.fromEntries(Object.entries(p.mags || {}).filter(([id]) => kept.some(([, it]) => it.id === id)));
+    for (const r of RESOURCES) p[r] = (p[r] || 0) - takeRes[r];
+    p.intel -= lostIntel;
+    p.armor = 0; p.camoOn = false;
+    const away = db.characters[p.token];
+    if (away) (away.awayLog ||= []).push({ at: Date.now(), text: `You quit mid-fight and were killed before you got away: you lost ${lose.length ? lose.map(([, i]) => i.name).join(', ') : 'no gear'} and ${Math.round(QUIT_DROP * 100)}% of your supplies` });
+  } else {
+    dropBag(p.x, p.z, [primary, primary2, secondary, armor, ...pack.filter((i) => !keep.includes(i))], { ...Object.fromEntries(RESOURCES.map((r) => [r, p[r]])), intel: p.intel - keepIntel }, `${p.name}'s bag`);
+    p.inv = { primary: null, primary2: null, secondary: null, armor: null, pack: keep };
+    p.mags = {}; p.armor = 0; p.camoOn = false;
+    for (const r of RESOURCES) p[r] = 0;
+    p.intel = keepIntel;
+  }
   p.hotLoose = null;   // the loose cash and intel went into the bag with everything else
   cancelHack(p, 'You went down');
   markAssist(p, attacker);
@@ -3899,6 +3923,7 @@ function updateBots(dt, now) {
     }
     let mx = 0, mz = 0, speed = BOT_AI.walkSpeed;
     const hurt = b.hp < b.maxHp * BOT_AI.hurtBelow;
+    if (foe) foe.combatAt = now;   // a Rogue has you in its sights: that's a fight, even before the first shot
     if (foe) {
       b.yaw = Math.atan2(foe.x - b.x, foe.z - b.z);
       const fx = Math.sin(b.yaw), fz = Math.cos(b.yaw);
@@ -5520,6 +5545,7 @@ wss.on('connection', (ws) => {
 
 /** Out of the world: saved as they are, shown offline to their crew. */
 const COMBAT_LOG_MS = Number(process.env.COMBAT_LOG_MS || 30_000);
+const QUIT_DROP = 0.3;   // killed while left standing after quitting: this share of what you carry is lost
 function logOff(p) {
   if (!players.has(p.id)) return;
   persistCharacter(p);
