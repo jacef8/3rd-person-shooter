@@ -36,14 +36,25 @@ class CleanGTAOPass extends GTAOPass {
   }
 }
 
+// The last pass, drawn to the screen at its full resolution: when the world was drawn smaller than
+// the screen (the graphics setting's pixel budget), it's sharpened as it's scaled up (AMD's
+// contrast-adaptive sharpening: edges and texture detail come back without halos), then graded.
 const GradeShader = {
-  uniforms: { tDiffuse: { value: null }, contrast: { value: 1.1 }, saturation: { value: 1.08 }, warmth: { value: 0.025 }, vignette: { value: 0.22 } },
+  uniforms: { tDiffuse: { value: null }, contrast: { value: 1.1 }, saturation: { value: 1.08 }, warmth: { value: 0.025 }, vignette: { value: 0.22 }, sharpen: { value: 0 }, texel: { value: new THREE.Vector2(1, 1) } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: `
-    uniform sampler2D tDiffuse; uniform float contrast, saturation, warmth, vignette; varying vec2 vUv;
+    uniform sampler2D tDiffuse; uniform float contrast, saturation, warmth, vignette, sharpen; uniform vec2 texel; varying vec2 vUv;
     void main() {
       vec4 c = texture2D(tDiffuse, vUv);
       vec3 col = c.rgb;
+      if (sharpen > 0.0) {
+        vec3 n = texture2D(tDiffuse, vUv + vec2(0.0, -texel.y)).rgb, s = texture2D(tDiffuse, vUv + vec2(0.0, texel.y)).rgb;
+        vec3 e = texture2D(tDiffuse, vUv + vec2(texel.x, 0.0)).rgb, w = texture2D(tDiffuse, vUv + vec2(-texel.x, 0.0)).rgb;
+        vec3 mn = min(col, min(min(n, s), min(e, w))), mx = max(col, max(max(n, s), max(e, w)));
+        vec3 amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-4)), 0.0, 1.0));
+        vec3 wt = amp * (-1.0 / mix(8.0, 5.0, sharpen));
+        col = clamp((col + (n + s + e + w) * wt) / (1.0 + 4.0 * wt), 0.0, 1.0);
+      }
       col = (col - 0.5) * contrast + 0.5;                                  // a little more punch
       float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
       col = mix(vec3(l), col, saturation);                                 // a little richer
@@ -58,15 +69,18 @@ const GradeShader = {
  * the near world, for the ambient occlusion. Returns { render(), setSize(w, h, pixelRatio), setQuality(mode) }.
  */
 export function createPost(renderer, scene, camera, draw) {
-  let composer = null, ao = null, bloom = null, mode = 'off';
+  let composer = null, ao = null, bloom = null, grade = null, mode = 'off', scale = 1;
   const size = new THREE.Vector2();
+  /** The world's size in pixels: the screen's, times the render scale. */
+  const inner = () => { renderer.getDrawingBufferSize(size); size.set(Math.max(1, Math.round(size.x * scale)), Math.max(1, Math.round(size.y * scale))); return size; };
+  const fitGrade = () => { if (!grade) return; grade.uniforms.texel.value.set(1 / size.x, 1 / size.y); grade.uniforms.sharpen.value = scale < 0.99 ? 0.75 : 0.3; };
   function build(q) {
     // (The composer's own dispose leaves its passes' render targets behind: free them too, or each
     // quality change by the frame-rate governor leaks tens of MB of GPU memory.)
     if (composer) { for (const p of composer.passes || []) p.dispose?.(); composer.dispose?.(); }
-    composer = null; ao = null; bloom = null;
+    composer = null; ao = null; bloom = null; grade = null;
     if (q === 'off') return;
-    renderer.getDrawingBufferSize(size);
+    inner();
     const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: q === 'ultra' ? 8 : 4 });
     composer = new EffectComposer(renderer, rt);
     composer.addPass(new WorldPass(draw));
@@ -84,9 +98,11 @@ export function createPost(renderer, scene, camera, draw) {
     bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.16, 0.4, 2.6);   // only what's really bright: glints, lamps, flashes (not the whole sky)
     composer.addPass(bloom);
     composer.addPass(new OutputPass());   // tone mapping and sRGB, as the plain render did
-    composer.addPass(new ShaderPass(GradeShader));
+    grade = new ShaderPass(GradeShader);
+    composer.addPass(grade);
     composer.setPixelRatio(1);
     composer.setSize(size.x, size.y);
+    fitGrade();
   }
   return {
     /** off (Low), medium (no AO), high, ultra. */
@@ -94,10 +110,19 @@ export function createPost(renderer, scene, camera, draw) {
     get on() { return !!composer; },
     setSize() {
       if (!composer) return;
-      renderer.getDrawingBufferSize(size);
+      inner();
       composer.setSize(size.x, size.y);
       ao?.setSize(size.x, size.y);
+      fitGrade();
     },
+    /** Draw the world at this share of the screen's width and height (it's sharpened back up to the screen). */
+    setScale(s) {
+      s = Math.max(0.5, Math.min(1, s || 1));
+      if (Math.abs(s - scale) < 0.01) return;
+      scale = s;
+      this.setSize();
+    },
+    get scale() { return scale; },
     render(dt) {
       if (composer) composer.render(dt);
       else draw(renderer);

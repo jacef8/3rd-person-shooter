@@ -117,9 +117,6 @@ function applyGfx(mode = gfxMode) {
   gfxMode = mode;
   try { localStorage.setItem('dz_gfx', mode); } catch { /* private mode */ }
   const g = GFX[mode];
-  // Never more than about 2.2 million pixels a frame (1.3 million on a phone): a 4K TV at 2x would be 8.3.
-  const pixCap = Math.sqrt((LOW_POWER ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight));
-  renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, pixCap)));
   sun.castShadow = g.shadows && !perf.noShadows;
   const shadowMap = LOW_POWER && mode !== 'ultra' ? Math.min(1024, g.shadowMap) : g.shadowMap;
   if (sun.shadow.mapSize.x !== shadowMap) { sun.shadow.mapSize.set(shadowMap, shadowMap); sun.shadow.map?.dispose(); sun.shadow.map = null; }
@@ -135,6 +132,26 @@ function applyGfx(mode = gfxMode) {
   // that does its own grade after plain ACES.)
   renderer.toneMapping = post.on ? THREE.ACESFilmicToneMapping : THREE.CustomToneMapping;
   dispatchEvent(new Event('resize'));
+}
+/**
+ * How many pixels the world is drawn with, a frame. Phones and TV boxes 1.3 million; computers whose
+ * chip is older built-in graphics 2.2 million; others by the setting: Medium 2.2, High 3.7 (1440p),
+ * Ultra 8.3 (4K). With the post-processing on, the screen itself stays at full sharpness and the
+ * world is drawn at the budget, then sharpened up to the screen (client/post.js); without it, the
+ * whole picture is drawn at the budget and the browser stretches it.
+ */
+function renderBudget(mode) {
+  if (LOW_POWER) return 1.3e6;
+  if (GPU_BUILTIN) return 2.2e6;
+  return { ultra: 8.3e6, full: 3.7e6 }[mode] || 2.2e6;
+}
+function sizeRender() {
+  const g = GFX[gfxMode];
+  if (!g) return;
+  const want = Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9);
+  const fit = Math.sqrt(renderBudget(gfxMode) / Math.max(1, innerWidth * innerHeight));
+  if (post?.on) { renderer.setPixelRatio(Math.max(0.6, want)); post.setScale(fit / want); }
+  else { renderer.setPixelRatio(Math.max(0.6, Math.min(want, fit))); post?.setScale(1); }
 }
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 800);
 const farCamera = new THREE.PerspectiveCamera(70, 1, 20, 130000);
@@ -175,7 +192,7 @@ sun.shadow.normalBias = 0.35;   // keeps sloped roofs and siding from shadowing 
 scene.add(sun, sun.target);
 
 function resize() {
-  try { const g = GFX[gfxMode]; if (g) renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, Math.sqrt((LOW_POWER ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight))))); } catch { /* still starting up */ }
+  try { sizeRender(); } catch { /* still starting up */ }
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
@@ -5572,7 +5589,7 @@ function perfWatch(now, ms) {
     const mid = (a) => { const v = [...(a || [])].sort((x, y) => x - y); return v[v.length >> 1] || 0; };
     fpsEl.textContent = `${Math.round(1000 / md)} fps · ${md.toFixed(0)} ms (game ${mid(perf.cpu).toFixed(1)} · draw ${mid(perf.draw).toFixed(1)}) · worst ${worst.toFixed(0)} ms · ${GFX[gfxMode].label}${perf.eased ? ' (eased)' : ''} · ${GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 60) || 'unknown chip'}`;
   }
-  if (document.hidden || now - perf.since < 5000) { perf.frames.length = 0; perf.at = now; return; }
+  if (document.hidden || now - perf.since < 5000 || /[?&]noease\b/.test(location.search)) { perf.frames.length = 0; perf.at = now; return; }   // (?noease: never ease, for testing a setting as it is)
   perf.frames.push(ms);
   if (now - perf.at < 3000 || perf.frames.length < 5) return;
   perf.at = now;
