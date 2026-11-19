@@ -3244,6 +3244,7 @@ function gesture(p, kind, ms) { p.gesture = { kind, start: Date.now(), until: Da
 function actionView(p, now) {
   if (p.hack && !p.dead) return { act: p.hack.kind, ap: Math.round(Math.min(1, Math.max(0, (now - p.hack.start) / Math.max(1, p.hack.until - p.hack.start))) * 100) / 100 };
   if (p.gesture && p.gesture.until > now) return { act: p.gesture.kind, ap: Math.round((now - p.gesture.start) / (p.gesture.until - p.gesture.start) * 100) / 100 };
+  if (p.openContainer && !p.dead && !p.boat && p.openContainer.kind !== 'boat') return { act: 'rummage', ap: 0 };   // going through a bag, a body, a crate or a stash
   return {};
 }
 function cancelHack(p, reason) { if (!p.hack) return; p.hack = null; send(p.ws, { t: 'hack', cancel: true, reason }); }
@@ -3979,6 +3980,7 @@ function takeLoot(p, l, quiet = false) {
   const wasHot = hasHot(p);
   if (!addToPack(p, l.item)) return quiet ? null : toast(p, 'Backpack full');
   loot.delete(l.id);
+  if (!p.sprint && !p.boat) gesture(p, 'pickup', 750);   // a dip to pick it up (everyone sees it)
   if (l.spawnIndex != null) { lootAtSpawn.delete(l.spawnIndex); spawnReadyAt.set(l.spawnIndex, Date.now() + LOOT_RESPAWN_MS); }
   if (l.site) siteLooted(p, l);
   if (l.item.hot && !wasHot) { p.hotPingAt = Date.now(); toast(p, `🔥 ${l.item.name}: hot loot. Everyone sees where you are every ${Math.round(HZ_CACHE_PING_MS / 1000)}s (every ${Math.round(HZ_PING_MS / 1000)}s with crate loot) until you get it home or fly it out.`); }
@@ -4812,6 +4814,7 @@ function invAction(p, msg) {
     const idx = inv.pack.findIndex((i) => i.id === msg.itemId);
     if (idx < 0) return;
     dropBag(p.x, p.z, [inv.pack.splice(idx, 1)[0]], {}, `${p.name}'s drop`);
+    if (!p.boat) gesture(p, 'putdown', 650);
   } else if (msg.action === 'flare') {
     const it = inv.pack.find((i) => i.id === msg.itemId && i.kind === 'flare');
     if (it) return callExtraction(p, it);
@@ -4952,6 +4955,7 @@ function handleDeploy(p, msg) {
   for (const c of p.contracts) instantiateContract(p, c);
   pushContracts(p);
   send(p.ws, { t: 'deployed', kind: msg.kind });
+  gesture(p, 'getup', 1000);   // back on your feet
   dirty(p);
 }
 /** Fast travel only goes OUT from your stash house — getting loot home is still on foot. */

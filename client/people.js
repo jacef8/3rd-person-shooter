@@ -329,12 +329,18 @@ export function poseAction(holder, rig, pose, t, p) {
     ik2(R.up, R.lo, R.tip, at(-0.11, 0.1, -0.42), at(-0.12, 0.05, 1.5));     // right knee on the ground
     ik2(L.up, L.lo, L.tip, at(0.13, 0.08, 0.32), at(0.14, 1.2, 1.6));        // left knee up
   }
-  if (pose.squat) {   // knees bent: the hips come down a little
+  const squat = typeof pose.squat === 'function' ? pose.squat(t, p) : pose.squat;
+  if (squat) {   // knees bent: the hips come down a little
     const hips = B.Hips;
-    hips.getWorldPosition(_a); _b.copy(_a); _b.y -= pose.squat;
+    hips.getWorldPosition(_a); _b.copy(_a); _b.y -= squat;
     hips.parent.worldToLocal(_b); hips.parent.worldToLocal(_a);
     hips.position.add(_b.sub(_a));
     hips.updateMatrixWorld(true);
+  }
+  if (squat && !pose.feet && !pose.kneel) {   // crouching down: feet stay planted, the knees bend forward
+    const [L, R] = rig.legs, rf = at(-0.12, 0.07, 0.06), lf = at(0.12, 0.07, 0.02);
+    ik2(R.up, R.lo, R.tip, rf, rf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
+    ik2(L.up, L.lo, L.tip, lf, lf.clone().addScaledVector(fwd, 1.2).addScaledVector(down, -0.6));
   }
   if (pose.feet) {   // feet on their own spots (a ladder's rungs), knees out ahead
     const [L, R] = rig.legs, rf = at(...pose.RF(t, p)), lf = at(...pose.LF(t, p));

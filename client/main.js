@@ -1230,9 +1230,11 @@ function slungPose(model, i = 0) {
   model.position.copy(_sv.copy(centre).applyQuaternion(model.quaternion).negate());
   return model;
 }
+const DRAW_MS = 450, DEAD_SHOWN_MS = 7000;   // a gun coming up after a switch; how long a body lies there
 function setCharacterGun(g, gun) {
   const key = gunKey(gun);
   if (g.userData.gunKey === key) return;
+  if (g.userData.gunKey && gun) g.userData.drawAt = performance.now();
   setHolstered(g, false);
   g.userData.gunKey = key;
   g.userData.gun.clear();
@@ -1280,8 +1282,10 @@ function gunPose(g, c, now, adt) {
     if (left && u.leftBase != null) left.rotation.x += (u.leftBase - left.rotation.x) * Math.min(1, adt * 10);
   }
   // Reloading: the gun comes in toward the chest, nose up and rolled onto its side so the mag well faces you.
-  joint.rotation.set(-0.12 * u.kick - 0.45 * env + (u.gunTilt || 0), 0.35 * env, 1.05 * env);
-  joint.position.set(u.gunHome.x + 0.16 * env, u.gunHome.y + 0.04 * env, u.gunHome.z - 0.05 * u.kick - 0.08 * env);
+  // Just switched guns: the new one comes up from low (nose down) into place.
+  const dr = u.drawAt && now - u.drawAt < DRAW_MS ? (1 - (now - u.drawAt) / DRAW_MS) ** 2 : 0;
+  joint.rotation.set(-0.12 * u.kick - 0.45 * env + (u.gunTilt || 0) + 1.1 * dr, 0.35 * env - 0.4 * dr, 1.05 * env);
+  joint.position.set(u.gunHome.x + 0.16 * env + 0.08 * dr, u.gunHome.y + 0.04 * env - 0.3 * dr, u.gunHome.z - 0.05 * u.kick - 0.08 * env - 0.1 * dr);
 }
 const SIDE_ON = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
 function updateCharacterMesh(g, c, dt) {
@@ -1325,7 +1329,9 @@ function updateCharacterMesh(g, c, dt) {
     const fwd = u.vf, side = u.vs;
     const gunObj = heldGun(g), aimNow = !!(c.aim || c.aiming) || now - (u.firedAt || 0) < 900;   // shooting brings the gun up to the shoulder, as aiming does
     // Busy with something that takes a while (a locker, a flag, a flare…): the gun goes away for the pose.
-    const act = c.skate && !c.dead ? 'skate' : c.lad && !c.dead && !c.boat ? 'climb' : c.act && !c.dead && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] ? c.act : null;
+    const fallenFor = c.dead ? now - (u.diedAt || now) : -1;
+    const act = c.dead ? (fallenFor < DEAD_SHOWN_MS ? 'fallen' : null) : c.skate ? 'skate' : c.lad && !c.boat ? 'climb'
+      : c.act && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] && !(c.act === 'rummage' && u.speed > 0.6) ? c.act : null;   // (rummaging: only standing still)
     const kneel = act && ['pry', 'revive', 'cook'].includes(ACT_POSE[act]);
     const armed = !!gunObj && !act && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
     u.gun.visible = armed;
@@ -1383,10 +1389,16 @@ function updateCharacterMesh(g, c, dt) {
     ease(l.knee.rotation, 'x', knee);
   });
   }
-  g.visible = !c.dead;
+  // Killed: the knees go, then the body falls flat and lies there a while (the bag appears beside it).
+  if (c.dead) u.wasDead = true; else if (u.wasDead) { u.wasDead = false; g.rotation.x = 0; }   // back on your feet: upright at once
+  // (Only someone who was alive falls: coming in for the first time, or seen already dead, there's no fall.)
+  if (c.dead && !u.diedAt) u.diedAt = u.wasAlive ? now : now - DEAD_SHOWN_MS; else if (!c.dead) { u.diedAt = 0; u.wasAlive = true; }
+  const deadFor = c.dead ? now - u.diedAt : -1;
+  g.visible = !c.dead || deadFor < DEAD_SHOWN_MS;
   // Downed: lying on the ground.
   g.rotation.order = 'YXZ';
-  g.rotation.x += ((c.downed || c.prone || c.air === 'fall' || c.air === 'suit' ? 1.35 : 0) - g.rotation.x) * (c.tiltK ?? k);
+  if (c.dead && deadFor < DEAD_SHOWN_MS) g.rotation.x += ((deadFor > 350 ? 1.48 : 0.15) - g.rotation.x) * Math.min(1, adt * (deadFor > 350 ? 7 : 4));
+  else if (!c.dead) g.rotation.x += ((c.downed || c.prone || c.air === 'fall' || c.air === 'suit' ? 1.35 : 0) - g.rotation.x) * (c.tiltK ?? k);
   if (c.air || u.canopy) {
     if (!u.canopy) { u.canopy = makeCanopy(); u.wings = makeWings(); g.add(u.canopy, u.wings); }
     u.canopy.visible = c.air === 'chute';
@@ -5673,7 +5685,8 @@ function frame(now) {
   const myRl = state.reloadAt ? Math.max(0, (weaponStats(state.me.inv[state.me.active])?.reloadMs || 2000) - (performance.now() - state.reloadAt)) : 0;
   const nowP = performance.now();
   const myAct = state.hack ? { act: state.hack.kind, ap: Math.min(1, (nowP - state.hack.start) / state.hack.total) }
-    : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) } : {};
+    : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) }
+      : state.container && state.invOpen ? { act: 'rummage', ap: 0 } : {};
   setHolstered(selfMesh, !!state.me && !state.me.boat && (state.sprint || now < (state.drawUntil || 0) - 150));   // gun on your back at a sprint
   updateCharacterMesh(selfMesh, { ...myAct, hp: state.me?.hp, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY(), ...(state.hop?.ladder ? { lad: 1, yaw: Math.atan2(state.hop.dir[0], state.hop.dir[1]) } : {}) }, 1);
   animateFlyBys(dt);
@@ -5703,7 +5716,7 @@ function frame(now) {
   const ride = afloat && myRide(), rideCam = ride?.land ? Math.max(3.6, Math.min(7.5, ride.len * 1.2 + 1.8)) : 6.5;
   const dist = aim ? 0.05 : afloat ? rideCam : state.air ? 7.5 : 4.2, shoulder = aim ? 0 : afloat ? 0.3 : 0.85;
   const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.02 : afloat ? 0.9 : 0.45), state.z).addScaledVector(right, shoulder);
-  selfMesh.visible = alive && !aim;   // looking down the sights: your own back isn't in the way
+  selfMesh.visible = (alive || performance.now() - (selfMesh.userData.diedAt || 0) < DEAD_SHOWN_MS) && !aim;   // looking down the sights: your own back isn't in the way
   const want = pivot.clone().addScaledVector(d, -dist);
   const toCam = want.clone().sub(pivot);
   const tl = toCam.length();
