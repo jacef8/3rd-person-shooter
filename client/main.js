@@ -3751,6 +3751,11 @@ function doAction(a) {
   if (a === 'interact' && !state.me.dead && !state.me.downed && /^🪜/.test(state.promptText || '') && climbLadder()) return;
   switch (a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
+    case 'micToggle':   // phones: the mic on (open mic) or off, from the ⋯ menu
+      tset.voiceOpen = !tset.voiceOpen; saveTset(); voiceSettings();
+      if (!tset.voiceOpen) voice.talk(false);
+      toast(tset.voiceOpen ? '🎙 Mic on: your crew can hear you (⋯ → MIC again to turn it off)' : '🎙 Mic off');
+      return;
     case 'testRide': setTimeout(openRidePicker, 250); return;   // after the tap that asked for it has ended
     case 'map':
       if (state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) closeMapScreen();
@@ -5949,11 +5954,8 @@ const TOUCH_BTNS = [
   ['FIRE', 'fire', 'big fire', 'fire'], ['FIRE', 'fire', 'mid fire lfire', 'lfire'], ['AIM', 'aim', 'mid aim', 'aim'], ['USE', 'interact', 'mid use', 'use'],
   ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'],   // tap: crouch · hold: prone (one button for both)
   ['NADE', 'sensor', 'sm r4', 'nade'],
-  ['JUMP', 'jump', 'mid jump', 'jump'], ['TAG', 'tag', 'sm r5', 'tag'], ['HEAL', 'heal', 'sm r6', 'heal'],
-  // The stun gun: tap to pull it (FIRE shoots it), tap again to put it away.
-  ['STUN', 'stungun', 'sm stun', 'stun'],
-  // Voice chat: hold to talk.
-  ['TALK', 'talk', 'sm talk', 'talk'],
+  ['JUMP', 'jump', 'mid jump', 'jump'], ['HEAL', 'heal', 'sm r6', 'heal'],
+  // (Tag, the stun gun and the mic are in the ⋯ menu: kept off the screen, which they cluttered.)
   // Hold the eye and drag to look around without turning (you keep running the way you were going).
   ['LOOK', 'look', 'sm look', 'look'],
   // Only while looking through a sight with two zoom levels: flip between them.
@@ -5962,7 +5964,9 @@ const TOUCH_BTNS = [
 const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom', stun: 'stun', talk: 'talk' };
 // Top left: the bag, and ⋯ for the rest (the map: tap the minimap).
 const TOUCH_TOP = [['BAG', 'inventory'], ['⋯', 'touchMore']];   // the map: tap the minimap
-const TOUCH_MORE = [['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
+// Tag marks whoever is under your crosshair; the stun gun is pulled (FIRE shoots it; again to put it
+// away); MIC turns your microphone on for crew chat, or off.
+const TOUCH_MORE = [['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +
