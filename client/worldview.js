@@ -104,7 +104,7 @@ function finishTexture(c) {
 }
 
 /** Append a box (no bottom face) to flat geometry arrays. A turned box is built in its own frame and turned into place. */
-export function pushBox(buf, b, color, tile) {
+export function pushBox(buf, b, color, tile, noBottom = false) {
   const turned = b.ang !== undefined;
   const { minX, minZ, maxX, maxZ } = turned ? { minX: -b.hw, minZ: -b.hd, maxX: b.hw, maxZ: b.hd } : b;
   const ca = turned ? b.ca : 1, sa = turned ? b.sa : 0, ox = turned ? b.cx : 0, oz = turned ? b.cz : 0;
@@ -119,6 +119,7 @@ export function pushBox(buf, b, color, tile) {
     [[0, -1, 0], [[minX, y0, minZ], [maxX, y0, minZ], [maxX, y0, maxZ], [minX, y0, maxZ]], 0],
   ];
   for (const [n, corners, width] of faces) {
+    if (noBottom && n[1] === -1) continue;   // (standing on the floor: its underside is never seen)
     const base = buf.pos.length / 3;
     const top = n[1] === 1;
     corners.forEach(([x, y, z], i) => {
@@ -268,7 +269,7 @@ export function pushFurniture(buf, b) {
   const L = b.fl || 1, D = b.fd || 1, H = b.h, s = b.fs || 1;
   const pick = (list, k = 0) => list[(s >> k) % list.length];
   // A part `w` along by `d` deep, its centre `u` along and `v` out from the middle (back is -D/2).
-  const P = (u, v, y0, h, w, d, c) => pushBox(buf, { ang, ca, sa, cx: cx + ca * u - sa * v, cz: cz + sa * u + ca * v, hw: w / 2, hd: d / 2, y0: y + y0, h }, c, 0);
+  const P = (u, v, y0, h, w, d, c) => pushBox(buf, { ang, ca, sa, cx: cx + ca * u - sa * v, cz: cz + sa * u + ca * v, hw: w / 2, hd: d / 2, y0: y + y0, h }, c, 0, true);
   const wood = pick(WOODS), fab = pick(FABRICS, 2);
   switch (b.furn) {
     case 'bed': {   // L across the wall, D out into the room
@@ -330,14 +331,15 @@ export function pushFurniture(buf, b) {
       for (let i = 0; i < rows; i++) {
         const yy = 0.08 + i * (H - 0.12) / rows;
         P(0, 0, yy, 0.03, L, D, frame);
-        // What's on it: a row of books or goods, gaps here and there.
+        // What's on it: a few blocks of books or goods per row (one box each: whole rows of single
+        // items cost too much to draw), a gap here and there.
         for (const face of both ? [-1, 1] : [0]) {
-          let u = -L / 2 + 0.08, j = 0;
-          while (u < L / 2 - 0.12) {
-            const w = b.furn === 'books' ? 0.04 + ((s >> ((i * 7 + j) % 20)) % 4) * 0.015 : 0.16 + ((s >> ((i * 5 + j) % 20)) % 3) * 0.06;
-            const hh = b.furn === 'books' ? 0.2 + ((s >> ((i + j) % 18)) % 3) * 0.03 : 0.16 + ((s >> ((i * 3 + j) % 18)) % 3) * 0.08;
-            if ((s >> ((i * 11 + j) % 22)) % 7 !== 0) P(u + w / 2, face ? face * D / 4 : 0.02, yy + 0.03, Math.min(hh, (H - 0.12) / rows - 0.06), w - 0.01, face ? D / 2 - 0.08 : D - 0.1, GOODS[(s + i * 3 + j) % GOODS.length].map((c) => (b.furn === 'books' ? c * 0.75 : c)));
-            u += w; j++;
+          const n = 3, w = (L - 0.16) / n;
+          for (let j = 0; j < n; j++) {
+            const pick2 = (s >> ((i * 5 + j * 3 + (face > 0 ? 7 : 0)) % 24)) % 9;
+            if (pick2 === 0) continue;
+            const hh = Math.min((b.furn === 'books' ? 0.22 : 0.2 + (pick2 % 3) * 0.06), (H - 0.12) / rows - 0.06);
+            P(-L / 2 + 0.08 + w * (j + 0.5), face ? face * D / 4 : 0.02, yy + 0.03, hh, w - 0.04, face ? D / 2 - 0.08 : D - 0.1, GOODS[(s + i * 3 + j) % GOODS.length].map((c) => (b.furn === 'books' ? c * 0.75 : c)));
           }
         }
       }
@@ -542,6 +544,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   { float vl = max(dot(vColor.rgb, vec3(0.3, 0.59, 0.11)), 0.05); diffuseColor.rgb *= mix(vec3(1.0), vColor.rgb / vl * 0.62, ${tint.toFixed(2)}) * 1.25; }
 #endif`);
     };
+    m.customProgramCacheKey = () => `photoWall:${name}`;   // (its numbers are baked into the shader: no sharing a program with another wall)
     return m;
   };
   const brickMat = photoWall('brick', 2.4, 0.25);
@@ -557,6 +560,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   { float l = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) / ${avg.toFixed(4)}; diffuseColor.rgb = vColor.rgb * 0.9 * clamp(mix(1.0, l, 0.7), 0.4, 1.3); }   // (capped: white walls in full sun mustn't blow out)
 #endif`);
     };
+    m.customProgramCacheKey = () => `paintWall:${name}`;
     return m;
   };
   const sidingMat = paintWall('siding', 2.2, 0.0538);
@@ -577,6 +581,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
         .replace('#include <color_fragment>', `#include <color_fragment>
   { vec3 t = texture2D(uRoof, vRoofP.xz / ${scale.toFixed(2)}).rgb; float tl = dot(t, vec3(0.3, 0.59, 0.11)) / ${avg.toFixed(4)}; diffuseColor.rgb *= mix(1.0, tl, 0.85); }`);
     };
+    m.customProgramCacheKey = () => `roof:${name}`;
     return m;
   };
   const roofMat = roofOf('metal', 1.8, 0.18, { roughness: 0.6, metalness: 0.25 });
@@ -1198,7 +1203,7 @@ vBlade = position.y;
       // Lit as the ground is (from above), whichever side of the blade you see: no black backs.
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);');
   };
-  let grassMesh = null, grassDensity = 0, grassAt = null;
+  let grassMesh = null, grassDensity = 0, grassAt = null, grassThisFrame = false, chunkBuiltLast = false;
   const tint = new THREE.Color(), tm2 = new THREE.Matrix4(), q2 = new THREE.Quaternion(), e2 = new THREE.Euler(), s2 = new THREE.Vector3(), p2 = new THREE.Vector3();
   const ghash = (i, j, k) => { let h = Math.imul(i, 73856093) ^ Math.imul(j, 19349663) ^ Math.imul(k, 83492791); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
   function setGrass(density) {
@@ -1229,7 +1234,9 @@ vBlade = position.y;
       for (let x = Math.floor(b.minX) - cx + GRASS_FAR; x <= Math.ceil(b.maxX) - cx + GRASS_FAR; x++) for (let z = Math.floor(b.minZ) - cz + GRASS_FAR; z <= Math.ceil(b.maxZ) - cz + GRASS_FAR; z++) if (x >= 0 && z >= 0 && x < N && z < N) blocked[z * N + x] = 1;
     }
     const roads = map.roadsNear(cx, cz, GRASS_FAR + 12);
-    const onRoad = (x, z) => roads.some((r) => { const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2)); return Math.hypot(r.x1 + dx * t - x, r.z1 + dz * t - z) < (r.width || 8) / 2 + 0.4; });
+    // (Each road's box first, so most cells skip the distance sums: this runs for every grass cell.)
+    const rb = roads.map((r) => { const w = (r.width || 8) / 2 + 0.6; return [Math.min(r.x1, r.x2) - w, Math.min(r.z1, r.z2) - w, Math.max(r.x1, r.x2) + w, Math.max(r.z1, r.z2) + w]; });
+    const onRoad = (x, z) => roads.some((r, i) => { const b = rb[i]; if (x < b[0] || z < b[1] || x > b[2] || z > b[3]) return false; const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / l2)); return Math.hypot(r.x1 + dx * t - x, r.z1 + dz * t - z) < (r.width || 8) / 2 + 0.4; });
     const colorAt = new Map();
     let n = 0;
     const cap = grassMesh.instanceMatrix.count;
@@ -1277,7 +1284,7 @@ vBlade = position.y;
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const list = map.grid.rect(x0, z0, x0 + CHUNK, z0 + CHUNK).filter((b) => ownChunk(b, x0, z0));
     const office = newBuf(true), siding = newBuf(true), brick = newBuf(true), metal = newBuf(true), planks = newBuf(true), plain = newBuf(false), roof = newBuf(false);
-    const stucco = newBuf(true), block = newBuf(true), shingles = newBuf(false), panes = newBuf(false);
+    const stucco = newBuf(true), block = newBuf(true), shingles = newBuf(false), panes = newBuf(false), furn = newBuf(false);
     const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [];
     for (const b of list) {
       if (b.type === 'terminal' || b.type === 'rail') continue;   // drawn separately (terminals change; rails are the bridge's)
@@ -1288,7 +1295,7 @@ vBlade = position.y;
       if (b.type === 'tank') { tanks.push(b); continue; }
       if (b.type === 'car' || b.type === 'vehiclebody') { rigs.push(b); continue; }   // drawn as real vehicles, below
       if (b.type === 'ladder') { pushLadder(plain, b); continue; }
-      if (b.type === 'furn') { pushFurniture(plain, b); continue; }
+      if (b.type === 'furn') { pushFurniture(furn, b); continue; }
       const [c, tex] = paint(b);
       pushBox(tex === 'office' ? office : tex === 'siding' ? siding : tex === 'brick' ? brick : tex === 'stucco' ? stucco : tex === 'block' ? block : tex === 'metal' ? metal : tex === 'planks' ? planks : plain, b, c, tex ? 4 : 0);
     }
@@ -1322,10 +1329,10 @@ vBlade = position.y;
     const roads = map.roadGrid && buildRoads(x0, z0);
     if (roads) group.add(roads);
     if (ground.wet) { const w = new THREE.Mesh(waterGeo, waterMat); w.position.set(x0 + CHUNK / 2, 0, z0 + CHUNK / 2); group.add(w); }
-    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [stucco, stuccoMat], [block, blockMat], [metal, metalMat], [planks, plankMat], [plain, plainMat], [roof, roofMat], [shingles, shingleMat], [panes, paneMat]]) {
+    for (const [buf, mat] of [[office, texturedMat], [siding, sidingMat], [brick, brickMat], [stucco, stuccoMat], [block, blockMat], [metal, metalMat], [planks, plankMat], [plain, plainMat], [roof, roofMat], [shingles, shingleMat], [panes, paneMat], [furn, plainMat]]) {
       if (!buf.idx.length) continue;
       const m = new THREE.Mesh(toGeometry(buf), mat);
-      m.castShadow = true;
+      m.castShadow = buf !== furn;   // (furniture is indoors, under a roof: its shadows would never be seen)
       m.receiveShadow = mat !== roofMat;
       group.add(m);
     }
@@ -1497,21 +1504,23 @@ vBlade = position.y;
       if (grassMesh) {
         const fast = speed > 9;
         grassMesh.visible = !fast;
-        if (!fast && (!grassAt || Math.hypot(px - grassAt.x, pz - grassAt.z) > 6)) layGrass(px, pz);
+        if (!fast && (!grassAt || Math.hypot(px - grassAt.x, pz - grassAt.z) > 6) && !chunkBuiltLast) { layGrass(px, pz); grassThisFrame = true; }
       }
       const want = new Set();
       let built = 0;
       const t0 = performance.now();
+      // One heavy job a frame: new ground or a fresh layout of grass, never both (each is several ms).
       for (const [, cx, cz] of chunksWithin(px, pz, viewRange)) {
         const k = key(cx, cz);
         want.add(k);
         // Spread the building of new ground over frames: a few at the start, then one at a time and only
         // while this frame has time to spare, so driving into new ground doesn't hitch.
-        if (chunks.has(k) || built >= (chunks.size < 4 ? 9 : 2) || (chunks.size >= 4 && built && performance.now() - t0 > 5)) continue;
+        if (chunks.has(k) || built >= (chunks.size < 4 ? 9 : grassThisFrame ? 0 : 1)) continue;
         chunks.set(k, buildChunk(cx, cz));
         prime(chunks.get(k));
         built++;
       }
+      chunkBuiltLast = built > 0 && chunks.size >= 4; grassThisFrame = false;
       for (const [k, g] of chunks) if (!want.has(k)) { dispose(g); chunks.delete(k); }
       // Trees: the full build in chunks close by, the light one further off; and a breeze in the leaves.
       kit.tick(waterTime.value);

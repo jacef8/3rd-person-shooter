@@ -122,7 +122,7 @@ export function makeConsumable(kind) {
  * the safety of town centres.
  */
 export function worldSupply(index, zone = 'town') {
-  const t = activities.loot.zones[zone] || activities.loot.zones.town;
+  const t = activities.loot.zones[zone] || activities.loot.zones[{ plains: 'farm' }[zone]] || activities.loot.zones.town;   // (open plains have farm finds)
   return { ...t[index % t.length] };
 }
 

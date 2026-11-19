@@ -105,6 +105,7 @@ function drape(out, ground, c, u, n, a, b, step = 2.5) {
 const paveMesh = (d, mat) => {
   if (!d.idx.length) return null;
   const g = new THREE.BufferGeometry();
+  g.userData.cellOwn = true;   // (made for this one cell: freed with it)
   g.setAttribute('position', new THREE.Float32BufferAttribute(d.pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(d.uv, 2));
   g.setIndex(d.idx); g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat); m.receiveShadow = true; return m;
@@ -210,7 +211,8 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
         if (!solidAt(gx, gz, 2) && roadClear(gx, gz, 3)) {
           const can = new THREE.Group(); can.position.set(gx, gy, gz); can.rotation.y = Math.atan2(nx, nz); add(can);
           const roof = new THREE.Mesh(GEO.box, MAT.canopy); roof.scale.set(13, 0.7, 8); roof.position.y = 5.1; can.add(roof);
-          const band = new THREE.Mesh(GEO.box, M(new THREE.Color(st.stripe || st.bg).getHex(), { roughness: 0.5 })); band.scale.set(13.05, 0.32, 8.05); band.position.y = 5.0; can.add(band);
+          const bandMat = M(new THREE.Color(st.stripe || st.bg).getHex(), { roughness: 0.5 }); bandMat.userData.cellOwn = true;
+          const band = new THREE.Mesh(GEO.box, bandMat); band.scale.set(13.05, 0.32, 8.05); band.position.y = 5.0; can.add(band);
           for (const [px, pz] of [[-4.5, -2.5], [4.5, -2.5], [-4.5, 2.5], [4.5, 2.5]]) { const p = new THREE.Mesh(GEO.box, MAT.post); p.scale.set(0.35, 4.8, 0.35); p.position.set(px, 2.4, pz); can.add(p); }
           for (const px of [-3, 3]) {
             const isl = new THREE.Mesh(GEO.box, MAT.island); isl.scale.set(1.1, 0.25, 4.2); isl.position.set(px, 0.12, 0); can.add(isl);
@@ -298,7 +300,11 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
   function dispose(grp) {
     scene.remove(grp);
     for (const m of grp.userData.mats) { m.map?.dispose(); m.dispose(); }
-    grp.traverse((o) => { if (o.isInstancedMesh) o.dispose(); });
+    grp.traverse((o) => {
+      if (o.isInstancedMesh) o.dispose();
+      else if (o.isMesh && o.geometry?.userData.cellOwn) o.geometry.dispose();   // the paving made for this cell (shared shapes stay)
+      if (o.isMesh && o.material?.userData?.cellOwn) o.material.dispose();
+    });
   }
   return {
     /** Build what's near (a cell per call at most) and drop what's far. */

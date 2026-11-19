@@ -19,7 +19,17 @@ export function setVolume(v) {
   settings.volume = Math.max(0, Math.min(1, v));
   try { localStorage.setItem('dz_sound', JSON.stringify(settings)); } catch { /* private mode */ }
   if (master) master.gain.value = settings.volume;
+  sleepIfIdle();
 }
+/** Sound off, or the game hidden (another tab, the phone's home screen): the audio stops working
+ *  entirely (no engines droning in the background, no battery spent on silence). */
+function sleepIfIdle() {
+  if (!ctx) return;
+  const idle = !settings.volume || (typeof document !== 'undefined' && document.hidden);
+  if (idle && ctx.state === 'running') ctx.suspend().catch(() => {});
+  else if (!idle && ctx.state === 'suspended') ctx.resume().catch(() => {});
+}
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', sleepIfIdle);
 
 /** An outdoor echo: a few early slaps off nearby walls and trees, then a long soft fade. */
 function makeVerb(c, secs = 1.7) {
@@ -62,7 +72,8 @@ function audio() {
     } catch { verb = null; verbIn = null; }
     loadSamples();
   }
-  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  if (ctx.state === 'suspended' && settings.volume && !(typeof document !== 'undefined' && document.hidden)) ctx.resume().catch(() => {});
+  if (!settings.volume) return null;   // muted: make nothing at all
   return ctx.state === 'running' || ctx.state === 'suspended' ? ctx : null;
 }
 export function unlock() { audio(); }
@@ -187,10 +198,18 @@ const GUNS = {
   taser: { crack: 5000, body: 3000, thump: 300, tail: 0.05, gain: 0.3, mech: 4000 },
 };
 /** A gunshot at a point. `sup` 1 = suppressed, 2 = suppressed with subsonic rounds. */
+const shotTimes = [];
 export function shot(x, y, z, kind = 'carbine', sup = 0, own = false) {
   if (!audio()) return;
   const w = own ? NEAR : place(x, y, z, sup ? 70 : 1200);
   if (!w) return;
+  // A voice budget: in a big firefight (dozens of shots a second) the far ones drop out and nobody's
+  // shots get their rolling echo, so the audio thread never chokes (phones crackle past ~1000 nodes).
+  const nowT = ctx.currentTime;
+  while (shotTimes.length && nowT - shotTimes[0] > 1) shotTimes.shift();
+  const busy = shotTimes.length;
+  if (!own && ((busy > 40 && w.d > 60) || busy > 70)) return;
+  shotTimes.push(nowT);
   const g = GUNS[kind] || GUNS.carbine, t = w.delay;
   if (kind === 'taser') {   // a crackle of electricity, not a bang
     const d = out(own ? 0.35 : w.gain * 0.5, w.pan, 0.05);
@@ -219,10 +238,10 @@ export function shot(x, y, z, kind = 'carbine', sup = 0, own = false) {
   if (own) {
     metal(dest, { t: 0.05, base: g.mech, ring: 0.035, gain: 0.18 });                                 // the bolt cycling
     if (kind === 'shotgun') { scrape(dest, { t: 0.32, dur: 0.09, from: 900, to: 1500, gain: 0.35 }); metal(dest, { t: 0.42, base: 1500, ring: 0.05, gain: 0.3 }); }   // rack the pump
-    if (kind !== 'launcher' && Math.random() < 0.6) grit(dest, { t: 0.45 + Math.random() * 0.2, n: 3, freq: 4200, gain: 0.05 });   // brass hitting the ground
+    if (kind !== 'launcher' && busy < 12 && Math.random() < 0.6) grit(dest, { t: 0.45 + Math.random() * 0.2, n: 3, freq: 4200, gain: 0.05 });   // brass hitting the ground
   }
   // Far off: the rolling echo off the treelines and the river.
-  if (w.d > 80) for (let i = 0; i < 3; i++) burst(dest, { t: t + 0.12 + i * (0.18 + Math.random() * 0.2) + w.d / 2400, dur: 0.6, type: 'lowpass', freq: Math.min(500, w.muffle), gain: 0.22 / (i + 1), attack: 0.02 });
+  if (w.d > 80 && busy < 18) for (let i = 0; i < 3; i++) burst(dest, { t: t + 0.12 + i * (0.18 + Math.random() * 0.2) + w.d / 2400, dur: 0.6, type: 'lowpass', freq: Math.min(500, w.muffle), gain: 0.22 / (i + 1), attack: 0.02 });
 }
 /** Out of rounds: the dry click of the trigger. */
 export function empty() { if (!audio()) return; metal(out(0.45), { base: 3400, ring: 0.02, gain: 0.35 }); }

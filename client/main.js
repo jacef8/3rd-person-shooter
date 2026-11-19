@@ -21,7 +21,7 @@ import { createPost } from '/post.js';
 import { OUTFITS as LOOK_OUTFITS, DYES, cleanLook } from '/shared/looks.js';
 import { Sky as EnvSky } from '/addons/objects/Sky.js';
 import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom, preloadPeople, flinch } from '/people.js';
-import { ACT_POSE, updateAction } from '/actions.js';
+import { ACT_POSE, updateAction, disposeActionProps } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox } from '/mapview.js';
@@ -61,7 +61,8 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 // Which graphics chip the browser is drawing with (shown with the frame rate; see gpuCheck).
 const GPU_NAME = (() => { try { const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info'); return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || ''); } catch { return ''; } })();
 const GPU_SOFTWARE = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(GPU_NAME);
-const GPU_BUILTIN = /intel|uhd|iris|radeon\(tm\) graphics|radeon graphics|vega \d|adreno|mali/i.test(GPU_NAME) && !/arc/i.test(GPU_NAME);
+// (Phone and TV-box chips count too, and the Android app (the Shield) whatever it reports: they start on Medium.)
+const GPU_BUILTIN = (/intel|uhd|iris|radeon\(tm\) graphics|radeon graphics|vega \d|adreno|mali|tegra|powervr|apple gpu/i.test(GPU_NAME) && !/arc/i.test(GPU_NAME)) || /DeadzoneApp/.test(navigator.userAgent);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // soft-edged shadows
@@ -95,7 +96,9 @@ function applyGfx(mode = gfxMode) {
   gfxMode = mode;
   try { localStorage.setItem('dz_gfx', mode); } catch { /* private mode */ }
   const g = GFX[mode];
-  renderer.setPixelRatio(Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9));
+  // Never more than about 2.2 million pixels a frame (1.3 million on a phone): a 4K TV at 2x would be 8.3.
+  const pixCap = Math.sqrt((MOBILE ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight));
+  renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, pixCap)));
   sun.castShadow = g.shadows && !perf.noShadows;
   if (sun.shadow.mapSize.x !== g.shadowMap) { sun.shadow.mapSize.set(g.shadowMap, g.shadowMap); sun.shadow.map?.dispose(); sun.shadow.map = null; }
   const reach = mode === 'ultra' ? 110 : 70;
@@ -146,6 +149,7 @@ sun.shadow.normalBias = 0.35;   // keeps sloped roofs and siding from shadowing 
 scene.add(sun, sun.target);
 
 function resize() {
+  try { const g = GFX[gfxMode]; if (g) renderer.setPixelRatio(Math.max(0.6, Math.min(devicePixelRatio, g.pixel, perf.ratioCap || 9, Math.sqrt((MOBILE ? 1.3e6 : 2.2e6) / Math.max(1, innerWidth * innerHeight))))); } catch { /* still starting up */ }
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
@@ -871,7 +875,7 @@ function updateRideHud(now, alive) {
   if (rideHud.key !== me.boat.id) { rideHud.key = me.boat.id; rideHud.since = now; }
   const mph = Math.round(Math.abs((state.boat && driving ? state.boat.speed : 0) || 0) * 2.237);
   const k = Math.max(0, Math.min(1, v.data.hp / v.data.max)), col = k > 0.6 ? '#5fd17a' : k > 0.3 ? '#ffb340' : '#ff5a4a';
-  const pad = state.inputMode === 'pad', touchUi = state.inputMode === 'touch';
+  const pad = state.inputMode === 'pad', touchUi = document.body.classList.contains('touchui') && !pad;
   const fresh = now - rideHud.since < 8000;
   const keys = [];
   if (driving && fresh && !touchUi) keys.push(pad ? 'Left stick: gas, brake, steer' : 'W/S gas · A/D steer', pad ? 'Right stick: look' : 'Mouse: look around');
@@ -891,7 +895,7 @@ function boatHud(pkey = '') {
   if (!v) return '';
   const def = BOATS[v.data.type], driving = me.boat.seat === 0;
   const mph = Math.round(Math.abs((state.boat && driving ? state.boat.speed : 0) || 0) * 2.237);
-  const steer = driving ? (state.inputMode === 'pad' ? 'Left stick: gas, brake and steer · ' : state.inputMode === 'touch' ? '' : 'W/S gas and brake · A/D steer · ') : '';
+  const steer = driving ? (state.inputMode === 'pad' ? 'Left stick: gas, brake and steer · ' : document.body.classList.contains('touchui') ? '' : 'W/S gas and brake · A/D steer · ') : '';
   if (def.land) {
     const hp = v.data.hp < v.data.max ? ` · ${def.animal ? 'health' : 'damage'} ${Math.round((v.data.hp / v.data.max) * 100)}%` : '';
     return `${def.icon} ${def.name}${driving ? ` · <b>${mph} mph</b>` : ' · passenger'}${hp} <small>${steer}${def.hold && driving ? `${glyph('Tab')} ${def.animal ? 'saddlebags' : 'trunk'} · ` : ''}</small>${pkey || `<kbd>${glyph('E')}</kbd>`}get off`;
@@ -979,6 +983,16 @@ function makeCharacter(kind, name, look = null) {
   g.userData.dress = { kind, name, h, thigh, slingAt: sling.map((sl) => sl.position.clone()) };
   dressCharacter(g, kind === 'self' ? myLook() : look);
   return g;
+}
+/** A person gone from view: off the scene, and what was made just for them (name tag, health bars,
+ *  action props) freed. The body itself shares its model with everyone else, so that stays. */
+function releaseCharacter(g) {
+  const u = g.userData;
+  u.disposed = true;   // (a model still loading for them is thrown away when it arrives)
+  disposeActionProps(g);
+  scene.remove(g);
+  if (u.label?.material) { u.label.material.map?.dispose(); u.label.material.dispose(); }
+  for (const b of u.bars?.children || []) { b.geometry?.dispose(); b.material?.dispose(); }
 }
 /** Your look: as the server last said, or as picked on this device. */
 function myLook() { try { return state?.selfSnap?.lk || localStorage.getItem('dz_look') || null; } catch { return null; } }
@@ -1331,7 +1345,7 @@ function updateCharacterMesh(g, c, dt) {
     // Busy with something that takes a while (a locker, a flag, a flare…): the gun goes away for the pose.
     const fallenFor = c.dead ? now - (u.diedAt || now) : -1;
     const act = c.dead ? (fallenFor < DEAD_SHOWN_MS ? 'fallen' : null) : c.skate ? 'skate' : c.lad && !c.boat ? 'climb'
-      : c.act && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] && !(c.act === 'rummage' && u.speed > 0.6) ? c.act : null;   // (rummaging: only standing still)
+      : c.act && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] && !(['rummage', 'pickup', 'putdown', 'getup'].includes(c.act) && u.speed > 0.6) ? c.act : null;   // (these only standing still: walking on, you just walk)
     const kneel = act && ['pry', 'revive', 'cook'].includes(ACT_POSE[act]);
     const armed = !!gunObj && !act && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
     u.gun.visible = armed;
@@ -1398,7 +1412,7 @@ function updateCharacterMesh(g, c, dt) {
   // Downed: lying on the ground.
   g.rotation.order = 'YXZ';
   if (c.dead && deadFor < DEAD_SHOWN_MS) g.rotation.x += ((deadFor > 350 ? 1.48 : 0.15) - g.rotation.x) * Math.min(1, adt * (deadFor > 350 ? 7 : 4));
-  else if (!c.dead) g.rotation.x += ((c.downed || c.prone || c.air === 'fall' || c.air === 'suit' ? 1.35 : 0) - g.rotation.x) * (c.tiltK ?? k);
+  else if (!c.dead && !c.skate) g.rotation.x += ((c.downed || c.prone || c.air === 'fall' || c.air === 'suit' ? 1.35 : 0) - g.rotation.x) * (c.tiltK ?? k);
   if (c.air || u.canopy) {
     if (!u.canopy) { u.canopy = makeCanopy(); u.wings = makeWings(); g.add(u.canopy, u.wings); }
     u.canopy.visible = c.air === 'chute';
@@ -1624,6 +1638,7 @@ function pumpToasts() {
   while (box.children.length < max && toastQ.queue.length) {
     const text = toastQ.queue.shift();
     toastQ.shown.set(text, performance.now());
+    if (toastQ.shown.size > 60) for (const [t, at] of toastQ.shown) if (performance.now() - at > 6000) toastQ.shown.delete(t);   // (only the last few seconds matter)
     const el = document.createElement('div');
     el.textContent = text;
     box.append(el);
@@ -2040,7 +2055,7 @@ function handle(m) {
         setCloak(rec.mesh, p.camo ? (p.sq ? 0.35 : 0.12) : 1);
         setGlint(rec.mesh, !!p.gl);
       }
-      for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { scene.remove(rec.mesh); state.players.delete(id); }
+      for (const [id, rec] of state.players) if (!m.players.some((p) => p.id === id)) { releaseCharacter(rec.mesh); state.players.delete(id); }
       for (const b of m.bots) {
         let rec = state.bots.get(b.id);
         if (!rec && (b.kind === 'merchant' || b.kind === 'settler' || b.kind === 'trader' || b.kind === 'pawn')) {
@@ -2068,7 +2083,7 @@ function handle(m) {
         }
         rec.data = { ...b, armor: 0, maxArmor: 0 };
       }
-      for (const [id, rec] of state.bots) if (!m.bots.some((b) => b.id === id)) { scene.remove(rec.mesh); state.bots.delete(id); }
+      for (const [id, rec] of state.bots) if (!m.bots.some((b) => b.id === id)) { releaseCharacter(rec.mesh); state.bots.delete(id); }
       syncEntities(m.loot, state.loot, (e) => lootMesh(e.kind, e.hot));
       syncEntities(m.bags, state.bags, () => lootMesh('bag'));
       // The crew panel refreshes itself once a second, but never under someone's typing.
@@ -2093,7 +2108,8 @@ function handle(m) {
         const rideId = (x) => x?.boat?.id || null, landRide = (x) => { const v = rideId(x) && boatVis.get(rideId(x)); return v && BOATS[v.data.type].land && BOATS[v.data.type].grip === 'wheel'; };
         if (rideId(m) !== rideId(state.me) && (landRide(m) || landRide(state.me))) sfx.door();   // in or out of a car
       }
-      if (m.boat && !state.me?.boat) state.crouch = false;
+      if (m.boat && !state.me?.boat) { state.crouch = false; if (state.nadeAim) putNadeAway(); }
+      if (m.downed && !state.me?.downed && build.on) toggleBuild();
       if (!m.boat || m.boat.seat !== 0 || (state.boat && state.boat.id !== m.boat.id)) state.boat = null;
       state.me = m;
       if (m.houseId !== state.houseId) { state.houseId = m.houseId; state.view?.setOwnHouse(m.houseId); }
@@ -2236,6 +2252,8 @@ function handle(m) {
       break;
     case 'toast': toast(m.text); break;
     case 'died':
+      if (state.nadeAim) putNadeAway();
+      if (build.on) toggleBuild();   // back to shooting after you respawn
       state.gunsmithOpen = false; $('gunsmith').hidden = true;
       closeInventory(); closeContact();
       if (state.panelOpen) closeSquadPanel();
@@ -2244,6 +2262,9 @@ function handle(m) {
       break;
     case 'deployed':
       closeMapScreen();
+      // Once the world around you is up, compile every shader it uses in the background, so the first
+      // look at a new kind of wall, roof or sign doesn't freeze a frame while it compiles.
+      if (!state.compiled) { state.compiled = true; setTimeout(() => { try { renderer.compileAsync?.(scene, camera)?.catch?.(() => {}); } catch { /* older browsers: compile as you go */ } }, 2500); }
       state.view.setOwnHouse(state.houseId);
       toast(m.kind === 'claim' ? `Stash house claimed. Open the crate (${glyph('E')}) to reach your stash, gunsmith and upgrades.` : 'Deployed — 10 seconds of spawn protection.');
       lockPointer();
@@ -2734,6 +2755,7 @@ function buildInvColumns() {
 }
 
 function openInventory() {
+  if (state.nadeAim) putNadeAway();   // a cooked grenade isn't left burning behind the bag
   invUi.menuFor = null;
   invUi.sel = null;
   state.invOpen = true;
@@ -3707,8 +3729,11 @@ function climbLadder() {
   send({ t: 'jump', ladder: 1 });
   return true;
 }
+// Things you do in the world: not while a panel (bag, gunsmith, crew, trader, map…) is open over it.
+const WORLD_ACTIONS = new Set(['reload', 'swap', 'slot1', 'slot2', 'slot3', 'nade', 'camo', 'mark', 'stungun', 'stungunOn', 'jump', 'crouch', 'prone', 'sprint', 'rally', 'ping', 'build', 'medkit', 'eat']);
 function doAction(a) {
   if (!state.me) return;
+  if (WORLD_ACTIONS.has(a) && topPanel()) return;
   if (a === 'interact' && !state.me.dead && !state.me.downed && /^🪜/.test(state.promptText || '') && climbLadder()) return;
   switch (a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
@@ -3800,7 +3825,7 @@ $('name').value = localStorage.getItem('dz_name') || '';
   if (MOBILE) document.body.classList.add('mobile');
 }
 
-canvas.addEventListener('click', () => { if (state.me && !state.invOpen && !state.me.dead) lockPointer(); });
+canvas.addEventListener('click', () => { if (state.me && !topPanel() && !state.me.dead) lockPointer(); });   // (not with any panel open: clicks there are for the panel)
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return;
   setInputMode('kb');
@@ -3912,7 +3937,10 @@ addEventListener('keyup', (e) => {
 // C: tap to crouch, hold to go prone.
 const kbC = { at: 0, held: false };
 setInterval(() => { if (kbC.at && !kbC.held && performance.now() - kbC.at > 400) { kbC.held = true; doAction('prone'); } }, 50);
-addEventListener('blur', () => { state.keys.clear(); state.mouseDown = false; state.aiming = false; });
+addEventListener('blur', () => {
+  state.keys.clear(); state.mouseDown = false; state.aiming = false; kbC.at = 0;
+  if (state.pttHeld) { state.pttHeld = false; if (!tset.voiceOpen) voice.talk(false); }   // the N key-up never comes once focus is gone
+});
 
 // ------------------------------------------------------------------ simulation helpers
 function structSolid(sv) { const st = sv.data; const mat = PIECES[st.type].stages[st.stage].material; return mat !== 'frame' && !PIECES[st.type].explosive && !(PIECES[st.type].door && st.open); }
@@ -4073,7 +4101,7 @@ function updateNadeAim(now) {
 function tryFire(now) {
   if (state.nadeAim) return;
   const me = state.me;
-  if (!me || me.dead || state.invOpen) return;
+  if (!me || me.dead || state.invOpen || topPanel()) return;
   if (me.taserOut) {   // the stun gun: one shot a pull of the trigger, then it recharges
     if (state.firedThisPress || state.sprint) return;
     state.firedThisPress = true;
@@ -4718,6 +4746,7 @@ function setInputMode(m) {
   // Back on touch or a real keyboard: text boxes may raise the phone's keyboard again.
   if (m !== 'pad') for (const i of document.querySelectorAll('input[inputmode="none"]')) i.removeAttribute('inputmode');
   if (m === 'pad') document.exitPointerLock?.();
+  if (m === 'pad' && touch.autoRun) { touch.autoRun = false; touch.moveX = 0; touch.moveY = 0; touch.sprintOn = false; $('tlock').style.display = 'none'; }   // picked up a controller: the phone's auto-run stops
   updateGadgetBar();
 }
 
@@ -4861,6 +4890,7 @@ function pollPad(dt, now) {
 
   const panel = topPanel();
   if (!panel) { pad.panelId = null; pad.mark = null; }
+  if (panel && (pad.rbHeld || pad.rbAt)) { if (pad.rbHeld) doAction('stungunOff'); pad.rbHeld = false; pad.rbAt = 0; }   // a screen opened mid-hold: the release would be lost
   if (panel) {
     // Menu mode: D-pad / left stick to move focus, A to select, B to go back, right stick scrolls.
     // A screen that has just come up starts on its first choice, and ignores Ⓐ for a moment so a
@@ -4941,7 +4971,8 @@ function pollPad(dt, now) {
       if (just(BTN.LB)) invJump(-1);
       if (just(BTN.RB)) invJump(1);
     }
-    if (viewTap && !['login', 'mapscreen', 'osk', 'tradepanel'].includes(panel.id)) doAction('inventory');
+    if (viewTap && panel.id === 'gunsmith') closeGunsmith();   // back to the bag, not a second bag on top
+    else if (viewTap && !['login', 'mapscreen', 'osk', 'tradepanel'].includes(panel.id)) doAction('inventory');
     if (just(BTN.MENU) && panel.id === 'mapscreen') doAction('map');
     if (panel.id === 'mapscreen' && state.mapMode === 'view') {
       if (just(BTN.X)) setWaypoint(mapView.cx, mapView.cz);
@@ -5484,11 +5515,14 @@ function perfWatch(now, ms) {
   perf.at = now;
   const f = perf.frames.sort((x, y) => x - y), mid = f[f.length >> 1] || 0, p90 = f[Math.floor(f.length * 0.9)] || 0;
   perf.frames.length = 0;
-  if (mid < 20 && p90 < 45) return;
+  const hitches = f.filter((x) => x > 40).length;   // (regular stutters count too, not just a low average)
+  if (mid < 20 && p90 < 45 && hitches < Math.max(3, f.length * 0.04)) return;
   const cur = POST_STEPS.indexOf(postQuality(gfxMode));
   let what = '';
   if (cur > 0) { perf.cap = cur - 1; what = cur === 2 ? 'corner shading off' : 'glow and smoothing off'; }
   else if (renderer.getPixelRatio() > 1) { perf.ratioCap = Math.max(1, renderer.getPixelRatio() - 0.5); what = 'screen sharpness down'; }
+  else if (!perf.grassCut && GFX[gfxMode].grass) { perf.grassCut = true; what = 'less grass'; }
+  else if (!perf.noShadows && GFX[gfxMode].shadows) { perf.noShadows = true; what = 'shadows off'; }
   else { gpuCheck(true); return; }   // past that, easing only makes it look worse: say what's wrong instead
   perf.eased = true;
   applyGfx(gfxMode);
@@ -5816,9 +5850,9 @@ function frame(now) {
   state.promptText = prompt;
   // On a phone the prompt names the button to tap (the same word and hand as the USE button, lit up).
   const pkey = state.touchUI && state.inputMode !== 'pad' ? `<kbd class="tk">${ticon('use')}${useVerb(prompt)}</kbd>` : `<kbd>${glyph('E')}</kbd>`;
-  $('prompt').innerHTML = state.air && alive ? airHud() : prompt && !(alive && me?.boat) ? `${pkey}${prompt}` : '';
+  { const html = state.air && alive ? airHud() : prompt && !(alive && me?.boat) ? `${pkey}${prompt}` : ''; if (html !== state.promptHtml) { state.promptHtml = html; $('prompt').innerHTML = html; } }
   updateRideHud(now, alive);
-  drawMinimap();
+  if (now - (state.miniAt || 0) > 100) { state.miniAt = now; drawMinimap(); }   // ten times a second is plenty
   drawVoiceBar();
   updateWhere(now);
   if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }

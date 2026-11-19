@@ -61,7 +61,9 @@ export function createPost(renderer, scene, camera, draw) {
   let composer = null, ao = null, bloom = null, mode = 'off';
   const size = new THREE.Vector2();
   function build(q) {
-    composer?.dispose?.();
+    // (The composer's own dispose leaves its passes' render targets behind: free them too, or each
+    // quality change by the frame-rate governor leaks tens of MB of GPU memory.)
+    if (composer) { for (const p of composer.passes || []) p.dispose?.(); composer.dispose?.(); }
     composer = null; ao = null; bloom = null;
     if (q === 'off') return;
     renderer.getDrawingBufferSize(size);

@@ -97,7 +97,7 @@ const POSES = {
   getup: { squat: (t, p) => 0.5 * (1 - Math.min(1, p)) ** 1.5, lean: 0.3, look: 0.1,
     R: (t, p) => [-0.18, 0.62 + 0.38 * Math.min(1, p), 0.22], L: (t, p) => [0.18, 0.62 + 0.38 * Math.min(1, p), 0.22] },
   // Killed: the knees go, the arms drop (the body then falls flat; main.js tips it over).
-  fallen: { squat: 0.35, lean: 0.35, look: -0.2,
+  fallen: { lean: 0.35, look: -0.2,   // (no squat: the body is tipped over, so 'down' would push it into the ground)
     R: () => [-0.32, 0.55, 0.08], L: () => [0.3, 0.6, 0.02] },
   // Rod out ahead, the tip twitching now and then.
   fish: { look: 0.05,

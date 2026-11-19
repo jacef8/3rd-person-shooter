@@ -577,6 +577,10 @@ const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'se
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
+/** A number from a message, or `d` if it isn't a real finite one (NaN, Infinity, a string…). */
+function finite(v, d = 0) { const n = Number(v); return Number.isFinite(n) ? n : d; }
+/** An angle from a message, wrapped to -π…π (never NaN or Infinity, which would poison saves). */
+function angleOf(v) { const a = finite(v); return Math.atan2(Math.sin(a), Math.cos(a)); }
 function send(ws, msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
 function broadcast(msg) { const s = JSON.stringify(msg); for (const p of players.values()) if (p.ws.readyState === 1) p.ws.send(s); }
 function feed(text) { broadcast({ t: 'feed', text }); }
@@ -1048,7 +1052,7 @@ function placeCaches(z) {
   for (const b of inside.sort(() => Math.random() - 0.5).slice(0, Math.ceil(HZ.caches * 0.4))) {
     for (let t = 0; t < 12; t++) {
       const x = b.minX + 1.2 + Math.random() * Math.max(0.1, b.maxX - b.minX - 2.4), zz = b.minZ + 1.2 + Math.random() * Math.max(0.1, b.maxZ - b.minZ - 2.4);
-      if (insideBuilding(b, x, zz, 0.4)) { spots.push({ x, z: zz, where: 'building' }); break; }
+      if (insideBuilding(b, x, zz, 0.4) && openFloor(x, zz)) { spots.push({ x, z: zz, where: 'building' }); break; }
     }
   }
   for (const r of map.roadsNear(z.x, z.z, z.radius).sort(() => Math.random() - 0.5).slice(0, 4)) {   // the ditch beside the road
@@ -1193,12 +1197,14 @@ if (NO_CLAIM.size) console.log(`${NO_CLAIM.size} buildings are businesses, shops
 const siteView = (s) => ({ id: s.id, kind: s.kind, name: s.name, x: s.x, z: s.z, r: Math.min(s.K.radius, 120), state: s.alarmUntil > Date.now() && s.state === 'stocked' ? 'alarm' : s.state, left: s.caches.length, restockAt: s.restockAt });
 const sendSites = (to) => { const msg = { t: 'sites', sites: sites.map(siteView), ...(to ? { noClaim: [...NO_CLAIM.keys()] } : {}) }; if (to) send(to, msg); else broadcast(msg); };
 const pickW = (list) => { let r = Math.random() * list.reduce((n, k) => n + k.w, 0); for (const k of list) { r -= k.w; if (r <= 0) return k; } return list[0]; };
+/** Clear floor at (x, z): not inside furniture or an interior wall (loot put there couldn't be reached). */
+function openFloor(x, z) { return !map.grid.near(x, z, 3).some((b) => !b.gone && (b.type === 'furn' || b.shell) && circleOverlapsBox(x, z, 0.5, b)); }
 /** A spot inside one of the site's buildings, else outside close by. */
 function siteSpot(s) {
   for (let t = 0; t < 20 && s.buildings.length; t++) {
     const b = pick(s.buildings);
     const x = b.minX + 1.2 + Math.random() * Math.max(0.1, b.maxX - b.minX - 2.4), z = b.minZ + 1.2 + Math.random() * Math.max(0.1, b.maxZ - b.minZ - 2.4);
-    if (insideBuilding(b, x, z, 0.4)) return { x, z };
+    if (insideBuilding(b, x, z, 0.4) && openFloor(x, z)) return { x, z };
   }
   return openSpotNear(s.x, s.z, 30) || { x: s.x + 3, z: s.z + 3 };
 }
@@ -1790,8 +1796,8 @@ function leaveBoat(p, force = false) {
 function boatState(p, msg) {
   const b = boatById(p.boat);
   if (!b) return unseat(p);
-  p.yaw = Number(msg.yaw) || 0;
-  p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
+  p.yaw = angleOf(msg.yaw);
+  p.pitch = Math.max(-1.5, Math.min(1.5, finite(msg.pitch)));
   p.aiming = !!msg.aim; p.crouch = false;
   const rt = rtOf(b), now = Date.now(), def = BOATS[b.type];
   if (p.seat === 0 && msg.boat && [msg.boat.x, msg.boat.z, msg.boat.yaw].every(Number.isFinite)) {
@@ -2298,6 +2304,8 @@ function tradePush(sess) {
 function tradeClose(sess, why) {
   for (const tok of [sess.a, sess.b]) { trades.delete(tok); const o = onlineByToken(tok); if (o) send(o.ws, { t: 'ptrade', state: 'closed', why }); }
 }
+/** Someone died, went down or left: any trade they're in is off. */
+function endTradesOf(p, why = `${p.name} can't trade right now`) { const s = trades.get(p.token); if (s) tradeClose(s, why); }
 function playerTrade(p, msg) {
   const now = Date.now();
   if (msg.action === 'request') {
@@ -2322,6 +2330,7 @@ function playerTrade(p, msg) {
   if (!sess) return;
   const otherTok = sess.a === p.token ? sess.b : sess.a, other = onlineByToken(otherTok);
   if (msg.action === 'cancel' || !other || Math.hypot(other.x - p.x, other.z - p.z) > COM.trade.range + 2) return tradeClose(sess, msg.action === 'cancel' ? `${p.name} cancelled` : 'Too far apart');
+  if ([p, other].some((q) => q.dead || q.downed || q.lingerUntil)) return tradeClose(sess, 'Trade cancelled');
   if (msg.action === 'offer') {
     const res = {};
     for (const [k, v] of Object.entries(msg.res || {})) { const n = Math.floor(Number(v)); if (RESOURCES.includes(k) && n > 0) res[k] = Math.min(n, p[k] || 0); }
@@ -2945,6 +2954,8 @@ function stun(c, ms, by) {
   const now = Date.now();
   if (c.dead || (!c.isBot && (c.protectedUntil || 0) > now)) return false;
   if (!c.isBot && by && !pvpAllowed(by, c)) return false;
+  // The fairgrounds and swamp camps are safe: no stunning players there (nor from there).
+  if (!c.isBot && by && !by.isBot && (inFair(c.x, c.z) || inCamp(c.x, c.z) || inFair(by.x ?? c.x, by.z ?? c.z) || inCamp(by.x ?? c.x, by.z ?? c.z))) return false;
   c.stunnedUntil = Math.max(c.stunnedUntil || 0, now + ms);
   c.stunnedBy = by?.token || null;
   if (!c.isBot) {
@@ -3285,7 +3296,10 @@ function tickHacks(now) {
       if (isStunned(t, now)) t.stunnedUntil = Math.max(t.stunnedUntil, now + 600);
       else if (!t.downed) { cancelHack(p, 'They shook it off'); continue; }
     }
-    if (h.kind === 'stash') { if (p.sprint || !atStashPoint(p)) { cancelHack(p, ''); continue; } }   // (walk about inside, just don't run off)
+    if (h.kind === 'stash') {   // (walk about inside, just don't run off; getting shot stops it)
+      if (p.sprint || !atStashPoint(p)) { cancelHack(p, ''); continue; }
+      if ((p.lastHit || 0) > h.start) { cancelHack(p, 'Stashing interrupted — taking fire'); continue; }
+    }
     else if (h.walk) { if (p.sprint || p.boat) { cancelHack(p, h.kind === 'eat' ? 'Stopped eating' : 'Stopped patching up'); continue; } }
     else {
       if (Math.hypot(p.x - h.x, p.z - h.z) > 0.6) { cancelHack(p, 'Interrupted — you moved'); continue; }
@@ -3441,6 +3455,7 @@ function soloRevive(p, now = Date.now()) {
 }
 function goDown(p, attacker, headshot) {
   const now = Date.now();
+  endTradesOf(p);
   Object.assign(p, { downed: true, downedUntil: now + DOWNED.bleedOutMs, bleedHp: DOWNED.bleedHp, downedBy: attacker || null, downedHead: !!headshot, hp: 0, camoOn: false, crouch: true });
   cancelHack(p, 'You went down');
   p.openContainer = null;
@@ -3530,6 +3545,7 @@ function respawnRules(p, now = Date.now()) {
 const nearDeath = (r, x, z) => !!r.away && Math.hypot(x - r.away.x, z - r.away.z) < RESPAWN.keepAwayM;
 const minsLeft = (ms) => `${Math.max(1, Math.ceil(ms / 60_000))} min`;
 function killPlayer(p, attacker, headshotKill) {
+  endTradesOf(p);
   {
     const now = Date.now();
     p.deaths = [...(p.deaths || []).filter((t) => now - t < RESPAWN.streakMin * 60_000), now];
@@ -4238,7 +4254,7 @@ function damageStruct(st, dmg, by) {
     const home = structs.get(st.claimOf);
     if (home) { notifyStore(home, `⚠ ${who} broke down a door of your stash house`); logAway(home.owner, `${who} broke down a door of your stash house`); }
   } else removeStruct(st, true);
-  if (by && !by.isBot && st.owner !== by.token) award(by, PIECES[st.type].claim ? 250 : 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
+  if (by && !by.isBot && st.owner !== by.token && !tokenInSquadWith(by, st.owner) && Date.now() - (st.builtAt || 0) > 10 * 60_000) award(by, PIECES[st.type].claim ? 250 : 40, `Destroyed ${stageDef(st).name.toLowerCase()}`, true);
 }
 function removeStruct(st, destroyed) {
   indexStruct(st, false);
@@ -4253,7 +4269,21 @@ function removeStruct(st, destroyed) {
     if (destroyed) logAway(st.owner, 'Your market stall was wrecked; its goods and till spilled on the ground');
   }
   if (PIECES[st.type].container) {
-    dropBag(st.x, st.z, st.items, st, destroyed ? 'Wrecked crate' : 'Crate contents');
+    let items = st.items, res = st;
+    if (destroyed && st.owner) {
+      // Broken open by raiders: only the raid share spills (as if they'd looted it); the rest is
+      // saved to the owner's stash house, if they have another, else lost in the wreck.
+      const share = tokenHome(st.owner, Date.now()) ? RAIDS.takeShareOnline : RAIDS.takeShare;
+      const mixed = [...(st.items || [])].sort(() => Math.random() - 0.5), n = Math.round(mixed.length * share);
+      items = mixed.slice(0, n);
+      res = Object.fromEntries(RESOURCES.map((r) => [r, Math.floor((st[r] || 0) * share)]));
+      const home = claimOfToken(st.owner)?.store;
+      if (home && home !== st) {
+        home.items = [...(home.items || []), ...mixed.slice(n)];
+        for (const r of RESOURCES) home[r] = (home[r] || 0) + (st[r] || 0) - res[r];
+      }
+    }
+    dropBag(st.x, st.z, items, res, destroyed ? 'Wrecked crate' : 'Crate contents');
     for (const p of players.values()) if (p.openContainer?.kind === 'crate' && p.openContainer.id === st.id) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
   }
 }
@@ -4601,6 +4631,14 @@ const STASH_MS = 3000;
 const STASH_RES = RESOURCES.filter((r) => r !== 'intel');
 const carried = (p) => [...GUN_SLOTS.map((s) => p.inv[s]), p.inv.armor, ...p.inv.pack].filter(Boolean);
 const alwaysKept = (it) => it.kind === 'marker' || it.kind === 'tool';
+/** Keep what counts as stashed honest: never more of a supply than you have, never an item you no
+ *  longer carry (run before every message, so nothing can slip in between). */
+function clampSecured(p) {
+  const s = p.secured;
+  if (!s) return;
+  for (const r of STASH_RES) if ((s.res[r] || 0) > (p[r] || 0)) s.res[r] = p[r] || 0;
+  if (s.ids.length) { const have = new Set(carried(p).map((i) => i.id)); if (s.ids.some((id) => !have.has(id))) s.ids = s.ids.filter((id) => have.has(id)); }
+}
 function secureAll(p) { p.secured = { ids: carried(p).map((i) => i.id), res: Object.fromEntries(STASH_RES.map((r) => [r, p[r] || 0])) }; }
 /** What you carry that isn't stashed yet: items, and supplies over what you had when you last stashed. */
 function unstashed(p) {
@@ -4623,15 +4661,17 @@ function atStashPoint(p) {
   if (p.dead) return false;
   if (atOwnStash(p)) return true;
   const c = claimOf(p);
-  if (c?.kind === 'home') { const h = map.houses[c.id]; if (Math.abs(p.x - h.x) < 6 && Math.abs(p.z - h.z) < 6) return true; }   // anywhere in the house
+  if (c?.kind === 'home') {   // anywhere inside the house: its front door, in its wall, sets how far out that is
+    const h = map.houses[c.id], half = h.door ? Math.max(Math.abs((h.door.minX + h.door.maxX) / 2 - h.x), Math.abs((h.door.minZ + h.door.maxZ) / 2 - h.z)) - 0.4 : 4.5;
+    if (Math.abs(p.x - h.x) < half && Math.abs(p.z - h.z) < half) return true;
+  }
   if (c?.kind === 'flag' && c.store.building != null && buildingAt(p.x, p.z) === c.store.building) return true;   // a claimed building: anywhere in it
   return structsNear(p.x, p.z, INTERACT_RANGE + 2).some((st) => PIECES[st.type].hideout && !st.ruined && canManage(p, st) && Math.hypot(st.x - p.x, st.z - p.z) < INTERACT_RANGE + 0.6);
 }
 /** Twice a second: spending comes out of what's stashed first; at your stash, the haul gets stashed. */
 function tickStashing(now) {
   for (const p of players.values()) {
-    const s = p.secured;
-    if (s) for (const r of STASH_RES) if ((s.res[r] || 0) > (p[r] || 0)) s.res[r] = p[r] || 0;
+    clampSecured(p);
     if (p.dead || p.downed || p.hack || p.boat || p.lingerUntil || p.sprint) continue;
     if (!atStashPoint(p)) continue;
     if (!hasUnstashed(unstashed(p))) continue;
@@ -5206,9 +5246,14 @@ function flyOut(e, caller, now, inZone) {
 function handleJoin(ws, msg) {
   const name = String(msg.name || 'Agent').replace(/[^\w \-]/g, '').slice(0, 16) || 'Agent';
   let token = typeof msg.token === 'string' && /^[a-f0-9]{32}$/.test(msg.token) ? msg.token : null;
+  // Already in the world (another tab, or left standing after quitting mid-fight): this takes the
+  // character over, carrying on exactly as it was — downed stays downed, a fight stays a fight.
+  let carry = null;
   for (const other of players.values()) {
     if (other.token !== token) continue;
+    carry = Object.fromEntries(['downed', 'downedUntil', 'bleedHp', 'downedBy', 'downedHead', 'combatAt', 'lastHit', 'stunnedUntil', 'protectedUntil'].map((k) => [k, other[k]]));
     persistCharacter(other); players.delete(other.id); other.ws.player = null; other.ws.close(4000, 'Logged in elsewhere');
+    endTradesOf(other);
   }
   if (!token || !db.characters[token]) {
     token = token || crypto.randomBytes(16).toString('hex');
@@ -5227,6 +5272,7 @@ function handleJoin(ws, msg) {
   p.houseId = ownedHouse(token);
   if (p.houseId !== null) db.houses[p.houseId].ownerName = name;
   p.mags ??= {};
+  if (carry) for (const [k, v] of Object.entries(carry)) if (v !== undefined) p[k] = v;   // (taking over a character already in the world)
   devKit(p);
   if (!p.secured) secureAll(p);   // (characters from before stashing: what they have counts as stashed)
   for (const st of structs.values()) if (st.owner === token) st.ownerName = name;
@@ -5280,9 +5326,17 @@ function handleState(p, msg) {
   let dx = tx - p.x, dz = tz - p.z;
   const hungry = (p.food ?? 100) < HUNGER.noSprintBelow;
   p.prone = !!msg.prone && !p.downed;
-  const maxStep = isStunned(p, now) ? 0.05 : p.prone ? PRONE_SPEED * dt * 1.5 + 0.15 : hungry && !p.downed ? 4.8 * dt * 1.5 + 0.15 : (p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED) * dt * 1.5 + 0.15;
+  // How far you may move: a running allowance topped up with time at your top speed (a little over),
+  // up to 0.6 s' worth saved. Updates arriving two at once (phones) still fit; a flood of updates
+  // gets nothing extra, because the allowance only grows with time, not with messages.
+  const rate = p.prone ? PRONE_SPEED : hungry && !p.downed ? 4.8 : p.downed ? DOWNED.crawlSpeed : SPRINT_SPEED;
+  const cap = rate * 1.5 * 0.6 + 0.3;   // (1.5: slides and jitter run a little over sprint speed)
+  p.moveBudget = Math.min(cap, (p.moveBudget ?? cap) + rate * 1.5 * Math.min(0.6, (now - (p.budgetAt || now)) / 1000));
+  p.budgetAt = now;
+  const maxStep = isStunned(p, now) ? 0.05 : p.moveBudget;
   const d = Math.hypot(dx, dz);
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
+  p.moveBudget = Math.max(0, p.moveBudget - Math.min(d, maxStep));
   const y0 = standing(p);
   const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2).concat(rideSolids(db.boats, p.x, p.z, maxStep + 2, rideY, PLAYER_RADIUS)), terrain, y0, p.hop ? p.hop.alt : 0);
   if (p.hop && np.y !== y0) { p.hop.alt -= np.y - y0; if (p.hop.alt <= 0) p.hop = null; }   // landed on a top mid-climb
@@ -5290,8 +5344,8 @@ function handleState(p, msg) {
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
   if (p.speed > 0.5) p.lastActive = now;
   p.x = np.x; p.z = np.z;
-  p.yaw = Number(msg.yaw) || 0;
-  p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
+  p.yaw = angleOf(msg.yaw);
+  p.pitch = Math.max(-1.5, Math.min(1.5, finite(msg.pitch)));
   p.crouch = (!!msg.crouch && !p.prone) || !!p.downed;
   p.slide = !!msg.slide && p.crouch && !p.downed;   // (for how others draw you)
   // Sprinting: the gun's put away. Stopping starts the draw; no shots till it's back up.
@@ -5307,16 +5361,20 @@ function handleState(p, msg) {
 /** Steering a jump: no walls up there, just how fast this part of the fall lets you move. */
 function airState(p, msg, dt, tx, tz) {
   p.air.mode = p.downed ? 'chute' : nextMode(p.air.mode, !!msg.sprint);
-  const max = airRates(p.air.mode).speed * dt * 1.5 + 0.3, lim = map.half - 30;
+  const ar = airRates(p.air.mode).speed, now = Date.now(), cap = ar * 1.3 * 0.6 + 0.5;
+  p.moveBudget = Math.min(cap, (p.moveBudget ?? cap) + ar * 1.3 * Math.min(0.6, (now - (p.budgetAt || now)) / 1000));
+  p.budgetAt = now;
+  const max = p.moveBudget, lim = map.half - 30;
   let dx = tx - p.x, dz = tz - p.z;
   const d = Math.hypot(dx, dz);
   if (d > max) { dx *= max / d; dz *= max / d; }
+  p.moveBudget = Math.max(0, p.moveBudget - Math.min(d, max));
   const nx = Math.max(-lim, Math.min(lim, p.x + dx)), nz = Math.max(-lim, Math.min(lim, p.z + dz));
   p.speed = dt > 0 ? Math.hypot(nx - p.x, nz - p.z) / dt : 0;
   p.x = nx; p.z = nz;
   p.lastActive = Date.now();
-  p.yaw = Number(msg.yaw) || 0;
-  p.pitch = Math.max(-1.5, Math.min(1.5, Number(msg.pitch) || 0));
+  p.yaw = angleOf(msg.yaw);
+  p.pitch = Math.max(-1.5, Math.min(1.5, finite(msg.pitch)));
   p.crouch = false; p.prone = false; p.aiming = false;
   if (Math.hypot(p.x - tx, p.z - tz) > 1) send(p.ws, { t: 'correct', x: p.x, z: p.z });
 }
@@ -5439,7 +5497,7 @@ wss.on('connection', (ws) => {
     if (!msg || typeof msg !== 'object') return;
     const p = ws.player;
     if (!p) { if (msg.t === 'join') handleJoin(ws, msg); return; }
-    if (msg.t !== 'state') p.lastActive = Date.now();   // doing anything counts as being active
+    if (msg.t !== 'state') { p.lastActive = Date.now(); clampSecured(p); }   // doing anything counts as being active
     // Stunned: nothing but talking to your crew until it wears off.
     if (isStunned(p) && !p.dead && !p.downed && !['state', 'squad', 'leaderboard', 'closeContainer', 'dev'].includes(msg.t)) return;
     // While downed you can crawl, talk to your crew, or give up; nothing else.
@@ -5609,6 +5667,7 @@ wss.on('connection', (ws) => {
 const COMBAT_LOG_MS = Number(process.env.COMBAT_LOG_MS || 30_000);
 function logOff(p) {
   if (!players.has(p.id)) return;
+  endTradesOf(p, `${p.name} left`);
   persistCharacter(p);
   db.lastSeen[p.token] = Date.now();
   players.delete(p.id);
@@ -5670,6 +5729,11 @@ function structRaidView(r, st) {
 let tick = 0;
 const tickMs = [];   // how long each tick took (for /status and load tests)
 const loop = setInterval(() => {
+  // One bad frame (a broken record, a bad value) must not take the whole world down: log it and carry on.
+  try { worldTick(); } catch (e) { const k = String(e?.stack || e).slice(0, 300); if (k !== tickErr.last || Date.now() - tickErr.at > 60_000) { tickErr.last = k; tickErr.at = Date.now(); console.error('World tick failed:', e); } }
+}, 1000 / TICK_HZ);
+const tickErr = { last: '', at: 0 };
+function worldTick() {
   const t0 = performance.now();
   const now = Date.now();
   // Where everyone stood over the last few ticks (shots are checked against what the shooter saw).
@@ -5750,7 +5814,7 @@ const loop = setInterval(() => {
   tickMs.push(performance.now() - t0);
   if (tickMs.length > 200) tickMs.shift();
   tick++;
-}, 1000 / TICK_HZ);
+}
 
 const saver = setInterval(saveDb, Number(process.env.SAVE_EVERY_MS || 10_000));
 // Run by the hub: if the hub goes away (even killed outright), save and stop too.

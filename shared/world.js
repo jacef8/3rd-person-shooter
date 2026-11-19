@@ -346,13 +346,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     }
     const placed = [], IN = WALL + 0.06, used = new Set(), ONE = new Set(['tv', 'fridge', 'kitchen', 'couch', 'counter']);   // one of these per building
     const clearOf = (ax0, az0, ax1, az1) => {
-      const cxp = (ax0 + ax1) / 2, czp = (az0 + az1) / 2;
       const nearPt = (p, r) => Math.max(ax0 - p[0], 0, p[0] - ax1) ** 2 + Math.max(az0 - p[1], 0, p[1] - az1) ** 2 < r * r;
       if (doorL.some((p) => nearPt(p, 3.3))) return false;   // (a Contact stands 2.6 m inside the front door)
       if (lootL.some((p) => nearPt(p, 1.0))) return false;
       if (gapL && nearPt(gapL, 1.7)) return false;
       if (mid !== null && rects.length === 1 && (alongX ? ax0 < mid + 0.2 && ax1 > mid - 0.2 : az0 < mid + 0.2 && az1 > mid - 0.2)) return false;
-      return !placed.some(([bx0, bz0, bx1, bz1]) => ax0 < bx1 + 0.45 && ax1 > bx0 - 0.45 && az0 < bz1 + 0.45 && az1 > bz0 - 0.45) && cxp === cxp && czp === czp;
+      return !placed.some(([bx0, bz0, bx1, bz1]) => ax0 < bx1 + 1.0 && ax1 > bx0 - 1.0 && az0 < bz1 + 1.0 && az1 > bz0 - 1.0);   // a metre to walk between pieces
     };
     for (const [x0, z0, x1, z1] of rooms) {
       const rw = x1 - x0, rd = z1 - z0, area = rw * rd;
@@ -371,8 +370,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
         else if (side === 2) { bz0 = u - L / 2; bz1 = u + L / 2; bx0 = x0 + IN; bx1 = bx0 + D; fr = [1, 0]; }
         else { bz0 = u - L / 2; bz1 = u + L / 2; bx1 = x1 - IN; bx0 = bx1 - D; fr = [-1, 0]; }
         if (!clearOf(bx0, bz0, bx1, bz1)) continue;
+        // Its back against a real wall: where two wings of the building join there's no wall, just the way through.
+        const bk = side === 0 ? [[bx0 + 0.1, bz0 - IN - 0.3], [bx1 - 0.1, bz0 - IN - 0.3]] : side === 1 ? [[bx0 + 0.1, bz1 + IN + 0.3], [bx1 - 0.1, bz1 + IN + 0.3]]
+          : side === 2 ? [[bx0 - IN - 0.3, bz0 + 0.1], [bx0 - IN - 0.3, bz1 - 0.1]] : [[bx1 + IN + 0.3, bz0 + 0.1], [bx1 + IN + 0.3, bz1 - 0.1]];
+        if (bk.some(([qx, qz]) => rects.some(([r0, s0, r1, s1]) => qx > r0 && qx < r1 && qz > s0 && qz < s1))) continue;
         placed.push([bx0, bz0, bx1, bz1]); used.add(kind);
-        put(bx0, bz0, bx1, bz1, H, { furn: kind, fr, fl: +(horiz ? L : L).toFixed(2), fd: D, fs: Math.floor(rand() * 1e6) });
+        put(bx0, bz0, bx1, bz1, H, { furn: kind, fr, fl: +L.toFixed(2), fd: D, fs: Math.floor(rand() * 1e6) });
         n++;
       }
       // The middle of a roomy room.
@@ -464,7 +467,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const [dx, dz] = r.along === 'x' ? W(c, r.at + inward) : W(r.at + inward, c);
       const [ox, oz] = OUT[r.side];
       // The door's centre, which way is out, and the angle of the wall it sits in.
-      const top = Math.max(terrain.exact(dx, dz) + DOOR_H, y0 + 0.1);
+      const top = Math.max(terrain.exact(dx, dz), base) + DOOR_H;   // (from the floor or the ground there, whichever is higher: never a lintel at head height)
       rec.doors.push({ x: dx, z: dz, out: [ox * ca - oz * sa, ox * sa + oz * ca], ang: r.along === 'x' ? ang : ang + Math.PI / 2, top });
       if (y0 + wallH - top > 0.05) seg(da, db, top, y0 + wallH - top);
     }
@@ -510,7 +513,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     for (let k = 0; k < n && roomy.length; k++) {
       const [x0, z0, x1, z1] = roomy[k % roomy.length];
       let lx = x0 + 1.6 + rand() * (x1 - x0 - 3.2), lz = z0 + 1.6 + rand() * (z1 - z0 - 3.2);
-      if (mid !== null) { const v = mid + (k % 2 ? 1 : -1) * (1.6 + rand() * Math.max(0, ((alongX ? x1 - x0 : z1 - z0) / 2) - 3.2)); if (alongX) lx = v; else lz = v; }
+      if (mid !== null) { const v = mid + (k % 2 ? 1 : -1) * (1.6 + rand() * Math.max(0, ((alongX ? x1 - x0 : z1 - z0) / 2) - 3.2)); if (alongX) lx = Math.max(x0 + 1.6, Math.min(x1 - 1.6, v)); else lz = Math.max(z0 + 1.6, Math.min(z1 - 1.6, v)); }   // (kept inside: the wall may have stepped aside for a door)
       const [wx, wz] = W(lx, lz);
       lootSpawns.push({ x: wx, z: wz, zone, indoor: true });
       lootL.push([lx, lz]);
@@ -1569,7 +1572,10 @@ export function blocksAt(b, y) {
   if (b.gone) return false;
   if (y === undefined) return true;
   const y0 = b.y0 || 0;
-  return y0 < y + 1.9 && y0 + b.h > y + 0.35;
+  // Only what's at body height pushes you aside. Something overhead (a ceiling above a bed you
+  // jumped on, a shelf at head height) doesn't: being shoved out from under a ceiling that covers
+  // the whole building used to carry people out through its wall.
+  return y0 < y + 1.2 && y0 + b.h > y + 0.35;
 }
 
 /** Push a circle out of every solid box. Returns the corrected position. */
@@ -1651,7 +1657,7 @@ export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift 
 /** What you can't stand on or climb: trees, overhead roofs, doors, poles, and anything players built
  *  (their pieces carry no type: base walls, gates and barricades stay in the way of raiders). */
 const NO_CLIMB = new Set(['wreck', 'tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'rail', 'windsock', 'pole', 'scrub', 'cactus', 'bush', 'ladder']);
-const climbable = (b) => !!b.type && !b.gone && !NO_CLIMB.has(b.type) && !b.houseId;
+const climbable = (b) => !!b.type && !b.gone && !NO_CLIMB.has(b.type) && !b.houseId && !(b.type === 'furn' && b.h > 1.0);   // (indoors only low furniture: a bed, a table, a counter)
 const insideTop = (b, x, z, m) => {
   if (b.ang !== undefined) { const [lx, lz] = toBox(b, x, z); return Math.abs(lx) <= b.hw - m && Math.abs(lz) <= b.hd - m; }
   return x >= b.minX + m && x <= b.maxX - m && z >= b.minZ + m && z <= b.maxZ - m;
@@ -1685,7 +1691,13 @@ export function climbAhead(solids, x, z, dx, dz, y) {
       if (!climbable(b) || h > CLIMB.max) return best;   // a wall too high, or one you can't climb: no
       if (h > CLIMB.min && h > best) best = h;
     }
-    if (best) return best;
+    if (best) {
+      // Only onto a top with standing room above it: climbing a fridge or a shelf indoors would put
+      // your head in the ceiling (and the push back out of it could carry you through the wall).
+      const top = y + best;
+      for (const b of solids) if (!b.gone && (b.y0 || 0) > top + 0.05 && (b.y0 || 0) < top + 2.2 && circleOverlapsBox(px, pz, 0.3, b)) return 0;
+      return best;
+    }
   }
   return best;
 }
@@ -1761,7 +1773,9 @@ export function throwPath(from, tx, tz, flightMs, maxMs, solids, ground) {
       if (hit.box) {
         const b = hit.box, hx = x + sx / sl * Math.max(0, hit.t - R), hy = y + sy / sl * Math.max(0, hit.t - R), hz = z + sz / sl * Math.max(0, hit.t - R);
         const top = (b.y0 || 0) + b.h;
-        if (vy < 0 && hy >= top - 0.25) {   // landed on top of it (a roof, a car, a crate)
+        if (vy > 0 && hy <= (b.y0 || 0) + 0.25) {   // up into a ceiling from below: back down, still going forward
+          vy = -vy * 0.4; nx = hx; nz = hz; ny = (b.y0 || 0) - R - 0.01;
+        } else if (vy < 0 && hy >= top - 0.25) {   // landed on top of it (a roof, a car, a crate)
           ny = top + R; nx = hx; nz = hz;
           vy = Math.abs(vy) > 2 ? -vy * 0.3 : 0; vx *= 0.55; vz *= 0.55;
         } else {

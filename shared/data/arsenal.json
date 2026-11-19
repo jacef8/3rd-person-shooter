@@ -32,7 +32,7 @@
     "sidearm": {
       "label": "Sidearm",
       "level": 1,
-      "cost": 0,
+      "cost": 20,
       "semi": true,
       "damage": 30,
       "range": 30,
