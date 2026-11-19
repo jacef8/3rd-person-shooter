@@ -15,9 +15,37 @@ const PACE = {
   hog: { walk: 0.55, run: 2.4, runAt: 1.8 },
   gator: { walk: 0.35, run: 1.4, runAt: 1.2 },
   dog: { walk: 0.9, run: 4.0, runAt: 2.2 },
+  horse: { walk: 1.7, run: 8.5, runAt: 3.4 },
 };
 
 export function preloadAnimals() { for (const n of Object.keys(PACE)) load(n).catch(() => {}); }
+
+/**
+ * A `kind` model of its own with its animations, for something other than wildlife to wear (the
+ * horse you ride): { model, anim }, or null if it can't be had. Step it with stepAnimal.
+ */
+export async function animalModel(kind) {
+  try {
+    const gltf = await load(kind);
+    const model = cloneSkinned(gltf.scene);
+    model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+    const mixer = new THREE.AnimationMixer(model), actions = {};
+    for (const clip of gltf.animations) actions[clip.name] = mixer.clipAction(clip);
+    const anim = { kind, mixer, actions, cur: null, speed: 0 };
+    play(anim, 'idle', 0);
+    return { model, anim };
+  } catch { return null; }
+}
+/** Idle, walk or run at `speed` (m/s, as the thing carrying it moves), steps in time with it. */
+export function stepAnimal(a, speed, dt) {
+  if (!a || dt <= 0) return;
+  a.speed += (Math.min(speed, 20) - a.speed) * Math.min(1, dt * 6);
+  const p = PACE[a.kind], s = a.speed;
+  const gait = s < 0.3 ? 'idle' : s < p.runAt ? 'walk' : 'run';
+  play(a, gait);
+  a.cur.timeScale = gait === 'idle' ? 1 : Math.max(0.5, Math.min(2.2, s / p[gait]));
+  a.mixer.update(dt);
+}
 
 /** Swap the stand-in in group `g` for the real `kind` model once it's in. */
 export function attachAnimal(g, kind) {

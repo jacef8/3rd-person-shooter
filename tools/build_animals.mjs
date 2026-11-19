@@ -30,7 +30,7 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const src = process.argv[2];
-if (!src) { console.error('usage: node tools/build_animals.mjs <source folder> [deer,hog,gator,dog]'); process.exit(1); }
+if (!src) { console.error('usage: node tools/build_animals.mjs <source folder> [deer,horse,hog,gator,dog]'); process.exit(1); }
 const only = process.argv[3]?.split(',');
 const out = new URL('../client/models/animals/', import.meta.url).pathname;
 fs.mkdirSync(out, { recursive: true });
@@ -62,6 +62,12 @@ const ANIMALS = {
     // a brown farm dog: brown coat, tan muzzle/chest/legs
     colours: { Main: 0x76502f, Main_Light: 0xc9a77c, Black: 0x1c1714, Eyes_White: 0x8a857c, Eyes_Pupil: 0x120d0a, Eyes_Black: 0x0a0908 },
     size: { y: 0.7 },   // ears 0.7 m, shoulder ~0.5 m
+  }),
+  horse: async () => fromQuaternius('Horse.glb', {
+    clips: { Idle: 'idle', Walk: 'walk', Gallop: 'run', Death: 'death', Eating: 'eat' },
+    // a bay horse: its own browns, black mane, tail and legs' ends
+    colours: { Main: 0x6b3a1c, Hair: 0x1c1410, Main_Dark: 0x4a2914, Muzzle: 0x2f2119, Hooves: 0x3a342c, Main_Light: 0x8a5228, Eye_Black: 0x0b0a09, Eye_White: 0x8f8a80 },
+    size: { y: 2.3 },   // ears 2.3 m with its head up, withers ~1.6 m
   }),
   hog: async () => buildHog(),
   gator: async () => buildGator(),

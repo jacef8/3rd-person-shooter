@@ -30,13 +30,30 @@ const MODELS = {
   pickup: ['PickupTruck', 9000, '+z'],
   motorcycle: ['Motorcycle', 7000, '+z'],
   bus: ['PublicBus', 9000, '+z'],
+  // Kenney's Car Kit (CC0; github.com/shorepine/kenney, 3d/car/): run with that folder and `tractor`.
+  tractor: ['tractor', 4000, '+z', { recolour: { node: 'body', from: [3, 2], to: [6, 1] } }],   // grey body -> farm red
 };
 const only = process.argv[3]?.split(',');
 await MeshoptSimplifier.ready;
-for (const [name, [file, budget, front]] of Object.entries(MODELS)) {
+for (const [name, [file, budget, front, opts = {}]] of Object.entries(MODELS)) {
   if (only && !only.includes(name)) continue;
   const doc = await io.read(path.join(src, `${file}.glb`));
   const root = doc.getRoot();
+  // Kenney models colour by where their UVs fall on a swatch sheet (8 x 4 cells): move one part's
+  // UVs from one swatch to another to repaint it.
+  if (opts.recolour) {
+    const { node, from, to } = opts.recolour, du = (to[0] - from[0]) / 8, dv = (to[1] - from[1]) / 4;
+    for (const n of root.listNodes()) {
+      if (n.getName() !== node || !n.getMesh()) continue;
+      for (const p of n.getMesh().listPrimitives()) {
+        const uv = p.getAttribute('TEXCOORD_0'), e = [];
+        for (let i = 0; i < uv.getCount(); i++) {
+          uv.getElement(i, e);
+          if (Math.floor(e[0] * 8) === from[0] && Math.floor(e[1] * 4) === from[1]) uv.setElement(i, [e[0] + du, e[1] + dv]);
+        }
+      }
+    }
+  }
   for (const a of root.listAnimations()) a.dispose();
   await doc.transform(metalRough(), flatten(), dedup());
   // Bake every node's transform into its mesh, so the whole vehicle is one set of vertices in one space.
@@ -79,7 +96,8 @@ for (const [name, [file, budget, front]] of Object.entries(MODELS)) {
     const mats = doc.getGraph().listParentEdges(t).map((e) => e.getParent()).filter((p) => p.propertyType === 'Material');
     const cut = colour && mats.some((m) => m.getAlphaMode() !== 'OPAQUE');
     const img = sharp(Buffer.from(t.getImage())).resize(colour ? 1024 : 512, colour ? 1024 : 512, { fit: 'inside', withoutEnlargement: true });
-    if (cut) { t.setImage(new Uint8Array(await img.png({ palette: true }).toBuffer())); t.setMimeType('image/png'); }
+    const small = ((await sharp(Buffer.from(t.getImage())).metadata()).width || 0) <= 256;   // a palette swatch: JPEG would smear its colours together
+    if (cut || small) { t.setImage(new Uint8Array(await img.png({ palette: true }).toBuffer())); t.setMimeType('image/png'); }
     else { t.setImage(new Uint8Array(await img.flatten({ background: '#808080' }).jpeg({ quality: 82, mozjpeg: true }).toBuffer())); t.setMimeType('image/jpeg'); }
     t.setURI('');
   }

@@ -10,7 +10,7 @@ import {
 import { buildGunModel, setExplode, gunKey, gunsReal } from '/gunmodel.js';
 import * as sfx from '/sound.js';
 import { buildRideModel, preloadVehicles } from '/ridemodels.js';
-import { attachAnimal, animateAnimal, preloadAnimals } from '/animals.js';
+import { attachAnimal, animateAnimal, preloadAnimals, stepAnimal } from '/animals.js';
 import { createTownDressing } from '/towns.js';
 import { createPlaces } from '/places.js';
 import { createVoice } from '/voice.js';
@@ -825,7 +825,8 @@ function animateBoats(dt, now) {
       u.lastYaw = g.rotation.y;
       u.lean += (Math.max(-0.45, Math.min(0.45, turn * 0.35)) - u.lean) * Math.min(1, dt * 6);
       g.rotation.z += ((def.lean ? u.lean : roll) - g.rotation.z) * Math.min(1, dt * 8);
-      // A horse walks, trots, gallops: legs swing with its speed.
+      // A horse walks, trots, gallops: legs swing with its speed (the real one plays its own walk and gallop).
+      if (u.anim) stepAnimal(u.anim, speed, dt);
       if (u.legs.length) {
         u.gait += dt * (2 + Math.min(14, speed) * 0.9) * (speed > 0.3 ? 1 : 0);
         const amp = Math.min(0.75, speed / 10 + (speed > 0.3 ? 0.2 : 0));

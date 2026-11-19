@@ -5,11 +5,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from '/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from '/addons/utils/BufferGeometryUtils.js';
 import { BOATS } from '/shared/boats.js';
+import { animalModel } from '/animals.js';
 
 // Real models (client/models/vehicles, tools/build_vehicles.mjs): each is one unit long, front at +Z,
 // wheels on y = 0. A ride is built from boxes first (shown at once) and swaps to its real model when
 // that has loaded; kinds with no real model keep the boxes.
-const REAL = { car: ['sedan', 'suv', 'classic'], pickup: ['pickup'], motorcycle: ['motorcycle'], dirtbike: ['motorcycle'] };
+const REAL = { car: ['sedan', 'suv', 'classic'], pickup: ['pickup'], motorcycle: ['motorcycle'], dirtbike: ['motorcycle'], tractor: ['tractor'] };
 const gltf = new GLTFLoader(), realCache = new Map();
 function realModel(name) {
   if (!realCache.has(name)) realCache.set(name, gltf.loadAsync(`/models/vehicles/${name}.glb`).then((g) => {
@@ -199,8 +200,8 @@ export function buildRideModel(type, color, { real: wantReal = true } = {}) {
     add(boxG(0.06, 0.5, 0.75), mane, 0, 1.92, 0.7).rotation.x = 0.65;
     for (const s of [-1, 1]) add(boxG(0.05, 0.14, 0.05), coat, s * 0.08, 2.32, 1.08);   // ears
     const tail = add(new THREE.CylinderGeometry(0.06, 0.1, 0.75, 6), mane, 0, 1.15, -0.95); tail.rotation.x = -0.45;
-    add(boxG(0.66, 0.14, 0.7), RIDE_MAT.leather, 0, 1.73, -0.05);   // saddle
-    for (const s of [-1, 1]) add(boxG(0.06, 0.4, 0.5), RIDE_MAT.leather, s * 0.42, 1.38, -0.35);   // saddlebags
+    add(boxG(0.66, 0.14, 0.7), RIDE_MAT.leather, 0, 1.73, -0.05).userData.tack = true;   // saddle
+    for (const s of [-1, 1]) add(boxG(0.06, 0.4, 0.5), RIDE_MAT.leather, s * 0.42, 1.38, -0.35).userData.tack = true;   // saddlebags
     for (const [x, z] of [[-0.2, 0.62], [0.2, 0.62], [-0.2, -0.62], [0.2, -0.62]]) {
       const hip = new THREE.Group(); hip.position.set(x, 1.15, z); body.add(hip);
       const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.07, 0.6, 7), coat); upper.position.y = -0.3; hip.add(upper);
@@ -215,6 +216,14 @@ export function buildRideModel(type, color, { real: wantReal = true } = {}) {
   g.userData = { body, wheels, legs, gait: 0, lean: 0 };
   const real = REAL[type];
   if (real && wantReal) useReal(g, real[Math.abs(Math.round((color || 0) / 7)) % real.length], def.len);
+  // The horse: a real, animated one (client/models/animals/horse.glb) in place of the shapes, once it
+  // has loaded; the saddle and bags stay. Its walk and gallop follow the ride's speed (main.js).
+  if (type === 'horse' && wantReal) animalModel('horse').then((m) => {
+    if (!m || g.userData.disposed) return;
+    for (const c of [...body.children]) if (!c.userData.tack) body.remove(c);
+    body.add(m.model);
+    g.userData.legs = []; g.userData.anim = m.anim;
+  });
   return g;
 }
 

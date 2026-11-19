@@ -7,6 +7,7 @@ centred on x/z, with clips named `idle`, `walk`, `run`, `death` (plus the extras
 | --- | --- | --- | --- |
 | deer.glb | `Deer.glb` from the **Ultimate Animated Animal Pack**, https://quaternius.com/packs/ultimateanimatedanimals.html, taken from the copy in https://github.com/trebeljahr/quaternius-showcase (`public/glb/animals_pack/`) | Quaternius | CC0 1.0 (public domain) |
 | dog.glb | `ShibaInu.glb` from the same pack and copy | Quaternius | CC0 1.0 (public domain) |
+| horse.glb | `Horse.glb` from the same pack and copy (the horse you ride) | Quaternius | CC0 1.0 (public domain) |
 | hog.glb | `Pig_Pink_01` from the **Microsoft Rocketbox** avatar library, https://github.com/microsoft/Microsoft-Rocketbox (`Assets/Animals/Pig_Pink_01/Export/Pig_Pink_01.fbx`, `Textures/Pig_pink_color.tga`) | Microsoft (Rocketbox Studios) | MIT (notice below) |
 | gator.glb | Modelled and animated in code by `tools/build_animals.mjs` for this project (no free alligator could be found) | this project | same as the project |
 
@@ -20,6 +21,9 @@ centred on x/z, with clips named `idle`, `walk`, `run`, `death` (plus the extras
 - **dog.glb**: clips `idle`, `walk`, `run` (`Gallop`), `death`, `attack`; recoloured to a brown dog
   with a tan muzzle, chest and legs; materials baked into vertex colours; scaled to 0.7 m to the ear
   tips (~0.5 m at the shoulder, 0.94 m long).
+- **horse.glb**: clips `idle`, `walk`, `run` (`Gallop`), `death`, `eat`; a bay horse (its browns
+  kept, black mane and tail); materials baked into vertex colours; scaled to 2.3 m to the ear tips
+  with its head up (~1.6 m at the withers, 2.7 m long).
 - **hog.glb**: the rigged but unanimated farm pig, read with three.js's FBXLoader. Its colour map
   regraded from pink to a dark, grizzled feral-hog brown-black and shrunk to 512 px JPEG; the bump and
   specular maps left out. The clips `idle`, `walk`, `run` and `death` were keyframed for it in the
