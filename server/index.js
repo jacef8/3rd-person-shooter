@@ -4356,6 +4356,18 @@ function dismantle(p, msg) {
   dirty(p);
 }
 
+/**
+ * Does a blast at (x, y, z) reach someone? Only if something of them (head, chest or feet) is in
+ * plain line from it. The line starts half a metre toward them, so a charge stuck on a wall or a
+ * grenade in a corner still hits whoever is on its own side of the wall.
+ */
+function blastReaches(x, y, z, t) {
+  const ty = t.y !== undefined && t.yx === t.x && t.yz === t.z ? t.y : terrain.height(t.x, t.z);
+  const dx = t.x - x, dz = t.z - z, d = Math.hypot(dx, dz) || 1, s = Math.min(0.5, d / 2);
+  const ox = x + dx / d * s, oz = z + dz / d * s;
+  for (const h of [1.5, 1.0, 0.3]) if (lineOfSight(ox, y, oz, t.x, ty + h, t.z)) return true;
+  return false;
+}
 function explode(c, now, k = BUILD.charge) {
   charges.delete(c.id);
   const by = onlineByToken(c.owner);
@@ -4371,10 +4383,17 @@ function explode(c, now, k = BUILD.charge) {
     if (d > k.radius) continue;
     damageHouseDoor(h.id, k.damage * (1 - d / (k.radius * 1.5)), by || { name: c.ownerName, isBot: true }, 'blew open');
   }
+  // A player's blast still keeps to the safe-zone and new-player-shield rules when they've logged off
+  // since they threw or planted it (with no one to blame, applyDamage would skip both).
+  const absent = !by && !!c.owner;
+  const cy = c.y ?? terrain.height(c.x, c.z);
   for (const t of [...players.values(), ...bots.values()]) {
     if (t.dead) continue;
     const d = Math.hypot(t.x - c.x, t.z - c.z);
-    if (d < k.playerRadius) applyDamage(t, k.playerDamage * (1 - d / k.playerRadius), by, !!t.isBot);
+    if (d >= k.playerRadius) continue;
+    if (d > 1 && !blastReaches(c.x, cy + 0.5, c.z, t)) continue;   // a wall, a floor or a hill in between takes it
+    if (absent && !t.isBot && t.token !== c.owner && (inFair(t.x, t.z) || inCamp(t.x, t.z) || inFair(c.x, c.z) || inCamp(c.x, c.z) || shielded(t))) continue;
+    applyDamage(t, k.playerDamage * (1 - d / k.playerRadius), by, !!t.isBot);
   }
   // Cars, bikes and boats caught in the blast: most of a rocket's punch.
   if (k.playerRadius) for (const b of [...db.boats]) {
