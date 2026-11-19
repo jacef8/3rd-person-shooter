@@ -25,7 +25,7 @@ import { ACT_POSE, updateAction, disposeActionProps } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
 import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox } from '/mapview.js';
-import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, placementProblem } from '/shared/building.js';
+import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, structureBoxes, planPiece, isKitPiece } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS, hourLabel, windowText } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
 import { EXTRACT } from '/shared/extraction.js';
@@ -3824,7 +3824,7 @@ function doAction(a) {
     // In build mode the same buttons drive building.
     switch (a) {
       case 'interact': send({ t: 'interact', build: true }); return;
-      case 'reload': build.rot ^= 1; return;
+      case 'reload': rotateBuild(); return;
       case 'tag': cyclePiece(1); return;
       case 'sensor': cyclePiece(-1); return;
       case 'swap': dismantleAimed(); return;
@@ -3936,7 +3936,7 @@ addEventListener('keydown', (e) => {
 }, true);
 addEventListener('wheel', (e) => {
   if (document.pointerLockElement !== canvas) return;
-  if (build.on) { build.rot ^= 1; return; }
+  if (build.on) { rotateBuild(); return; }
   // The mouse wheel steps through the guns you carry (primary, second primary, sidearm), skipping empty slots.
   const me = state.me, now = performance.now();
   if (!me || state.nadeAim || now - (state.wheelAt || 0) < 140 || Math.abs(e.deltaY) < 1) return;
@@ -4023,18 +4023,20 @@ addEventListener('blur', () => {
 });
 
 // ------------------------------------------------------------------ simulation helpers
-function structSolid(sv) { const st = sv.data; const mat = PIECES[st.type].stages[st.stage].material; return mat !== 'frame' && !PIECES[st.type].explosive && !(PIECES[st.type].door && st.open); }
+function structSolid(sv) { const st = sv.data; const mat = PIECES[st.type].stages[st.stage].material; return mat !== 'frame' && mat !== 'wire' && !PIECES[st.type].explosive && !(PIECES[st.type].door && st.open && st.type !== 'doorway'); }
+/** What a structure blocks (a window wall's window and an open doorway let you through). */
+const structSolidBoxes = (st) => structureBoxes(st, { type: 'struct', structId: st.id });
 function structBoxOf(st) { return structureBox(st, { type: 'struct', structId: st.id }); }
 function solidsNear(x, z, r) {
   const out = state.map.grid.near(x, z, r);
-  for (const sv of structVis.values()) if (structSolid(sv) && Math.abs(sv.data.x - x) < r + 3 && Math.abs(sv.data.z - z) < r + 3) out.push(structBoxOf(sv.data));
+  for (const sv of structVis.values()) if (structSolid(sv) && Math.abs(sv.data.x - x) < r + 3 && Math.abs(sv.data.z - z) < r + 3) out.push(...structSolidBoxes(sv.data));
   for (const d of state.doorSolids) if (Math.abs(d.minX - x) < r + 2 && Math.abs(d.minZ - z) < r + 2) out.push(d);
   if (state.towns) out.push(...state.towns.solidsNear(x, z, r));   // abandoned cars in town (client/towns.js)
   return out;
 }
 function solidsAlongRay(ox, oz, dx, dz, dist) {
   const out = state.map.grid.ray(ox, oz, dx, dz, dist);
-  for (const sv of structVis.values()) if (structSolid(sv)) out.push(structBoxOf(sv.data));
+  for (const sv of structVis.values()) if (structSolid(sv)) out.push(...structSolidBoxes(sv.data));
   return out.concat(state.doorSolids);
 }
 
@@ -4290,7 +4292,7 @@ function nearestInteractable() {
   const has = (t) => me?.inv.pack.some((i) => i.kind === 'tool' && i.tool === t);
   for (const sv of structVis.values()) {
     const st = sv.data, def = PIECES[st.type], stage = def.stages[st.stage];
-    if (def.explosive) continue;
+    if (def.explosive || !sameStorey(st)) continue;
     const d = Math.hypot(Math.max(structBoxOf(st).minX - state.x, 0, state.x - structBoxOf(st).maxX), Math.max(structBoxOf(st).minZ - state.z, 0, state.z - structBoxOf(st).maxZ)) + 0.3;
     let text;
     const next = def.stages[st.stage + 1];
@@ -5156,12 +5158,78 @@ $('testRideBtn').onclick = () => openRidePicker();
 const build = { on: false, piece: 'wall', rot: 0, ghost: null, ok: false, x: 0, z: 0 };
 const structVis = new Map();   // id -> { mesh, data, key }
 const chargeVis = new Map();
+/** Plank and block surfaces for what players build: one metre of wall per repeat (kit pieces scale
+ *  their UVs to their size, so boards and blocks stay the same size on every piece). */
+function buildTexture(kind) {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  let seed = kind === 'wood' ? 7 : 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  if (kind === 'wood') {
+    // Four boards a metre, each its own shade, with grain streaks and dark gaps between them.
+    for (let i = 0; i < 4; i++) {
+      const y = i * 64, k = 0.86 + rnd() * 0.22;
+      g.fillStyle = `rgb(${Math.round(128 * k)},${Math.round(90 * k)},${Math.round(56 * k)})`; g.fillRect(0, y, 256, 64);
+      for (let j = 0; j < 22; j++) {
+        g.strokeStyle = `rgba(${rnd() < 0.5 ? '60,38,20' : '170,128,86'},${0.12 + rnd() * 0.18})`; g.lineWidth = 1 + rnd() * 1.5;
+        const yy = y + 4 + rnd() * 56; g.beginPath(); g.moveTo(0, yy); g.bezierCurveTo(80, yy + rnd() * 6 - 3, 170, yy + rnd() * 6 - 3, 256, yy + rnd() * 4 - 2); g.stroke();
+      }
+      g.fillStyle = 'rgba(35,22,12,0.85)'; g.fillRect(0, y, 256, 3);
+      const nx = rnd() * 256; g.fillStyle = 'rgba(40,26,14,0.55)'; g.fillRect(nx, y + 3, 3, 61);   // a board end
+      for (const ny of [y + 16, y + 48]) { g.fillStyle = 'rgba(50,50,50,0.8)'; g.fillRect(nx + 8, ny, 3, 3); }   // nails
+    }
+  } else {
+    // Blocks: three rows a metre, staggered, with mortar between.
+    g.fillStyle = '#b9b5ac'; g.fillRect(0, 0, 256, 256);
+    for (let r = 0; r < 3; r++) {
+      const off = r % 2 ? 64 : 0;
+      for (let q = -1; q < 3; q++) {
+        const x = q * 128 + off, y = r * 85.33, k = 0.78 + rnd() * 0.24;
+        g.fillStyle = `rgb(${Math.round(132 * k)},${Math.round(130 * k)},${Math.round(124 * k)})`;
+        g.fillRect(x + 3, y + 3, 122, 79.33);
+        for (let j = 0; j < 60; j++) { g.fillStyle = `rgba(${rnd() < 0.5 ? '70,70,68' : '200,198,190'},0.18)`; g.fillRect(x + 3 + rnd() * 120, y + 3 + rnd() * 77, 2 + rnd() * 3, 2 + rnd() * 3); }
+      }
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
+  return t;
+}
 const STRUCT_MATS = {
   frame: new THREE.MeshStandardMaterial({ color: 0x9b7a52, transparent: true, opacity: 0.55, roughness: 1 }),
-  wood: new THREE.MeshStandardMaterial({ color: 0x7a5533, roughness: 0.95 }),
-  stone: new THREE.MeshStandardMaterial({ color: 0x7d7c78, roughness: 1, flatShading: true }),
+  wood: new THREE.MeshStandardMaterial({ color: 0xffffff, map: buildTexture('wood'), roughness: 0.92 }),
+  stone: new THREE.MeshStandardMaterial({ color: 0xffffff, map: buildTexture('stone'), roughness: 0.97 }),
   charge: new THREE.MeshStandardMaterial({ color: 0xff2a2a, emissive: 0x880000 }),
 };
+/** The boxes a house-kit piece is drawn with (absolute): [box, bottom, top, leaf?]. Stairs as steps. */
+function kitDrawBoxes(st) {
+  if (st.type === 'stairs') {
+    const sb = structureBoxes(st)[0], r = sb.ramp, land = r.land || 0, n = Math.max(4, Math.ceil(r.rise / 0.3)), dep = (r.len - land) / n, out = [];
+    const span = (a0, a1) => { const lo = Math.min(a0, a1), hi = Math.max(a0, a1); return r.ax === 'x' ? { minX: lo, maxX: hi, minZ: sb.minZ, maxZ: sb.maxZ } : { minX: sb.minX, maxX: sb.maxX, minZ: lo, maxZ: hi }; };
+    if (land) out.push([span(r.lo, r.lo + r.s * land), sb.y0, r.base + 0.03]);   // the landing at the foot
+    for (let i = 0; i < n; i++) {
+      const a0 = r.lo + r.s * (land + i * dep), a1 = a0 + r.s * dep, lo = Math.min(a0, a1), hi = Math.max(a0, a1);
+      out.push([r.ax === 'x' ? { minX: lo, maxX: hi, minZ: sb.minZ, maxZ: sb.maxZ } : { minX: sb.minX, maxX: sb.maxX, minZ: lo, maxZ: hi }, sb.y0, r.base + r.rise * (i + 1) / n]);
+    }
+    return out;
+  }
+  return structureBoxes({ ...st, open: false }).map((q) => [q, q.y0, q.y0 + q.h, !!q.leaf]);
+}
+function addKitBox(g, q, y0, y1, mat, ox, oy, oz) {
+  const w = q.maxX - q.minX, h = Math.max(0.02, y1 - y0), d = q.maxZ - q.minZ;
+  const geo = new THREE.BoxGeometry(w, h, d);
+  // UVs in metres (world-anchored along each face), so planks and blocks line up from piece to piece.
+  const uv = geo.attributes.uv, cx = (q.minX + q.maxX) / 2, cz = (q.minZ + q.maxZ) / 2;
+  const faces = [[d, h, -cz], [d, h, cz], [w, d, cx], [w, d, cx], [w, h, cx], [w, h, -cx]];   // +x, -x, +y, -y, +z, -z
+  for (let f = 0; f < 6; f++) for (let k = 0; k < 4; k++) {
+    const i = f * 4 + k, [fu, fv, du] = faces[f];
+    uv.setXY(i, uv.getX(i) * fu + du, uv.getY(i) * fv + (f === 2 || f === 3 ? 0 : y0));
+  }
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set((q.minX + q.maxX) / 2 - ox, (y0 + y1) / 2 - oy, (q.minZ + q.maxZ) / 2 - oz);
+  g.add(m);
+  return m;
+}
 function structMesh(st) {
   const def = PIECES[st.type], stage = def.stages[st.stage];
   const b = pieceBox(st.type, st.x, st.z, st.ang !== undefined ? 0 : st.rot, st.y0);   // turned ones are built square, then turned
@@ -5180,6 +5248,14 @@ function structMesh(st) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(alongX ? long : 0.12, 0.12, alongX ? 0.12 : long), mat);
       rail.position.y = y;
       g.add(rail);
+    }
+  } else if (isKitPiece(st.type) && st.type !== 'gate' && st.ang === undefined) {
+    // House kit: walls, window walls, door walls, floors (with a stairwell over stairs) and steps.
+    let leafMat = null;
+    for (const [q, y0, y1, leaf] of kitDrawBoxes(st)) {
+      if (leaf && !leafMat) { leafMat = mat.clone(); leafMat.color.multiplyScalar(stage.material === 'stone' ? 0.62 : 0.78); if (stage.material === 'stone') { leafMat.metalness = 0.5; leafMat.roughness = 0.5; } }
+      const m = addKitBox(g, q, y0, y1, leaf ? leafMat : mat, st.x, b.y0, st.z);
+      if (leaf) { m.visible = !st.open; g.userData.panel = m; }
     }
   } else if (def.farm) {
     // Tilled soil with crop rows that grow as the crop does.
@@ -5299,7 +5375,7 @@ function syncStructs(list) {
   const seen = new Set();
   for (const st of list) {
     seen.add(st.id);
-    const key = `${st.stage}|${st.crop || ''}|${(st.grow || 0) >= 1 ? 'ripe' : Math.floor((st.grow || 0) * 4)}|${st.rotten || 0}|${st.ru || 0}`;
+    const key = `${st.stage}|${st.h || ''}|${st.rise || ''}|${st.hole ? st.hole.join() : ''}|${st.crop || ''}|${(st.grow || 0) >= 1 ? 'ripe' : Math.floor((st.grow || 0) * 4)}|${st.rotten || 0}|${st.ru || 0}`;
     let v = structVis.get(st.id);
     if (v && v.key !== key) { scene.remove(v.mesh); v = null; }
     if (!v) {
@@ -5485,10 +5561,12 @@ function toggleBuild() {
   build.on = !build.on;
   $('buildbar').hidden = !build.on;
   document.body.classList.toggle('building', build.on);
-  if (build.on) toast(`Build mode: aim and place. Frames are cheap; upgrade them (${glyph('E')}) to make them solid.`);
+  if (build.on) toast(`Build mode: walls snap together on a grid; four walls and a Floor / roof on top make a room. Frames are cheap: upgrade them (${glyph('E')}) to make them solid.`);
   else if (build.ghost) { scene.remove(build.ghost); build.ghost = null; }
   renderBuildBar();
 }
+/** Turn the piece: stairs turn all four ways (the way they climb); walls turn themselves to the grid line you aim at. */
+function rotateBuild() { build.rot = build.piece === 'stairs' ? (build.rot + 1) & 3 : build.rot ^ 1; }
 function cyclePiece(dir) {
   const keys = Object.keys(PIECES).filter((k) => !PIECES[k].auto);
   build.piece = keys[(keys.indexOf(build.piece) + dir + keys.length) % keys.length];
@@ -5510,6 +5588,7 @@ function renderBuildBar() {
 }
 const buildWorldClient = () => ({
   terrain: state.map.terrain, towns: state.map.towns, contacts: state.map.contacts, landingZones: state.map.landingZones,
+  structsNear: (x, z, r) => [...structVis.values()].map((sv) => sv.data).filter((st) => Math.abs(st.x - x) < r + 3 && Math.abs(st.z - z) < r + 3),
   solidsNear: (x, z, r) => {
     const out = solidsNear(x, z, r);
     for (const sv of structVis.values()) if (!structSolid(sv) && !PIECES[sv.data.type].explosive && Math.abs(sv.data.x - x) < r + 3 && Math.abs(sv.data.z - z) < r + 3) out.push(structBoxOf(sv.data));
@@ -5519,43 +5598,53 @@ const buildWorldClient = () => ({
 function updateBuildGhost() {
   if (!build.on || !state.me || state.me.dead) { if (build.ghost) build.ghost.visible = false; return; }
   const def = PIECES[build.piece];
-  const key = `${build.piece}:${build.rot}`;
-  if (!build.ghost || build.ghost.userData.key !== key) {
-    if (build.ghost) scene.remove(build.ghost);
-    const b = pieceBox(build.piece, 0, 0, build.rot);
-    build.ghost = new THREE.Mesh(new THREE.BoxGeometry(b.maxX - b.minX, b.h, b.maxZ - b.minZ), new THREE.MeshBasicMaterial({ color: 0x5fd35f, transparent: true, opacity: 0.4, depthWrite: false }));
-    build.ghost.userData.key = key;
-    scene.add(build.ghost);
-  }
-  // Aim point, pulled back to build reach and snapped to a 0.5 m grid.
+  // Aim point, pulled back to build reach. House-kit pieces snap to the 4 m grid (planPiece), the
+  // rest to a 0.5 m one.
   const p = aimPoint();
   let dx = p.x - state.x, dz = p.z - state.z;
   const d = Math.hypot(dx, dz), reach = def.explosive ? 1.8 : BUILD.reach - 0.5;
   if (d > reach) { dx *= reach / d; dz *= reach / d; }
-  build.x = Math.round((state.x + dx) * 2) / 2;
-  build.z = Math.round((state.z + dz) * 2) / 2;
-  let problem;
+  let ax = state.x + dx, az = state.z + dz;
+  if (!isKitPiece(build.piece)) { ax = Math.round(ax * 2) / 2; az = Math.round(az * 2) / 2; }
+  let problem, plan;
   if (def.explosive) {
+    build.x = ax; build.z = az;
     const near = [...structVis.values()].some((sv) => { const b = structBoxOf(sv.data); return Math.hypot(Math.max(b.minX - build.x, 0, build.x - b.maxX), Math.max(b.minZ - build.z, 0, build.z - b.maxZ)) < 1.6; })
       || [...state.houseState.keys()].some((id) => { const dd = state.map.houses[id].door; return Math.hypot(Math.max(dd.minX - build.x, 0, build.x - dd.maxX), Math.max(dd.minZ - build.z, 0, build.z - dd.maxZ)) < 1.6; });
     problem = near ? null : 'Place it against a wall, gate or door';
-  } else problem = placementProblem(buildWorldClient(), build.piece, build.x, build.z, build.rot, state);
+    const y = ground(ax, az) - 0.15;
+    plan = { x: ax, z: az, rot: 0, y0: +y.toFixed(2) };
+  } else {
+    plan = planPiece(buildWorldClient(), build.piece, ax, az, build.rot, { x: state.x, z: state.z, y: myY() });
+    problem = plan.problem;
+    build.x = plan.x; build.z = plan.z;
+  }
   build.ok = !problem;
   build.problem = problem;
+  const key = `${build.piece}|${plan.x}|${plan.z}|${plan.rot}|${plan.y0}|${plan.h || ''}|${plan.rise || ''}|${plan.hole || ''}`;
+  if (!build.ghost || build.ghost.userData.key !== key) {
+    if (build.ghost) { scene.remove(build.ghost); build.ghost.traverse((o) => o.geometry?.dispose()); }
+    const g = new THREE.Group(), mat = build.ghostMat || (build.ghostMat = new THREE.MeshBasicMaterial({ color: 0x5fd35f, transparent: true, opacity: 0.4, depthWrite: false }));
+    const st = { type: build.piece, x: plan.x, z: plan.z, rot: plan.rot, y0: plan.y0, stage: 0, ...(plan.h ? { h: plan.h } : {}), ...(plan.rise ? { base: plan.base, rise: plan.rise } : {}), ...(plan.hole ? { hole: plan.hole } : {}) };
+    const boxes = isKitPiece(build.piece) && build.piece !== 'gate' ? kitDrawBoxes(st) : [[structureBox(st), plan.y0, plan.y0 + (plan.h || def.size[2])]];
+    for (const [q, y0, y1] of boxes) addKitBox(g, q, y0, y1, mat, 0, 0, 0);
+    g.userData.key = key;
+    build.ghost = g;
+    scene.add(g);
+  }
   build.ghost.visible = true;
-  build.ghost.material.color.setHex(build.ok ? 0x5fd35f : 0xff4040);
-  const b = pieceBox(build.piece, build.x, build.z, build.rot);
-  const gy = Math.min(...[[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].map(([a, c]) => ground(a, c)));
-  build.ghost.position.set(build.x, gy + b.h / 2, build.z);
+  build.ghostMat.color.setHex(build.ok ? 0x5fd35f : 0xff4040);
 }
 function placePiece() {
   if (!build.ok) { toast(build.problem || 'Can\'t build there'); return; }
   send({ t: 'build', piece: build.piece, x: build.x, z: build.z, rot: build.rot });
 }
+/** Is a structure on the storey you're on (not the floor above or the room below)? */
+function sameStorey(st) { const b = structBoxOf(st), fy = myY(); return !(fy > b.y0 + b.h + 0.6 || fy + 2.2 < b.y0); }
 function dismantleAimed() {
   let best = null, bd = 4;
   for (const sv of structVis.values()) {
-    if (!sv.data.mine) continue;
+    if (!sv.data.mine || !sameStorey(sv.data)) continue;
     const b = structBoxOf(sv.data);
     const d = Math.hypot(Math.max(b.minX - state.x, 0, state.x - b.maxX), Math.max(b.minZ - state.z, 0, state.z - b.maxZ));
     if (d < bd) { bd = d; best = sv.data; }

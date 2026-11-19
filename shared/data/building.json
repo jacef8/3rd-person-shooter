@@ -71,12 +71,12 @@
   "pieces": {
     "wall": {
       "name": "Wall",
+      "key": "1",
       "size": [
         4,
         0.4,
         3
       ],
-      "key": "1",
       "stages": [
         {
           "name": "Wall frame",
@@ -105,14 +105,149 @@
         }
       ]
     },
-    "gate": {
-      "name": "Gate",
+    "window": {
+      "name": "Window wall",
+      "key": "2",
+      "_about": "A wall with a window you can see and shoot through. Snaps to the same grid as walls.",
       "size": [
         4,
         0.4,
         3
       ],
-      "key": "2",
+      "stages": [
+        {
+          "name": "Window frame",
+          "cost": {
+            "wood": 10
+          },
+          "hp": 300,
+          "material": "frame"
+        },
+        {
+          "name": "Wooden window wall",
+          "cost": {
+            "wood": 15
+          },
+          "hp": 1300,
+          "material": "wood"
+        },
+        {
+          "name": "Stone window wall",
+          "cost": {
+            "stone": 18,
+            "salvage": 10
+          },
+          "hp": 3600,
+          "material": "stone"
+        }
+      ]
+    },
+    "doorway": {
+      "name": "Door wall",
+      "key": "3",
+      "door": true,
+      "_about": "A wall with a door in it. Only you and your crew can open it (E). Upgrade the frame to get the door.",
+      "size": [
+        4,
+        0.4,
+        3
+      ],
+      "stages": [
+        {
+          "name": "Doorway frame",
+          "cost": {
+            "wood": 10
+          },
+          "hp": 300,
+          "material": "frame"
+        },
+        {
+          "name": "Wooden door wall",
+          "cost": {
+            "wood": 15,
+            "salvage": 5
+          },
+          "hp": 1300,
+          "material": "wood"
+        },
+        {
+          "name": "Stone wall, steel door",
+          "cost": {
+            "stone": 15,
+            "salvage": 20,
+            "parts": 5
+          },
+          "hp": 3500,
+          "material": "stone"
+        }
+      ]
+    },
+    "floor": {
+      "name": "Floor / roof",
+      "key": "4",
+      "_about": "A 13 ft square. On top of your walls it's a roof (and the floor of the next storey); out on open ground it's a foundation.",
+      "size": [
+        4,
+        4,
+        0.25
+      ],
+      "stages": [
+        {
+          "name": "Wooden floor",
+          "cost": {
+            "wood": 12
+          },
+          "hp": 1500,
+          "material": "wood"
+        },
+        {
+          "name": "Stone floor",
+          "cost": {
+            "stone": 16,
+            "salvage": 8
+          },
+          "hp": 4000,
+          "material": "stone"
+        }
+      ]
+    },
+    "stairs": {
+      "name": "Stairs",
+      "key": "5",
+      "_about": "Up to the floor above (it leaves a stairwell open for them) or onto a roof next door. Rotate to turn which way they climb.",
+      "size": [
+        4,
+        1.4,
+        3.25
+      ],
+      "stages": [
+        {
+          "name": "Wooden stairs",
+          "cost": {
+            "wood": 15
+          },
+          "hp": 1200,
+          "material": "wood"
+        },
+        {
+          "name": "Stone stairs",
+          "cost": {
+            "stone": 14,
+            "salvage": 6
+          },
+          "hp": 3000,
+          "material": "stone"
+        }
+      ]
+    },
+    "gate": {
+      "name": "Gate",
+      "key": "6",
+      "size": [
+        4,
+        0.4,
+        3
+      ],
       "door": true,
       "stages": [
         {
@@ -145,12 +280,12 @@
     },
     "barricade": {
       "name": "Barricade",
+      "key": "7",
       "size": [
         2.4,
         0.6,
         1.1
       ],
-      "key": "3",
       "stages": [
         {
           "name": "Barricade",
@@ -164,12 +299,12 @@
     },
     "crate": {
       "name": "Stash crate",
+      "key": "8",
       "size": [
         1.2,
         0.8,
         0.9
       ],
-      "key": "4",
       "container": true,
       "stages": [
         {
@@ -195,12 +330,12 @@
     },
     "flag": {
       "name": "Claim flag",
+      "key": "9",
       "size": [
         1.2,
         1.2,
         4
       ],
-      "key": "6",
       "container": true,
       "claim": true,
       "stages": [
@@ -222,7 +357,6 @@
         0.4,
         0.3
       ],
-      "key": "5",
       "explosive": true,
       "stages": [
         {
@@ -289,7 +423,6 @@
         3,
         0.35
       ],
-      "key": "7",
       "farm": true,
       "_about": "Plant a seed packet (E) and the crop that suits the ground grows in real time.",
       "stages": [
@@ -310,7 +443,6 @@
         1.2,
         0.5
       ],
-      "key": "8",
       "cook": true,
       "_about": "Cook raw fish and meat into meals (E).",
       "stages": [
@@ -529,6 +661,7 @@
     "hideoutLevels": [
       8,
       16
-    ]
+    ],
+    "wallH": 3
   }
 }

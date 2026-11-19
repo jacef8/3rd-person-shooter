@@ -1579,10 +1579,19 @@ export function circleOverlapsBox(x, z, r, b) {
 }
 
 /** Does a box block a character standing at height y? (Overhead roofs/canopies and flat jetties don't.) */
-export function blocksAt(b, y) {
+/** The surface height of a ramp box (stairs) at (x, z): level for `land` metres at the low end (you
+ *  can step on from the side there, even with the stairs against a wall), then up by its rise. */
+export function rampTop(b, x, z) {
+  const r = b.ramp, c = r.ax === 'x' ? x : z, land = r.land || 0;
+  return r.base + r.rise * Math.max(0, Math.min(1, ((c - r.lo) * r.s - land) / (r.len - land)));
+}
+export function blocksAt(b, y, x, z) {
   if (b.gone) return false;
   if (y === undefined) return true;
   const y0 = b.y0 || 0;
+  // A ramp (stairs) only where its surface is too far above your feet to step onto: its high side
+  // is a wall to someone beside it, its low end a step.
+  if (b.ramp && x !== undefined) return y0 < y + 1.2 && rampTop(b, Math.max(b.minX, Math.min(x, b.maxX)), Math.max(b.minZ, Math.min(z, b.maxZ))) > y + 0.35;
   // Only what's at body height pushes you aside. Something overhead (a ceiling above a bed you
   // jumped on, a shelf at head height) doesn't: being shoved out from under a ceiling that covers
   // the whole building used to carry people out through its wall.
@@ -1594,7 +1603,7 @@ export function resolveCircle(x, z, r, solids, y) {
   for (let iter = 0; iter < 3; iter++) {
     let moved = false;
     for (const b of solids) {
-      if (b.gone || (y !== undefined && !blocksAt(b, y))) continue;
+      if (b.gone || (y !== undefined && !blocksAt(b, y, x, z))) continue;
       if (b.ang !== undefined) {
         // A turned box: push out in its own frame, then turn the answer back.
         const [lx, lz] = toBox(b, x, z);
@@ -1654,8 +1663,10 @@ export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift 
       const ny = stand(p.x, p.z, y, lift + 0.45);   // a step up, or (in a jump) onto whatever you've cleared
       const run = Math.hypot(p.x - x, p.z - z);
       // Too steep to climb stops you, but a step up onto something standing on the ground (a bridge deck
-      // where two meet, a crate, a low wall) doesn't: a curb's height on foot, as high as you've jumped in a jump.
-      const curb = ny - y <= 0.5 + lift && ny > terrain.height(p.x, p.z) + 0.3;   // only onto a deck or a top, never up a hillside
+      // where two meet, a crate, a low wall, the side of a staircase) doesn't: a curb's height on foot,
+      // as high as you've jumped in a jump. Only onto a deck or a top, never up a hillside.
+      const th = terrain.height(p.x, p.z);
+      const curb = ny - y <= 0.5 + lift && (ny > th + 0.3 || (ny > th + 0.02 && ny - y <= 0.35 && solids && platformTop(solids, p.x, p.z, ny + 0.01) >= ny - 0.01));
       if (ny < DEEP_WATER || (run > 1e-6 && !curb && (ny - y) / run > MAX_STEP_SLOPE)) break;
       y = ny;
     }
@@ -1680,8 +1691,9 @@ export function platformTop(solids, x, z, maxTop) {
   let best = -Infinity;
   for (const b of solids) {
     if (!climbable(b) || !wideTop(b)) continue;
-    const top = (b.y0 || 0) + b.h;
-    if (top > maxTop || top <= best || !insideTop(b, x, z, 0.05)) continue;
+    if (!insideTop(b, x, z, b.structId ? -0.06 : 0.05)) continue;   // (built pieces right to the edge: floors, stairs and roofs butt up against each other)
+    const top = b.ramp ? rampTop(b, x, z) : (b.y0 || 0) + b.h;
+    if (top > maxTop || top <= best) continue;
     best = top;
   }
   return best;
@@ -1697,8 +1709,8 @@ export function climbAhead(solids, x, z, dx, dz, y) {
   for (const d of [0.35, 0.6, CLIMB.reach]) {
     const px = x + dx * d, pz = z + dz * d;
     for (const b of solids) {
-      if (b.gone || !blocksAt(b, y) || !circleOverlapsBox(px, pz, 0.25, b)) continue;
-      const h = (b.y0 || 0) + b.h - y;
+      if (b.gone || !blocksAt(b, y, px, pz) || !circleOverlapsBox(px, pz, 0.25, b)) continue;
+      const h = (b.ramp ? rampTop(b, Math.max(b.minX, Math.min(px, b.maxX)), Math.max(b.minZ, Math.min(pz, b.maxZ))) : (b.y0 || 0) + b.h) - y;
       if (!climbable(b) || h > CLIMB.max) return best;   // a wall too high, or one you can't climb: no
       if (h > CLIMB.min && h > best) best = h;
     }

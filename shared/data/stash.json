@@ -38,7 +38,7 @@
     "doorMulPerLevel": 0.12,
     "radiusBase": 15,
     "radiusPerLevel": 5,
-    "buildCapBase": 30,
+    "buildCapBase": 40,
     "buildCapPerLevel": 10
   },
   "homeLevelText": [

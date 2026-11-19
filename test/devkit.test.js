@@ -1,6 +1,6 @@
-// The testing kit (DEV_KIT, on while the game is in development): a brand-new player gets one of every
-// gun and armor, flares, charges, tools, every unlock, and can change scopes away from home; it
-// refills after a respawn.
+// The testing kit (DEV_KIT): the developer's own test character (named "jaceisabadman") gets one of
+// every gun and armor, flares, charges, tools, every unlock, and can change scopes away from home; it
+// refills after a respawn. Anyone else starts the normal way.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -30,7 +30,18 @@ test('testing kit: every gun, armor, flare, charge and tool, every unlock, gunsm
   ws.on('message', (raw) => { const m = JSON.parse(raw); msgs.push(m); if (m.t === 'you') you = m; if (m.t === 'welcome') welcome = m; });
   await new Promise((r) => ws.on('open', r));
   const send = (m) => ws.send(JSON.stringify(m));
-  send({ t: 'join', name: 'Tester' });
+  // An ordinary player starts the normal way: no kit.
+  const plain = new WebSocket(`ws://localhost:${port}`);
+  let plainYou = null, plainWelcome = null;
+  plain.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'you') plainYou = m; if (m.t === 'welcome') plainWelcome = m; });
+  await new Promise((r) => plain.on('open', r));
+  plain.send(JSON.stringify({ t: 'join', name: 'Tester' }));
+  await until(() => plainYou && plainWelcome);
+  assert.equal(plainWelcome.devKit, false);
+  assert.ok(levelFromXp(plainYou.xp) < 3 && plainYou.wood < 50, 'a new player starts at the bottom');
+  plain.close();
+
+  send({ t: 'join', name: 'JaceIsABadMan' });
   await until(() => you && welcome);
   assert.equal(welcome.devKit, true);
   assert.ok(welcome.packSize >= 30);

@@ -35,7 +35,7 @@ import {
   levelFromXp, xpForLevel, MAX_LEVEL, unlocksAt, XP, ARCHETYPES, MODELS, modelOf, gunLabel, PARTS, PAINTS, ARMORS, SLOTS, GADGETS, FIELD_PERKS,
   UPGRADES, CONTRACT_TYPES, SUPPLY_DROP_CONTENTS, TERMINAL_REWARD, TERMINAL_COOLDOWN_MS,
 } from '../shared/items.js';
-import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, investedCost, placementProblem } from '../shared/building.js';
+import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, structureBoxes, doorLeaf, investedCost, planPiece } from '../shared/building.js';
 import { CLAIM, HOME_XP, homeLevel, homePerks, RAIDS, windowOpen, windowText } from '../shared/claims.js';
 import { EXTRACT } from '../shared/extraction.js';
 import { distText, feet } from '../shared/units.js';
@@ -61,12 +61,15 @@ const SNAPSHOT_EVERY = 2;              // 10 Hz
 const INTEREST = 320;                  // metres: what each client is told about
 const AMBIENT_BOTS = Number(process.env.BOTS ?? 12);   // roaming rogues kept around each active player (in squads)
 const BOT_ACTIVE_RANGE = 450;
-// Testing kit (on while the game is in development; set DEV_KIT=0 to turn it off): everyone gets one
-// of every gun and armor, flares, charges, tools, top level (every scope, part, paint and grenade
-// unlocked), plenty of cash and materials, a bigger backpack, and the gunsmith anywhere. It refills
-// on every join and respawn.
+// Testing kit, for the developer's own test character only (the player named KIT_NAME; set
+// DEV_KIT=0 to turn it off altogether): one of every gun and armor, flares, charges, tools, top
+// level (every scope, part, paint and grenade unlocked), plenty of cash and materials, a bigger
+// backpack, and the gunsmith anywhere. It refills on every join and respawn. Everyone else starts
+// the normal way.
 const DEV_KIT = process.env.DEV_KIT !== '0';
-const PACK_SIZE = DEV_KIT ? 80 : COMBAT.packSize;
+const KIT_NAME = (process.env.DEV_KIT_NAME || 'jaceisabadman').toLowerCase();
+const kitPlayer = (p) => DEV_KIT && !!p && !p.isBot && String(p.name || '').toLowerCase().replace(/\s+/g, '') === KIT_NAME;
+const packSize = (p) => (kitPlayer(p) ? 80 : COMBAT.packSize);
 const DOOR_HP = Number(process.env.DOOR_HP || COMBAT.doorHp);
 const LOOT_RESPAWN_MS = ACTIVITIES.loot.respawnMs;
 const BAG_LIFETIME_MS = COMBAT.bagLifetimeMs;
@@ -369,9 +372,11 @@ function structsNear(x, z, r) {
 const stageDef = (s) => PIECES[s.type].stages[s.stage];
 function structBox(s) { return structureBox(s, { type: 'struct', structId: s.id }); }
 /** Frames are walk-through scaffolding; open gates let you pass; charges aren't solid. */
-function structIsSolid(s) { return stageDef(s).material !== 'frame' && stageDef(s).material !== 'wire' && !PIECES[s.type].explosive && !(PIECES[s.type].door && s.open); }
+function structIsSolid(s) { return stageDef(s).material !== 'frame' && stageDef(s).material !== 'wire' && !PIECES[s.type].explosive && !(PIECES[s.type].door && s.open && s.type !== 'doorway'); }
+/** What a structure blocks: a window wall's window and an open door wall's doorway let you through. */
+const structSolidBoxes = (s) => structureBoxes(s, { type: 'struct', structId: s.id });
 function structSolids(x, z, r, out = []) {
-  for (const s of structsNear(x, z, r)) if (structIsSolid(s)) out.push(structBox(s));
+  for (const s of structsNear(x, z, r)) if (structIsSolid(s)) out.push(...structSolidBoxes(s));
   return out;
 }
 function canManage(p, s) { return s.owner === p.token || tokenInSquadWith(p, s.owner); }
@@ -401,7 +406,7 @@ function wearTool(p, tool, n) {
 }
 /** The testing kit: top up whatever is missing (never takes anything away). */
 function devKit(p) {
-  if (!DEV_KIT) return;
+  if (!kitPlayer(p)) return;
   p.xp = Math.max(p.xp || 0, xpForLevel(MAX_LEVEL));
   p.rockets = Math.max(p.rockets || 0, COMBAT.rocket.devKit);
   const field = new Set(p.field || []);
@@ -428,7 +433,7 @@ function devKit(p) {
   for (const t of Object.keys(TOOLS)) upTo(1, (i) => i.kind === 'tool' && i.tool === t, () => makeTool(t));
   if (!claimOf(p)) upTo(1, (i) => i.kind === 'marker', makeMarker);
   for (const w of all()) if (w.kind === 'weapon') p.mags[w.id] = Math.max(p.mags[w.id] ?? 0, weaponStats(w).mag);
-  if (inv.pack.length > PACK_SIZE) inv.pack.length = PACK_SIZE;
+  if (inv.pack.length > packSize(p)) inv.pack.length = packSize(p);
   p.armor = Math.max(p.armor || 0, maxArmor(p));
 }
 function newCharacter(name) {
@@ -1085,7 +1090,7 @@ function finishHotCrate(p, id) {
   const got = [Math.random() < COMBAT.rocket.crateChance ? makeWeapon('launcher') : rareWeapon(), ...(Math.random() < HZ.crate.armorChance ? [makeArmor('heavy')] : [])];
   const box = { id: uid('lb'), kind: 'lockbox', name: 'Hot-zone lockbox', contents: { cash: rnd(HZ.crate.cash), tech: rnd(HZ.crate.tech), intel: rnd(HZ.crate.intel), parts: rnd(HZ.crate.parts), ...(got[0].archetype === 'launcher' ? { rockets: 3 } : {}) } };
   got.push(box);
-  if (p.inv.pack.length + got.length > PACK_SIZE) return send(p.ws, { t: 'hack', done: true, text: `Make room: the crate holds ${got.length} things` });
+  if (p.inv.pack.length + got.length > packSize(p)) return send(p.ws, { t: 'hack', done: true, text: `Make room: the crate holds ${got.length} things` });
   c.opened = p.name;
   z.opened.set(p.token, (z.opened.get(p.token) || 0) + 1);
   for (const it of got) { it.hot = z.id; it.hotTier = 'crate'; p.inv.pack.push(it); }
@@ -1327,7 +1332,7 @@ function callHotDrop(p, flare) {
 function landHotDrop(tok, h, now) {
   const p = onlineByToken(tok);
   if (!p) return;
-  const refund = (why) => { if (p.inv.pack.length < PACK_SIZE) p.inv.pack.push(h.flare); toast(p, `${why} (flare back in your bag)`); dirty(p); };
+  const refund = (why) => { if (p.inv.pack.length < packSize(p)) p.inv.pack.push(h.flare); toast(p, `${why} (flare back in your bag)`); dirty(p); };
   if (p.dead || p.downed || Math.hypot(p.x - h.x, p.z - h.z) > 25) return refund('The helicopter couldn\'t find you');
   if (!hotZone?.open) return refund('The hot zone closed before the helicopter got there');
   if (now - (p.lastHit || 0) < 10_000) return refund('The pilot saw the shooting and turned back');
@@ -1602,7 +1607,7 @@ const makeFlare = () => ({ id: uid('fl'), kind: 'flare', name: 'Rescue flare' })
 function pawnTrade(p, b, msg) {
   if (msg.action === 'buy' && msg.item === 'rescueFlare') {
     if ((p.cash || 0) < FLARE.price) return toast(p, `A rescue flare is $${FLARE.price}. You have $${p.cash || 0}`), true;
-    if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full'), true;
+    if (p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full'), true;
     p.cash -= FLARE.price;
     p.inv.pack.push(makeFlare());
     toast(p, 'Bought a rescue flare. Fire it from your bag, out in the open.');
@@ -1611,7 +1616,7 @@ function pawnTrade(p, b, msg) {
   if (msg.action === 'buy' && (msg.item === 'launcher' || msg.item === 'rockets')) {
     const price = msg.item === 'launcher' ? COMBAT.rocket.launcherPrice : COMBAT.rocket.price;
     if ((p.cash || 0) < price) return toast(p, `That's $${price}. You have $${p.cash || 0}`), true;
-    if (msg.item === 'launcher' && p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full'), true;
+    if (msg.item === 'launcher' && p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full'), true;
     p.cash -= price;
     if (msg.item === 'launcher') { p.inv.pack.push(makeWeapon('launcher')); toast(p, 'Bought a rocket launcher. It fires rockets (Lamar sells them one at a time).'); }
     else { p.rockets = (p.rockets || 0) + 1; toast(p, `Bought a rocket (you carry ${p.rockets})`); }
@@ -1620,7 +1625,7 @@ function pawnTrade(p, b, msg) {
   }
   if (msg.action === 'buy' && msg.item === 'hotFlare') {
     if ((p.cash || 0) < HZ.hotDrop.price) return toast(p, `A hot-drop flare is $${HZ.hotDrop.price}. You have $${p.cash || 0}`), true;
-    if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full'), true;
+    if (p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full'), true;
     p.cash -= HZ.hotDrop.price;
     p.inv.pack.push(makeHotFlare());
     toast(p, 'Bought a hot-drop flare. Fire it from your bag, out in the open, while a hot zone is open.');
@@ -1631,7 +1636,7 @@ function pawnTrade(p, b, msg) {
     if (i < 0) return toast(p, 'Somebody bought that one already'), true;
     const it = stock[i], price = pawnPrice(it);
     if ((p.cash || 0) < price) return toast(p, `That costs $${price}. You have $${p.cash || 0}`), true;
-    if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full'), true;
+    if (p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full'), true;
     stock.splice(i, 1);
     p.cash -= price;
     p.inv.pack.push(it);
@@ -2272,7 +2277,7 @@ function takeHaul(p, msg) {
   const list = hauls.get(ct.id) || [];
   const job = list.find((j) => j.id === msg.id);
   if (!job) return toast(p, 'That job has been taken');
-  if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+  if (p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full');
   list.splice(list.indexOf(job), 1);
   p.inv.pack.push({ id: uid('cargo'), kind: 'cargo', name: `${job.label} → ${job.toTown}`, dest: job.to, destTown: job.toTown, pay: job.pay });
   toast(p, `Freight loaded: take it to ${job.toTown}'s trading post for $${job.pay}. No helicopters or fast travel with freight.`);
@@ -2391,7 +2396,7 @@ function playerTrade(p, msg) {
   if (msg.action === 'offer') {
     const res = {};
     for (const [k, v] of Object.entries(msg.res || {})) { const n = Math.floor(Number(v)); if (RESOURCES.includes(k) && n > 0) res[k] = Math.min(n, p[k] || 0); }
-    const items = [...new Set(Array.isArray(msg.items) ? msg.items : [])].filter((id) => p.inv.pack.some((i) => i.id === id && i.kind !== 'cargo')).slice(0, PACK_SIZE);
+    const items = [...new Set(Array.isArray(msg.items) ? msg.items : [])].filter((id) => p.inv.pack.some((i) => i.id === id && i.kind !== 'cargo')).slice(0, packSize(p));
     sess.offer[p.token] = { res, items };
     sess.ok = {};   // any change needs both to confirm again
     return tradePush(sess);
@@ -2404,7 +2409,7 @@ function playerTrade(p, msg) {
     const valid = (who, o) => Object.entries(o.res).every(([k, v]) => (who[k] || 0) >= v) && o.items.every((id) => who.inv.pack.some((i) => i.id === id));
     const oa = sess.offer[sess.a], ob = sess.offer[sess.b];
     if (!valid(A, oa) || !valid(B, ob)) return tradeClose(sess, 'Something changed — trade cancelled');
-    if (A.inv.pack.length - oa.items.length + ob.items.length > PACK_SIZE || B.inv.pack.length - ob.items.length + oa.items.length > PACK_SIZE) return tradeClose(sess, 'Not enough backpack space');
+    if (A.inv.pack.length - oa.items.length + ob.items.length > packSize(A) || B.inv.pack.length - ob.items.length + oa.items.length > packSize(B)) return tradeClose(sess, 'Not enough backpack space');
     const move = (from, to, o) => {
       for (const [k, v] of Object.entries(o.res)) { from[k] -= v; to[k] = (to[k] || 0) + v; }
       for (const id of o.items) { const i = from.inv.pack.findIndex((x) => x.id === id); to.inv.pack.push(from.inv.pack.splice(i, 1)[0]); }
@@ -2950,7 +2955,7 @@ function tradeNpc(p, msg) {
     if (stock && stock.n < 1) return toast(p, 'Sold out for now. The camp restocks through the day.');
     if (stock) stock.n -= 1;
     const sh = own(ECONOMY.shop, it.id);
-    if (sh && (sh.kind === 'tool' || sh.kind === 'medkit') && p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+    if (sh && (sh.kind === 'tool' || sh.kind === 'medkit') && p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full');
     p.cash -= it.price;
     if (!sh || sh.kind === 'good') p[it.id] = (p[it.id] || 0) + (it.qty || 1);
     else if (sh.kind === 'tool') p.inv.pack.push(makeTool(it.id));
@@ -2989,7 +2994,7 @@ function trade(p, msg) {
     if (!it || msg.item.startsWith('_')) return;
     const price = tradeView(msg.contactId).shop.find((x) => x.id === msg.item).price;
     if ((p.cash || 0) < price) return toast(p, `That costs $${price} — you have $${p.cash || 0}`);
-    if ((it.kind === 'tool' || it.kind === 'medkit') && p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+    if ((it.kind === 'tool' || it.kind === 'medkit') && p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full');
     p.cash -= price;
     if (it.kind === 'good') p[msg.item] = (p[msg.item] || 0) + (it.qty || 1);
     else if (it.kind === 'tool') p.inv.pack.push(makeTool(msg.item));
@@ -3481,8 +3486,8 @@ function tickHacks(now) {
       const { comms, ...res } = SUPPLY_DROP_CONTENTS;
       for (const [k, v] of Object.entries(res)) p[k] += v;
       p.comms += comms;
-      if (Math.random() < FLARE.dropChance && p.inv.pack.length < PACK_SIZE) { p.inv.pack.push(makeFlare()); toast(p, 'There was a rescue flare in the drop!'); }
-      if (Math.random() < HZ.hotDrop.dropChance && p.inv.pack.length < PACK_SIZE) { p.inv.pack.push(makeHotFlare()); toast(p, 'There was a hot-drop flare in the drop!'); }
+      if (Math.random() < FLARE.dropChance && p.inv.pack.length < packSize(p)) { p.inv.pack.push(makeFlare()); toast(p, 'There was a rescue flare in the drop!'); }
+      if (Math.random() < HZ.hotDrop.dropChance && p.inv.pack.length < packSize(p)) { p.inv.pack.push(makeHotFlare()); toast(p, 'There was a hot-drop flare in the drop!'); }
       if (Math.random() < COMBAT.rocket.dropChance) { const n = 1 + Math.floor(Math.random() * 2); p.rockets = (p.rockets || 0) + n; toast(p, `There ${n === 1 ? 'was a rocket' : `were ${n} rockets`} in the drop!`); }
       award(p, XP.supplyDrop, 'Supply drop secured', true);
       feed(`${p.name} secured a supply drop`);
@@ -3491,7 +3496,7 @@ function tickHacks(now) {
     } else if (h.kind === 'crate') {
       const o = objectives.get(h.id);
       if (!o) continue;
-      if (p.inv.pack.length >= PACK_SIZE) { send(p.ws, { t: 'hack', done: true, text: 'Backpack full' }); continue; }
+      if (p.inv.pack.length >= packSize(p)) { send(p.ws, { t: 'hack', done: true, text: 'Backpack full' }); continue; }
       objectives.delete(h.id);
       p.inv.pack.push({ id: uid('pkg'), kind: 'package', name: 'Recovered supply crate', contractId: o.contractId });
       send(p.ws, { t: 'hack', done: true, text: 'Crate recovered — deliver it to any Contact' });
@@ -3693,8 +3698,10 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
   if (ground < best) { best = ground; kind = 'world'; }
   for (const s of structsNear(ox + dx * range / 2, oz + dz * range / 2, range / 2 + 3)) {
     if (!structIsSolid(s)) continue;
-    const t = rayHitBox(structBox(s), ox, oy, oz, dx, dy, dz);
-    if (t < best) { best = t; target = s; kind = 'struct'; }
+    for (const sb of structSolidBoxes(s)) {
+      const t = rayHitBox(sb, ox, oy, oz, dx, dy, dz);
+      if (t < best) { best = t; target = s; kind = 'struct'; }
+    }
   }
   for (const h of map.houses) {
     if (Math.abs(h.x - ox) > range + 8 || Math.abs(h.z - oz) > range + 8) continue;
@@ -4062,7 +4069,7 @@ function takeLoot(p, l, quiet = false) {
 }
 function addToPack(p, item) {
   if (RESOURCES.includes(item.kind)) { p[item.kind] += item.amount || 10; return true; }
-  if (p.inv.pack.length >= PACK_SIZE) return false;
+  if (p.inv.pack.length >= packSize(p)) return false;
   p.inv.pack.push(item);
   return true;
 }
@@ -4224,7 +4231,7 @@ function handleBuild(p, msg) {
   p.slow = null;
   const def = own(PIECES, msg.piece);
   if (!def) return;
-  const x = Number(msg.x), z = Number(msg.z), rot = msg.rot ? 1 : 0;
+  const x = Number(msg.x), z = Number(msg.z), rot = msg.piece === 'stairs' ? (Number(msg.rot) || 0) & 3 : msg.rot ? 1 : 0;
   if (!Number.isFinite(x) || !Number.isFinite(z)) return;
   if (def.explosive) {
     const idx = p.inv.pack.findIndex((i) => i.kind === 'charge');
@@ -4255,13 +4262,17 @@ function handleBuild(p, msg) {
   const cap = homePerks(myClaim ? homeLevel(myClaim.store.hxp) : 1).buildCap;
   const mine = [...structs.values()].filter((o) => o.owner === p.token).length;
   if (mine >= cap) return toast(p, `Build limit reached (${cap}) — level up your home for more`);
-  const problem = placementProblem(buildWorld, msg.piece, x, z, rot, p);
-  if (problem) return toast(p, problem);
+  const plan = planPiece({ ...buildWorld, structsNear: (sx, sz, r) => structsNear(sx, sz, r).map((s) => ({ ...s, mine: canManage(p, s) })) }, msg.piece, x, z, rot, { x: p.x, z: p.z, y: standing(p) });
+  if (plan.problem) return toast(p, plan.problem);
   const stage0 = def.stages[0];
   if (!payCarried(p, stage0.cost)) return toast(p, `Needs ${costText(stage0.cost)} (carried)`);
-  const b = pieceBox(msg.piece, x, z, rot);
-  const y0 = Math.min(...[[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].map(([a, c]) => terrain.height(a, c))) - 0.15;
-  const st = { id: 's' + crypto.randomBytes(5).toString('hex'), type: msg.piece, x, z, rot, y0, stage: 0, hp: stage0.hp, owner: p.token, ownerName: p.name, open: false, builtAt: Date.now() };
+  const st = { id: 's' + crypto.randomBytes(5).toString('hex'), type: msg.piece, x: plan.x, z: plan.z, rot: plan.rot, y0: plan.y0, stage: 0, hp: stage0.hp, owner: p.token, ownerName: p.name, open: false, builtAt: Date.now() };
+  for (const k of ['h', 'base', 'rise', 'hole', 'holeBy']) if (plan[k] !== undefined) st[k] = plan[k];
+  // Stairs up into a floor that's already there: open its stairwell.
+  if (plan.holeFloors) {
+    const sb = structureBox(st);
+    for (const id of plan.holeFloors) { const f = structs.get(id); if (f && !f.hole) { f.hole = [sb.minX, sb.minZ, sb.maxX, sb.maxZ]; f.holeBy = st.id; } }
+  }
   if (def.hideout) toast(p, 'Hideout built: stash goods here, come back here after a death, and fast travel here from home. It has no raid protection out here.');
   if (def.container) Object.assign(st, { items: [], ...Object.fromEntries(RESOURCES.map((r) => [r, 0])) });
   if (def.claim) {
@@ -4327,6 +4338,7 @@ function damageStruct(st, dmg, by) {
 }
 function removeStruct(st, destroyed) {
   indexStruct(st, false);
+  if (st.type === 'stairs') for (const f of structs.values()) if (f.holeBy === st.id) { delete f.hole; delete f.holeBy; }   // no stairs, no stairwell
   db.structures = db.structures.filter((o) => o !== st);
   // A claimed building's doors go with its stash locker.
   if (PIECES[st.type].claim && st.building != null) for (const d of [...structs.values()]) if (d.claimOf === st.id) removeStruct(d, false);
@@ -4419,7 +4431,7 @@ function craft(p, msg) {
   const store = craftStore(p);
   if (!store) return toast(p, 'Craft at your stash house or one of your crates');
   if (level(p) < def.level) return toast(p, `${def.name} needs level ${def.level}`);
-  if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+  if (p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full');
   if (!spend(p, def.cost, store)) return toast(p, `Needs ${costText(def.cost)}`);
   p.inv.pack.push(msg.item === 'charge' ? { id: uid('c'), kind: 'charge', name: 'Breach Charge' } : msg.item === 'marker' ? makeMarker() : makeTool(msg.item));
   toast(p, `Crafted ${def.name}`);
@@ -4450,7 +4462,13 @@ function nearestInteractable(p) {
   for (const d of drops.values()) consider(Math.hypot(d.x - p.x, d.z - p.z) - 0.6, { kind: 'drop', ref: d });
   if (hotZone?.open) for (const c of hotZone.crates) if (!c.opened) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.6, { kind: 'hotcrate', ref: c });
   for (const o of objectives.values()) if (o.owner === p.token) consider(Math.hypot(o.x - p.x, o.z - p.z) - 0.5, { kind: 'crate', ref: o });
-  for (const st of structsNear(p.x, p.z, 4)) if (!PIECES[st.type].explosive) consider(boxDist(structBox(st), p.x, p.z) + 0.3, { kind: 'struct', ref: st });
+  { const fy = standing(p);
+    for (const st of structsNear(p.x, p.z, 4)) {
+      if (PIECES[st.type].explosive) continue;
+      const b = structBox(st);
+      if (fy > b.y0 + b.h + 0.6 || fy + 2.2 < b.y0) continue;   // a storey up or down: not this one
+      consider(boxDist(b, p.x, p.z) + 0.3, { kind: 'struct', ref: st });
+    } }
   if (!best) {
     // Trees and rocks you can gather from (only when nothing else is in reach).
     for (const b of grid.near(p.x, p.z, 2.5)) {
@@ -4544,7 +4562,7 @@ function interact(p) {
   if (it.kind === 'drop') return startHack(p, 'drop', it.ref.id);
   if (it.kind === 'hotcrate') {
     if ((hotZone.opened.get(p.token) || 0) >= HZ.cratesPerPlayer) return toast(p, `You've opened ${HZ.cratesPerPlayer} crates in this zone: leave the rest for someone else`);
-    if (p.inv.pack.length + 3 > PACK_SIZE) return toast(p, 'Make room in your backpack first (a crate holds up to 3 things)');
+    if (p.inv.pack.length + 3 > packSize(p)) return toast(p, 'Make room in your backpack first (a crate holds up to 3 things)');
     startHack(p, 'hotcrate', it.ref.id, { ms: HZ_CRATE_MS });
     // The alarm: everyone near the zone sees where the crate is being opened.
     for (const o of players.values()) if (o !== p && !o.dead && !sameSquad(o, p) && Math.hypot(o.x - it.ref.x, o.z - it.ref.z) < HZ.alarmRange) send(o.ws, { t: 'alert', x: Math.round(it.ref.x), z: Math.round(it.ref.z), text: 'Hot crate alarm' });
@@ -4624,7 +4642,7 @@ function structInteract(p, st) {
       return send(p.ws, containerView(p, 'crate', st.id));
     }
     if (def.door && stage.material !== 'frame' && !msg_upgradeIntent(p)) {
-      if (st.open && [...players.values(), ...bots.values()].some((c) => !c.dead && boxDist(structBox(st), c.x, c.z) < 0.5)) return toast(p, 'Gateway blocked');
+      if (st.open && [...players.values(), ...bots.values()].some((c) => !c.dead && boxDist(doorLeaf(st), c.x, c.z) < 0.5)) return toast(p, 'Gateway blocked');
       st.open = !st.open;
       return;
     }
@@ -4804,7 +4822,7 @@ function spend(p, cost, store = claimOf(p)?.store || {}) {
   return true;
 }
 function gunsmithAction(p, msg) {
-  const anywhere = DEV_KIT && (msg.action === 'attach' || msg.action === 'paint');   // testing kit: parts and paint anywhere
+  const anywhere = kitPlayer(p) && (msg.action === 'attach' || msg.action === 'paint');   // testing kit: parts and paint anywhere
   if (!atOwnStash(p) && !anywhere) return toast(p, 'The gunsmith bench is at your stash house');
   if (msg.action === 'attach' || msg.action === 'paint') {
     const w = findOwnedWeapon(p, msg.itemId);
@@ -4831,7 +4849,7 @@ function gunsmithAction(p, msg) {
     if (!isUnlocked(def, msg.type, p)) return toast(p, def.field && level(p) >= def.level ? `${label} is field gear — requisition it from a Contact` : `${label} unlocks at level ${def.level}`);
     const c = claimOf(p);
     const stash = c.store;
-    const roomInPack = p.inv.pack.length < PACK_SIZE;
+    const roomInPack = p.inv.pack.length < packSize(p);
     if (!roomInPack && stash.items.length >= claimCap(c)) return toast(p, 'Backpack and stash are full');
     const cost = Math.round(def.cost * (1 - UPGRADES.workbench.tiers[stash.upg.workbench].discount));
     if (!spend(p, { parts: cost })) return toast(p, `Needs ${cost} parts`);
@@ -4934,7 +4952,7 @@ function invAction(p, msg) {
   } else if (msg.action === 'unequip') {
     const slot = msg.slot;
     if (![...GUN_SLOTS, 'armor'].includes(slot) || !inv[slot]) return;
-    if (inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+    if (inv.pack.length >= packSize(p)) return toast(p, 'Backpack full');
     inv.pack.push(inv[slot]);
     inv[slot] = null;
     p.armor = Math.min(p.armor, maxArmor(p));
@@ -5381,7 +5399,7 @@ function handleJoin(ws, msg) {
   }
   send(ws, {
     t: 'welcome', id: p.id, token, pushKey: process.env.VAPID_PUBLIC_KEY || null, world: WORLD_ID, worldName: WORLD_NAME, seed: SEED, size: WORLD_SIZE, mapSum: MAP_SUM, real: REAL_INFO, houseId: p.houseId,
-    x: p.x, z: p.z, yaw: p.yaw, felled: [...map.felled], packSize: PACK_SIZE, devKit: DEV_KIT, doorBase: DOOR_HP, testRides: TEST_RIDES,
+    x: p.x, z: p.z, yaw: p.yaw, felled: [...map.felled], packSize: packSize(p), devKit: kitPlayer(p), doorBase: DOOR_HP, testRides: TEST_RIDES,
     deploy: p.dead ? deployOptions(p) : null, firstDeploy: p.deploying,
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
@@ -5671,7 +5689,7 @@ wss.on('connection', (ws) => {
       case 'buyMarker': {
         const ct = nth(map.contacts, msg.contactId);
         if (!ct || p.dead || Math.hypot(ct.x - p.x, ct.z - p.z) > 6) return;
-        if (p.inv.pack.length >= PACK_SIZE) return toast(p, 'Backpack full');
+        if (p.inv.pack.length >= packSize(p)) return toast(p, 'Backpack full');
         if (!payCarried(p, CLAIM.markerPrice)) return toast(p, `A claim marker costs ${CLAIM.markerPrice.parts} parts`);
         p.inv.pack.push(makeMarker());
         toast(p, 'Bought a claim marker');
@@ -5794,7 +5812,7 @@ function snapshotFor(r, views, now) {
       houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; const rs = s.owner && !livesAt(r, s) ? cachedRaidState(s) : null; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0, ...(rs ? { rs: RS_CODE[rs.mode], rw: rs.start } : {}) }; }),
       terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
       objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
-      structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...structRaidView(r, st), ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
+      structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), ...(st.h ? { h: st.h } : {}), ...(st.rise ? { base: st.base, rise: st.rise } : {}), ...(st.hole ? { hole: st.hole } : {}), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...structRaidView(r, st), ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
     }).slice(1, -1) };
   }
   const fast = JSON.stringify({
