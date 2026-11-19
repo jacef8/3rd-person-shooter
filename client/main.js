@@ -4739,6 +4739,7 @@ $('downtouch').addEventListener('pointerdown', (e) => {
 
 for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, () => sfx.unlock(), { passive: true });
 function setInputMode(m) {
+  if (m !== 'pad') pad.rebase = true;   // keys or mouse in use: wherever the controller's sticks sit now is "resting"
   if (state.inputMode === m) return;
   state.inputMode = m;
   document.body.classList.toggle('pad', m === 'pad');
@@ -4876,8 +4877,15 @@ function pollPad(dt, now) {
   const val = (i) => g.buttons[i]?.value ?? 0;
   const just = (i) => b(i) && !pad.prev[i];
   const ax = g.axes.map((v) => v ?? 0);
-  if (g.buttons.some((x) => x.pressed) || ax.some((v) => Math.abs(v) > 0.4)) { setInputMode('pad'); if (!pad.audioTried) { pad.audioTried = true; sfx.unlock(); } }
-  if (state.inputMode !== 'pad') { pad.prev = g.buttons.map((x) => x.pressed); return; }
+  // Only a real touch of the controller wakes it: a button newly pressed, or a stick or trigger moved
+  // well away from where it was resting. (Some PCs show a "gamepad" that never lets go - a trigger
+  // resting at -1, a button stuck down, a wheel or a sensor. Judged by plain values, it flipped the
+  // game into controller mode every frame: the touchpad lost its grip on the view and the player
+  // drifted or stuttered under the keyboard.)
+  if (pad.restId !== g.id + g.index || !pad.rest) { pad.restId = g.id + g.index; pad.rest = ax.slice(); pad.prev = g.buttons.map((x) => x.pressed); }
+  const woke = g.buttons.some((x, i) => x.pressed && !pad.prev[i]) || ax.some((v, i) => Math.abs(v - (pad.rest[i] ?? 0)) > 0.4);
+  if (woke && state.inputMode !== 'pad') { setInputMode('pad'); if (!pad.audioTried) { pad.audioTried = true; sfx.unlock(); } }
+  if (state.inputMode !== 'pad') { pad.prev = g.buttons.map((x) => x.pressed); if (pad.rebase) { pad.rebase = false; pad.rest = ax.slice(); } pad.moveX = pad.moveY = 0; pad.sprint = false; return; }
 
   // A question at the top of the screen (a friend's invite, a trade request): hold ⧉ to say yes.
   // While one is showing, ⧉ does its usual job when you let go, so a hold can be told from a tap.
