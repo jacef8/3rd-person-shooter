@@ -3924,6 +3924,15 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && state.invOpen) { closeInventory(); return; }
   state.keys.add(e.code);
   if (e.repeat) return;
+  // Auto-run (= or Num Lock): keeps you running with no key held. On a laptop this matters: Windows
+  // ignores fresh touchpad swipes for a moment after every key event, and a held W sends them nonstop.
+  if ((e.code === 'Equal' || e.code === 'NumLock') && state.me && !state.me.dead) {
+    kbRun.on = !kbRun.on; kbRun.sprint = false;
+    toast(kbRun.on ? 'Auto-run on: tap Shift to sprint · W, S or = to stop' : 'Auto-run off');
+    return;
+  }
+  if (kbRun.on && (e.code === 'KeyW' || e.code === 'KeyS')) kbRun.on = false;
+  if (kbRun.on && (e.code === 'ShiftLeft' || e.code === 'ShiftRight')) kbRun.sprint = !kbRun.sprint;
   if (e.code === 'KeyC') { kbC.at = performance.now(); kbC.held = false; }
   if (KEY_ACTIONS[e.code]) doAction(KEY_ACTIONS[e.code]);
 });
@@ -3936,6 +3945,7 @@ addEventListener('keyup', (e) => {
 });
 // C: tap to crouch, hold to go prone.
 const kbC = { at: 0, held: false };
+const kbRun = { on: false, sprint: false };   // keyboard auto-run (see the keydown above)
 setInterval(() => { if (kbC.at && !kbC.held && performance.now() - kbC.at > 400) { kbC.held = true; doAction('prone'); } }, 50);
 addEventListener('blur', () => {
   state.keys.clear(); state.mouseDown = false; state.aiming = false; kbC.at = 0;
@@ -5549,6 +5559,7 @@ function frame(now) {
   perfWatch(now, rawMs);
   const me = state.me;
   const alive = me && !me.dead;
+  if (kbRun.on && (!alive || me.boat || me.downed)) kbRun.on = false;   // (auto-run ends on death, in a ride, or when downed)
 
   // In a boat: the driver steers it (predicted here, checked by the server); passengers ride along.
   const inBoat = alive && me.boat;
@@ -5616,15 +5627,16 @@ function frame(now) {
   } else if (alive && !state.invOpen && !inBoat) {
   // Local movement (client-side prediction; server re-validates every step).
     const k = state.keys;
-    const f = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
+    if (kbRun.on && (state.inputMode !== 'kb' || build.on)) kbRun.on = false;
+    const f = (k.has('KeyW') || kbRun.on ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
     const r = (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
     const pf = f + pad.moveY + touch.moveY, pr = r + pad.moveX + touch.moveX;
     const autoSprint = pad.settings.autoSprint && pad.moveY > 0.92;   // controller setting: stick all the way forward
     const wasSprint = state.sprint;
     // Pulling the trigger or aiming while you sprint stops the sprint and brings the gun up (PUBG-style).
     const trigger = (state.mouseDown || autoFireNow(me)) && !build.on && !state.nadeAim;   // (phones: auto-fire on a foe counts)
-    state.sprint = (k.has('ShiftLeft') || pad.sprint || autoSprint || touch.sprint || touch.sprintOn) && pf > 0.3 && !state.aiming && !trigger;
-    if (trigger && (pad.sprint || touch.sprintOn)) { pad.sprint = false; touch.sprintOn = false; }
+    state.sprint = (k.has('ShiftLeft') || pad.sprint || autoSprint || touch.sprint || touch.sprintOn || (kbRun.on && kbRun.sprint)) && pf > 0.3 && !state.aiming && !trigger;
+    if (trigger && (pad.sprint || touch.sprintOn || kbRun.sprint)) { pad.sprint = false; touch.sprintOn = false; kbRun.sprint = false; }
     const using = state.hack && (state.hack.kind === 'eat' || state.hack.kind === 'heal');   // eating or patching up: a walk at most
     if (using && state.sprint && !wasSprint) state.sprint = false;
     if (state.sprint) { state.crouch = false; state.prone = false; }
@@ -5796,7 +5808,7 @@ function frame(now) {
   $('crosshair').classList.toggle('steady', !!(aim && ws?.semi && (ws.pellets || 1) === 1 && !moved && now - (state.lastShot || 0) >= Math.max(350, 60000 / ws.rpm * 1.4)));
   // The crosshair opens up to show how far shots can stray (hip fire, moving, crouched, prone).
   if (ws) {
-    const moving = Math.hypot(pad.moveX, pad.moveY) > 0.2 || Math.hypot(touch.moveX, touch.moveY) > 0.2 || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => state.keys.has(k));
+    const moving = Math.hypot(pad.moveX, pad.moveY) > 0.2 || Math.hypot(touch.moveX, touch.moveY) > 0.2 || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => state.keys.has(k)) || kbRun.on;
     // Same rules as the server: single-shot guns group tighter, and a steady aimed shot is dead-on.
     const single = ws.semi && (ws.pellets || 1) === 1, steady = $('crosshair').classList.contains('steady');
     const spread = steady ? 0 : (aim ? ws.adsSpread : ws.hipSpread) * (single ? (aim ? 0.35 : 0.6) : 1) * (moving ? (ws.semi ? 1.3 : 1.6) : 1) * (state.prone ? 0.6 : state.crouch ? 0.8 * ws.crouchSpread : 1);
