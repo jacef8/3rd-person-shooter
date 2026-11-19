@@ -573,7 +573,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', 'secured', ...RESOURCES];
+const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', 'secured', 'buildXpWin', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -3438,8 +3438,7 @@ function tickHacks(now) {
       st.stage++;
       st.hp = Math.max(next.hp * frac, next.hp * 0.5);
       if (st.stage === 1 && stageDef(st).material !== 'frame') st.hp = next.hp;
-      award(p, 15, `Built ${next.name}`);
-      homeBuildXp(p, st, `Built ${next.name}`);
+      if (buildXp(p, 15)) { award(p, 15, `Built ${next.name}`); homeBuildXp(p, st, `Built ${next.name}`); }
       send(p.ws, { t: 'hack', done: true, text: `${next.name} complete` });
       if (PIECES[st.type].container) refreshContainerViewers('crate', st.id);
     } else if (h.kind === 'raid') {
@@ -4274,9 +4273,21 @@ function handleBuild(p, msg) {
   }
   db.structures.push(st);
   indexStruct(st, true);
-  award(p, 10, `Built ${stage0.name}`);
-  homeBuildXp(p, st, `Built ${stage0.name}`);
+  if (buildXp(p, 10)) { award(p, 10, `Built ${stage0.name}`); homeBuildXp(p, st, `Built ${stage0.name}`); }
   dirty(p);
+}
+
+/**
+ * Building pays XP, but only so much an hour (BUILD_XP_HOURLY): putting up cheap pieces and pulling
+ * them down again (half the materials back) was an endless slow grind. A real building session stays
+ * well under it. True if this much can still be paid now (and counts it).
+ */
+const BUILD_XP_HOURLY = 400;
+function buildXp(p, n) {
+  const now = Date.now(), w = (p.buildXpWin && now - p.buildXpWin.at < 3600_000) ? p.buildXpWin : (p.buildXpWin = { at: now, sum: 0 });
+  if (w.sum + n > BUILD_XP_HOURLY) return false;
+  w.sum += n;
+  return true;
 }
 
 /** Building inside your claim radius levels your home. */
