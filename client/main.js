@@ -5570,6 +5570,29 @@ let last = performance.now();
 // then screen sharpness, then grass. Says so on screen. Also feeds the frame-rate readout (Settings).
 const fpsEl = Object.assign(document.createElement('div'), { id: 'fps', hidden: true });
 document.body.append(fpsEl);
+// Aim assist's lock: four corner brackets round the enemy it's holding on to, closing in as it locks
+// and following them while it holds (phones and controllers, where aim assist works).
+const lockEl = Object.assign(document.createElement('div'), { id: 'lockmark', hidden: true, innerHTML: '<i></i><i></i><i></i><i></i>' });
+document.body.append(lockEl);
+const lockV = new THREE.Vector3();
+let lockAt = 0, lockWas = null;
+function drawLockMark(now) {
+  const t = assist.target, me = state.me;
+  if (!t || !me || me.dead || state.invOpen || topPanel()) { lockEl.hidden = true; lockWas = null; return; }
+  lockV.set(t.x, t.y, t.z).project(camera);
+  if (lockV.z > 1 || Math.abs(lockV.x) > 1.1 || Math.abs(lockV.y) > 1.1) { lockEl.hidden = true; lockWas = null; return; }
+  // A new lock (or another enemy): the brackets start wide and close in over a fifth of a second.
+  if (!lockWas || Math.hypot(t.x - lockWas.x, t.z - lockWas.z) > 3) lockAt = now;
+  lockWas = { x: t.x, z: t.z };
+  const k = Math.min(1, (now - lockAt) / 200), grow = 1 + (1 - k) * 0.8;
+  // Sized to the person: about their height on screen, never smaller than a thumb's width.
+  const px = innerHeight / (2 * Math.tan((camera.fov * Math.PI) / 360) * Math.max(1, t.L || 10));
+  const size = Math.max(34, Math.min(160, px * 1.5)) * grow;
+  lockEl.hidden = false;
+  lockEl.style.transform = `translate(${((lockV.x + 1) / 2) * innerWidth - size / 2}px, ${((1 - lockV.y) / 2) * innerHeight - size / 2}px)`;
+  lockEl.style.width = lockEl.style.height = `${size}px`;
+  lockEl.style.opacity = String(0.4 + 0.6 * k);
+}
 /**
  * If the browser is drawing without the graphics card (hardware acceleration off: everything done
  * slowly in software) or on a laptop's built-in chip when it's slow, say so and how to fix it. Fortnite
@@ -5947,6 +5970,7 @@ function frame(now) {
   updateWhere(now);
   if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }
   updateScopeView(aimNow());
+  drawLockMark(now);
   const r0 = performance.now();
   renderWorld();
   perf.cpu = (perf.cpu || []).concat(r0 - frameT0).slice(-60);   // the game's own work this frame, before the draw

@@ -979,3 +979,12 @@ body.touchui #voicebar { bottom: auto; top: 262px; left: calc(8px + env(safe-are
 .irow.loose { border-left-color: #ffb347; }
 .irow.loose .tx small:first-of-type { color: #ffb347; font-weight: 700; }
 #inventory .loosenote { margin: 6px 0 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 179, 71, 0.12); border: 1px solid rgba(255, 179, 71, 0.45); color: var(--ink); font-size: 13px; line-height: 1.35; }
+
+/* Aim assist's lock: corner brackets round the enemy it's holding on to (main.js drawLockMark). */
+#lockmark { position: fixed; left: 0; top: 0; z-index: 30; pointer-events: none; will-change: transform; }
+#lockmark[hidden] { display: none; }
+#lockmark i { position: absolute; width: 26%; height: 26%; border: 0 solid #ff4b3a; filter: drop-shadow(0 0 1.5px #000); }
+#lockmark i:nth-child(1) { left: 0; top: 0; border-top-width: 3px; border-left-width: 3px; }
+#lockmark i:nth-child(2) { right: 0; top: 0; border-top-width: 3px; border-right-width: 3px; }
+#lockmark i:nth-child(3) { left: 0; bottom: 0; border-bottom-width: 3px; border-left-width: 3px; }
+#lockmark i:nth-child(4) { right: 0; bottom: 0; border-bottom-width: 3px; border-right-width: 3px; }
