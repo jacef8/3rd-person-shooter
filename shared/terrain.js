@@ -319,6 +319,14 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
     else if (w.lake > -40 - Math.max(0, h - 3) * 2.2) h = Math.min(h, bank(-w.lake, -3));
     return h;
   }
+  /** How far (x, z) is outside a turned pad's outline (its wings, if it has them): 0 inside. */
+  function padDist(f, x, z) {
+    const ca = (f.ca ??= Math.cos(f.ang)), sa = (f.sa ??= Math.sin(f.ang)), ox = x - f.x, oz = z - f.z;
+    const lx = ox * ca + oz * sa, lz = -ox * sa + oz * ca;
+    let best = Infinity;
+    for (const [x0, z0, x1, z1] of f.rects || [[-f.w / 2, -f.d / 2, f.w / 2, f.d / 2]]) best = Math.min(best, Math.max(x0 - lx, 0, lx - x1, z0 - lz, 0, lz - z1));
+    return best;
+  }
   function flattened(x, z, noBridge = false) {
     let h = raw(x, z, noBridge);
     const near = flatCells.get(Math.floor(x / FCELL) * 100003 + Math.floor(z / FCELL));
@@ -326,9 +334,18 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
     let pad = null, padD = Infinity;
     for (const f of near) {
       const dx = Math.max(f.minX - x, 0, x - f.maxX), dz = Math.max(f.minZ - z, 0, z - f.maxZ);
-      const d = Math.max(dx, dz);
+      // A turned building's pad is measured from its real (turned) outline, not the square box
+      // round it: that box can reach over the floor of the building next door.
+      const d = f.pad && f.ang ? padDist(f, x, z) : Math.max(dx, dz);
       if (d >= f.margin) continue;
-      if (f.pad) { if (d < padD) { padD = d; pad = f; } continue; }   // building pads: the nearest one wins
+      // Building pads: the nearest one wins, except that a pad a building actually stands on wins
+      // over its whole level zone against one that was left empty (rejected for overlapping): the
+      // ground there is sampled every 8 m, and a neighbour's level at the next sample tilted the floor.
+      if (f.pad) {
+        const rank = f.built && d < PAD_LEVEL ? d - 1e4 : d, cur = pad ? (pad.built && padD < PAD_LEVEL ? padD - 1e4 : padD) : Infinity;
+        if (rank < cur) { padD = d; pad = f; }
+        continue;
+      }
       h += (f.elev - h) * (1 - smooth(d / f.margin));
     }
     // A building's pad is dead level under it and a little way out (PAD_LEVEL: far enough that the

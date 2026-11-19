@@ -938,8 +938,12 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       // Pieces in the building's own frame (one rectangle, or the L / T / wings of the real outline).
       const rects = pad.rects || [[-w / 2, -d / 2, w / 2, d / 2]];
       realShell(x, z, pad.ang, rects, h, type, n++ % 2 === 0 ? zone : null, pad.elev, { roof: pitched ? 'gable' : null, name: name || undefined, sink: 0.6, si, ladder: !pitched && (type === 'building' || type === 'civic') && area0 >= 60 });
+      pad.built = 1;
       realBuildings.push(1);
     }
+    // Ground under overlapping pads now goes to the one with a building on it (terrain.flattened):
+    // set the flats again so heights already worked out are worked out afresh.
+    terrain.setFlats([...townFlats, ...realPads.filter(Boolean)]);
   }
 
   /** A real building's front door: the doorway facing the nearest road. */

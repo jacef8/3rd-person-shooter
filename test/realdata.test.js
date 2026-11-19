@@ -43,7 +43,10 @@ test('the real-world map: ground, river, bridge, buildings and roads all line up
   assert.ok(built.every((b) => b.doors.length >= 1), 'every one has a doorway');
   let level = 0;
   for (const b of built) {
-    const hs = [[b.minX + 1, b.minZ + 1], [b.maxX - 1, b.minZ + 1], [b.minX + 1, b.maxZ - 1], [b.maxX - 1, b.maxZ - 1], [(b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2]].map(([x, z]) => T.height(x, z));
+    // Corners (a metre in) and the middle of its real outline, turned as the building is.
+    const ca = Math.cos(b.ang || 0), sa = Math.sin(b.ang || 0), cx = b.cx ?? (b.minX + b.maxX) / 2, cz = b.cz ?? (b.minZ + b.maxZ) / 2;
+    const [x0, z0, x1, z1] = (b.rects || [[b.minX - cx, b.minZ - cz, b.maxX - cx, b.maxZ - cz]]).reduce((a, r) => ((r[2] - r[0]) * (r[3] - r[1]) > (a[2] - a[0]) * (a[3] - a[1]) ? r : a));
+    const hs = [[x0 + 1, z0 + 1], [x1 - 1, z0 + 1], [x0 + 1, z1 - 1], [x1 - 1, z1 - 1], [(x0 + x1) / 2, (z0 + z1) / 2]].map(([lx, lz]) => T.height(cx + lx * ca - lz * sa, cz + lx * sa + lz * ca));
     if (Math.max(...hs) - Math.min(...hs) < 0.25 && Math.abs(hs[4] - b.pad) < 0.25) level++;
   }
   assert.ok(level / built.length > 0.95, `${level} of ${built.length} floors are level with their pad`);
