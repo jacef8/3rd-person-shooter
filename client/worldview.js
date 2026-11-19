@@ -870,7 +870,12 @@ vBlade = position.y;
     return finishChunk(cx, cz, buildChunkBuffers(req), apart);
   }
   /** A chunk from its buildings' finished buffers: the ground, roads, trees and the rest are added here. */
-  function finishChunk(cx, cz, bufs, list) {
+  /** A chunk's ground and roads (the heavier half of wrapping one up, so it can go in a frame of its own). */
+  function groundOf(cx, cz) {
+    const x0 = cx * CHUNK, z0 = cz * CHUNK;
+    return { ground: buildTerrain(x0, z0), roads: map.roadGrid && buildRoads(x0, z0) };
+  }
+  function finishChunk(cx, cz, bufs, list, pre = groundOf(cx, cz)) {
     const x0 = cx * CHUNK, z0 = cz * CHUNK;
     const trees = [], pines = [], canopies = [], tanks = [], rocks = [], rigs = [];
     for (const b of list) {
@@ -882,9 +887,8 @@ vBlade = position.y;
       else if (b.type === 'car' || b.type === 'vehiclebody') rigs.push(b);   // drawn as real vehicles, below
     }
     const group = new THREE.Group();
-    const ground = buildTerrain(x0, z0);
+    const { ground, roads } = pre;
     group.add(ground.mesh);
-    const roads = map.roadGrid && buildRoads(x0, z0);
     if (roads) group.add(roads);
     if (ground.wet) { const w = new THREE.Mesh(waterGeo, waterMat); w.position.set(x0 + CHUNK / 2, 0, z0 + CHUNK / 2); group.add(w); }
     const MATS = { office: texturedMat, siding: sidingMat, brick: brickMat, stucco: stuccoMat, block: blockMat, metal: metalMat, planks: plankMat, plain: plainMat, roof: roofMat, shingles: shingleMat, panes: paneMat, furn: plainMat };
@@ -1106,16 +1110,21 @@ vBlade = position.y;
       for (const [k, job] of ready) {
         if (!want.has(k) || job.gen !== chunkGen || chunks.has(k)) { ready.delete(k); continue; }
         if (built >= (grassThisFrame ? 0 : 1)) break;
+        // Two frames each: its ground and roads in one, its buildings and trees in the next.
+        if (!job.pre) { job.pre = groundOf(job.cx, job.cz); built++; continue; }
         ready.delete(k);
-        const g = finishChunk(job.cx, job.cz, job.out, job.apart);
+        const g = finishChunk(job.cx, job.cz, job.out, job.apart, job.pre);
         chunks.set(k, g); prime(g); built++;
       }
+      const hereK = key(Math.floor(px / CHUNK), Math.floor(pz / CHUNK)), empty = chunks.size === 0;
       for (const [, cx, cz] of order) {
         const k = key(cx, cz);
         if (chunks.has(k) || pending.has(k) || ready.has(k)) continue;
-        if (chunks.size < 4 || !worker) {
-          // Spread the building of new ground over frames: a few at the start, then one at a time.
-          if (built >= (chunks.size < 4 ? 9 : grassThisFrame ? 0 : 1)) continue;
+        // Built here and now: the first few when the world is empty (you've just arrived), and the
+        // ground under your feet if it's somehow missing; the rest come from the worker.
+        const sync = !worker || (empty && built < 4) || k === hereK;
+        if (sync) {
+          if (built >= (empty || k === hereK ? 9 : grassThisFrame ? 0 : 1)) continue;
           const g = buildChunk(cx, cz);
           chunks.set(k, g); prime(g); built++;
           continue;
