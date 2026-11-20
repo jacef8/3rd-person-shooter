@@ -5061,12 +5061,65 @@ function padBack() {
   else if (state.invOpen) closeInventory();
 }
 
+// On Android (the Shield app, a phone with a controller) a controller's D-pad, left stick and Ⓐ also
+// arrive as arrow keys and Enter, and the web view acts on those itself: the highlight jumped a second
+// (often diagonal) step for every press, and Ⓐ could type a letter twice. The game already does all the
+// moving and choosing for the controller, so keys that came from it are dropped before the page sees
+// them (one of its buttons is down or its stick pushed, or a button was pressed a moment ago).
+// Keys from anything else - the Shield's own remote, a real keyboard - move the same highlight the
+// controller does, so the remote works every menu: arrows move, the middle button picks, and on a
+// text box it opens the game's keyboard.
+const PAD_KEYS = [0, 12, 13, 14, 15];
+const KEY_DIR = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+const ANDROID = /Android/i.test(navigator.userAgent);
+function keyFromPad() {
+  const g = readPad();
+  if (g && (PAD_KEYS.some((i) => g.buttons[i]?.pressed) || Math.abs(g.axes[0] || 0) > 0.35 || Math.abs(g.axes[1] || 0) > 0.35)) return true;
+  return performance.now() - (pad.keyPressAt || 0) < 250;
+}
+addEventListener('keydown', (e) => {
+  const dir = KEY_DIR[e.key];
+  if (!dir && e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Escape') return;
+  if (e.key !== 'Escape' && keyFromPad()) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+  const panel = topPanel();
+  if (!panel || e.altKey || e.ctrlKey || e.metaKey) return;
+  const cur = document.activeElement, mine = !!cur && panel.contains(cur) && cur !== panel;
+  const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+  if (e.key === 'Escape') { if (osk.input) { stop(); closeOsk(false); } return; }
+  if (dir) {
+    if (mine && cur.tagName === 'SELECT' && dir[1]) return;   // a pick-list's own up and down
+    if (mine && (cur.tagName === 'SELECT' || (cur.tagName === 'INPUT' && cur.type === 'number')) && dir[0]) { stop(); padAdjust(cur, dir[0]); return; }
+    if (mine && cur.tagName === 'INPUT' && dir[0] && cur.value) {
+      // Typing in a box: left and right move the cursor until it reaches the end.
+      const at = cur.selectionStart ?? 0, atEnd = cur.selectionEnd ?? 0;
+      if ((dir[0] < 0 && at > 0) || (dir[0] > 0 && atEnd < cur.value.length)) return;
+    }
+    stop();
+    if (!mine && regainFocus(panel)) return;
+    moveFocus(panel, dir[0], dir[1]);
+    return;
+  }
+  if (!mine || e.repeat) return;
+  if (e.key === 'Enter' && cur.tagName === 'INPUT' && cur.type !== 'number' && (ANDROID || cur.getAttribute('inputmode') === 'none') && panel.id !== 'osk') {
+    // The middle button on a text box: the game's keyboard (the TV's own can't be reached from here).
+    stop(); openOsk(cur);
+    padFocus($('oskKeys').querySelector('.oskrow:nth-child(2) .oskkey'));
+    return;
+  }
+  if (cur.tagName === 'BUTTON') {
+    stop();
+    const idx = focusables(panel).indexOf(cur);
+    cur.click();
+    setTimeout(() => { const p = topPanel(); if (!p) return; const l = focusables(p); if (l.length && !l.includes(document.activeElement)) { if (pad.mark?.panel === p.id) regainFocus(p); else padFocus(l[Math.min(idx, l.length - 1)]); } }, 150);
+  }
+}, true);
 function pollPad(dt, now) {
   const g = readPad();
   if (!g) { pad.moveX = pad.moveY = 0; return; }
   const b = (i) => !!g.buttons[i]?.pressed;
   const val = (i) => g.buttons[i]?.value ?? 0;
   const just = (i) => b(i) && !pad.prev[i];
+  if (PAD_KEYS.some(just)) pad.keyPressAt = performance.now();
   const ax = g.axes.map((v) => v ?? 0);
   // Only a real touch of the controller wakes it: a button newly pressed, or a stick or trigger moved
   // well away from where it was resting. (Some PCs show a "gamepad" that never lets go - a trigger
@@ -5100,7 +5153,9 @@ function pollPad(dt, now) {
     if (state.inputMode === 'pad') { state.mouseDown = false; state.aiming = false; }
     const sx = deadzone(ax[0], 0.5), sy = deadzone(ax[1], 0.5);
     const dir = b(BTN.UP) || sy < 0 ? [0, -1] : b(BTN.DOWN) || sy > 0 ? [0, 1] : b(BTN.LEFT) || sx < 0 ? [-1, 0] : b(BTN.RIGHT) || sx > 0 ? [1, 0] : null;
-    const navPressed = [BTN.UP, BTN.DOWN, BTN.LEFT, BTN.RIGHT].some(just);
+    // (A fresh press, but not a bounce: some controllers flicker a D-pad press off and on again.)
+    const navPressed = [BTN.UP, BTN.DOWN, BTN.LEFT, BTN.RIGHT].some(just) && now - (pad.navPressAt || 0) > 120;
+    if (navPressed) pad.navPressAt = now;
     // Screens redraw when the server sends news, and that drops the highlight: put it back.
     const fresh = (!document.activeElement || !panel.contains(document.activeElement) || document.activeElement === panel) && regainFocus(panel);
     const cur = document.activeElement;
