@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.PermissionRequest;
@@ -80,9 +82,44 @@ public class MainActivity extends Activity {
         if (hasFocus) fullScreen();
     }
 
-    /** The controller's B button is "back" to Android, but in the game it crouches: leave with Home. */
+    /** The controller's B button is "back" to Android, but in the game it crouches (see dispatchKeyEvent for the way out). */
     @Override
     public void onBackPressed() { }
+
+    private static final long HOLD_MS = 800;   // how long to hold the remote's Back to leave the game
+    private boolean leftOnHold;
+
+    /**
+     * The TV remote has no Home button on every setup, so the remote's Back gets a way out:
+     * a tap closes the open menu (like Esc), holding it goes to the Shield's home screen.
+     * The controller's Xbox button also goes home. The controller's B still only crouches.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        int key = e.getKeyCode();
+        if (key == KeyEvent.KEYCODE_BUTTON_MODE) {
+            if (e.getAction() == KeyEvent.ACTION_UP) moveTaskToBack(true);
+            return true;
+        }
+        if (key != KeyEvent.KEYCODE_BACK || fromController(e)) return super.dispatchKeyEvent(e);
+        if (e.getAction() == KeyEvent.ACTION_DOWN) {
+            if (e.getRepeatCount() == 0) leftOnHold = false;
+            else if (!leftOnHold && e.getEventTime() - e.getDownTime() >= HOLD_MS) {
+                leftOnHold = true;
+                moveTaskToBack(true);
+            }
+        } else if (e.getAction() == KeyEvent.ACTION_UP && !leftOnHold && !e.isCanceled()) {
+            web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE));
+            web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE));
+        }
+        return true;
+    }
+
+    private static boolean fromController(KeyEvent e) {
+        int src = e.getSource();
+        return (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+            || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+    }
 
     @Override
     protected void onSaveInstanceState(Bundle out) {
