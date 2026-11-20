@@ -68,6 +68,15 @@ test('lobby: callsigns, friends, presence, invites into your world and crew, dep
   dev.send({ t: 'link', name: 'ava', code: lc.code.toLowerCase() });
   await until(() => dev.account?.name === 'Ava');
   assert.equal(dev.account.token, a.account.token, 'the new device plays as the same character');
+  // A new callsign: not one that's taken; the account (and its character) stays the same.
+  b.send({ t: 'rename', name: 'AVA' });
+  await b.got((m) => m.t === 'error' && /taken/.test(m.text) && /AVA/.test(m.text));
+  b.send({ t: 'rename', name: 'Bandit' });
+  await until(() => b.account?.name === 'Bandit');
+  const bAgain = await hubConn(b.account.token);
+  await until(() => bAgain.account?.name === 'Bandit');
+  b.send({ t: 'rename', name: 'Ben' });
+  await until(() => b.account?.name === 'Ben');
   const dev2 = await hubConn(null);
   await dev2.got((m) => m.t === 'needName');
   dev2.send({ t: 'link', name: 'Ava', code: lc.code });

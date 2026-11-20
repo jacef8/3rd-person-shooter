@@ -6806,6 +6806,25 @@ function renderLobby() {
     lk.append(b);
   }
   wl.append(lk);
+  // Your callsign: change it here, or sign this device out (to use another account on it).
+  const me = document.createElement('div');
+  me.className = 'lb-link';
+  me.innerHTML = `<h2>Your callsign</h2><p class="lb-note">You're <b>${esc(lobby.account?.name || '')}</b> on this device. A new callsign keeps your level, home, gear and friends.</p>`;
+  const row = document.createElement('div'); row.className = 'lb-namerow';
+  const inp = Object.assign(document.createElement('input'), { maxLength: 16, placeholder: 'New callsign', autocomplete: 'off' });
+  const rb = btn('Change callsign', () => { if (inp.value.trim()) hubSend({ t: 'rename', name: inp.value }); });
+  rb.dataset.pad = 'rename';
+  row.append(inp, rb);
+  me.append(row);
+  const so = btn('Sign out of this device', () => {
+    if (!so.dataset.sure) { so.dataset.sure = '1'; so.textContent = 'Tap again to sign out'; me.querySelector('.so-warn').hidden = false; return; }
+    localStorage.removeItem('dz_token'); localStorage.removeItem('dz_name');
+    location.reload();
+  }, 'ghost');
+  so.dataset.pad = 'signout';
+  const warn = Object.assign(document.createElement('p'), { className: 'lb-note so-warn', hidden: true, innerHTML: `Signing out lets you play as someone else here (choose <b>Already playing on another device?</b> and enter that callsign and a code from its device). To come back to <b>${esc(lobby.account?.name || '')}</b> later you'll need a code from a device still signed in as it, so get one first if you want to keep it.` });
+  me.append(so, warn);
+  wl.append(me);
 }
 /** Friends list, requests, search and recent players. `inGame` adds invite-to-this-world buttons. */
 function renderFriends(el, inGame) {

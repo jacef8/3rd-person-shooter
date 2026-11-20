@@ -152,6 +152,20 @@ function register(ws, token, raw) {
   touch();
   attach(ws, tok);
 }
+/** A new callsign for your account: your level, home, gear and friends stay (they're kept by your
+ *  device's key, not your name); you show up under the new name next time you join a world. */
+function rename(token, raw) {
+  const a = hub.accounts[token], name = cleanName(raw);
+  if (!a) return;
+  if (name.length < 3) return sendTo(token, { t: 'error', text: 'Callsigns need at least 3 letters or numbers' });
+  const taken = byName(name);
+  if (taken && taken[0] !== token) return sendTo(token, { t: 'error', text: `${name} is taken — pick another callsign` });
+  a.name = name;
+  touch();
+  sendTo(token, { t: 'account', token, name });
+  push(token);
+  for (const f of a.friends) push(f);
+}
 function attach(ws, token) {
   ws.token = token;
   if (!sockets.has(token)) sockets.set(token, new Set());
@@ -284,6 +298,7 @@ hubWss.on('connection', (ws) => {
       case 'invite': return invite(t, m);
       case 'refresh': return push(t);
       case 'linkCode': return linkCode(t);
+      case 'rename': return rename(t, m.name);
     }
   });
   ws.on('close', () => {
