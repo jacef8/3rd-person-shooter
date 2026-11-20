@@ -141,7 +141,9 @@ function applyGfx(mode = gfxMode) {
  * whole picture is drawn at the budget and the browser stretches it.
  */
 function renderBudget(mode) {
-  if (LOW_POWER) return 1.3e6;
+  // Phones and the TV app (a Shield): about 1520x855 pixels, upscaled to the screen; on Ultra a full
+  // 1080p for those that can take it (the slowdown guard steps it back if frames run slow).
+  if (LOW_POWER) return mode === 'ultra' ? 2.1e6 : 1.3e6;
   // (Built-in graphics start on Medium; picked up to High or Ultra, they get that setting's sharpness,
   // and the slowdown guard steps it back if the chip can't keep up.)
   return { ultra: 8.3e6, full: 3.7e6 }[mode] || 2.2e6;
