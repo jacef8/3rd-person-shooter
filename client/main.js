@@ -6067,8 +6067,16 @@ function frame(now) {
   const aim = state.aiming && alive;
   const afloat = !!me?.boat;
   const ride = afloat && myRide(), rideCam = ride?.land ? Math.max(3.6, Math.min(7.5, ride.len * 1.2 + 1.8)) : 6.5;
-  const dist = aim ? 0.05 : afloat ? rideCam : state.air ? 7.5 : 4.2, shoulder = aim ? 0 : afloat ? 0.3 : 0.85;
-  const pivot = new THREE.Vector3(state.x, eyeHeight() + (aim ? 0.02 : afloat ? 0.9 : 0.45), state.z).addScaledVector(right, shoulder);
+  const dist = aim ? 0.05 : afloat ? rideCam : state.air ? 7.5 : 4.2;
+  let shoulder = aim ? 0 : afloat ? 0.3 : 0.85;
+  const pivotY = eyeHeight() + (aim ? 0.02 : afloat ? 0.9 : 0.45);
+  // The over-the-shoulder offset doesn't pass through a wall or a bridge rail: standing at one, the
+  // camera would be out past it, showing what your gun (still behind it) can't hit.
+  if (shoulder > 0 && !afloat) {
+    const sh = rayAgainstBoxes(state.x, pivotY, state.z, right.x, 0, right.z, solidsNear(state.x, state.z, 2), shoulder + 0.3);
+    if (sh.box) shoulder = Math.max(0, Math.min(shoulder, sh.t - 0.3));
+  }
+  const pivot = new THREE.Vector3(state.x, pivotY, state.z).addScaledVector(right, shoulder);
   selfMesh.visible = (alive || performance.now() - (selfMesh.userData.diedAt || 0) < DEAD_SHOWN_MS) && !aim;   // looking down the sights: your own back isn't in the way
   const want = pivot.clone().addScaledVector(d, -dist);
   const toCam = want.clone().sub(pivot);

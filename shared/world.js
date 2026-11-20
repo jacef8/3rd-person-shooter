@@ -873,8 +873,11 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       // Abutments: where the high ground at each end drops off to the floodplain (the deck starts 40 m back).
       let a = 0, b = sample.length - 1;
       if (!line.around) {
-        while (a < iC - 1 && g[a + 1] > g[0] - 4) a++;
-        while (b > iC + 1 && g[b - 1] > g.at(-1) - 4) b--;
+        // (Up on a bluff the line can keep climbing for a mile: the bank is where it's 12 m above the
+        // river, or within 4 m of the line's end, whichever comes first, not 3.5 m stilts up the hill.)
+        const bankA = Math.min(g[0] - 4, 12), bankB = Math.min(g.at(-1) - 4, 12);
+        while (a < iC - 1 && g[a + 1] > bankA) a++;
+        while (b > iC + 1 && g[b - 1] > bankB) b--;
         a = Math.max(0, a - 4); b = Math.min(sample.length - 1, b + 4);
       }
       const big = river.name === 'Apalachicola River';
@@ -912,7 +915,15 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       box(cx - ex, cz - ez, cx + ex, cz + ez, h, type, { y0, ang: Math.atan2(uz, ux), cx, cz, ca: ux, sa: uz, hw, hd });
     };
     const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
-    for (const side of [-1, 1]) turned(mx - uz * side * (DECK_HALF + 0.3), mz + ux * side * (DECK_HALF + 0.3), len / 2 + 0.05, 0.25, lo - 0.3, 1.4 + rise, 'rail');
+    // Rails a metre above the deck all the way along, as drawn (in short pieces up a slope, so they
+    // don't stand higher at the low end): you can shoot over them, and climb over them.
+    const nR = Math.max(1, Math.ceil(rise / 0.1));
+    for (let k = 0; k < nR; k++) {
+      const t0 = k / nR, t1 = (k + 1) / nR, ya = y1 + (y2 - y1) * t0, yb = y1 + (y2 - y1) * t1;
+      const cx = x1 + (x2 - x1) * (t0 + t1) / 2, cz = z1 + (z2 - z1) * (t0 + t1) / 2;
+      const rlo = Math.min(ya, yb), rhi = Math.max(ya, yb);
+      for (const side of [-1, 1]) turned(cx - uz * side * (DECK_HALF + 0.15), cz + ux * side * (DECK_HALF + 0.15), len / nR / 2 + 0.05, 0.15, rlo - 0.3, rhi - rlo + 1.3, 'rail');   // (0.3 m thick, from the deck's edge out)
+    }
     if (lo - Math.min(terrain.exact(x1, z1), terrain.exact(x2, z2)) > 2.5) turned(mx, mz, len / 2 + 0.05, DECK_HALF + 0.3, lo - 1.2, 0.8, 'deckslab');
   }
 
@@ -1677,8 +1688,9 @@ export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift 
 
 // ---- climbing: standing on things, and climbing onto and over them
 /** What you can't stand on or climb: trees, overhead roofs, doors, poles, and anything players built
- *  (their pieces carry no type: base walls, gates and barricades stay in the way of raiders). */
-const NO_CLIMB = new Set(['wreck', 'tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'rail', 'windsock', 'pole', 'scrub', 'cactus', 'bush', 'ladder']);
+ *  (their pieces carry no type: base walls, gates and barricades stay in the way of raiders). A
+ *  bridge's rails you can climb over (and drop off the side). */
+const NO_CLIMB = new Set(['wreck', 'tree', 'pine', 'canopy', 'caveroof', 'terminal', 'border', 'door', 'windsock', 'pole', 'scrub', 'cactus', 'bush', 'ladder']);
 const climbable = (b) => !!b.type && !b.gone && !NO_CLIMB.has(b.type) && !b.houseId && !(b.type === 'furn' && b.h > 1.0);   // (indoors only low furniture: a bed, a table, a counter)
 const insideTop = (b, x, z, m) => {
   if (b.ang !== undefined) { const [lx, lz] = toBox(b, x, z); return Math.abs(lx) <= b.hw - m && Math.abs(lz) <= b.hd - m; }

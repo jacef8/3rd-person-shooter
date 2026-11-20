@@ -434,6 +434,9 @@ export function createTerrain(seed, size, elevation = null, landcover = null) {
     },
     /** Is (x, z) under a deck that's well above the ground (no road drawn, no trees)? */
     underDeck(x, z, pad = DECK_HALF) { const d = decks.length && deckAt(x, z, pad); return !!d && d.y > height(x, z) + 1.2; },
+    /** Is (x, z) beside a raised deck of the same road (the road's other lines drawn down in the swamp
+     *  next to a bridge, which isn't there for real)? */
+    besideDeck(x, z, road, pad = 30) { const d = decks.length && road && deckAt(x, z, pad); return !!d && d.deck.road === road && d.y > height(x, z) + 1.2; },
     /** Flatten ground: towns [{minX,minZ,maxX,maxZ,elev,margin}] and building pads (the same with
      *  pad: 1). Call before any height() use. */
     setFlats(list) {

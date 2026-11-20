@@ -252,6 +252,8 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
       if (r.dirt) continue;
       const mx = (r.x1 + r.x2) / 2, mz = (r.z1 + r.z2) / 2;
       if (mx < x0 || mx >= x0 + CELL || mz < z0 || mz >= z0 + CELL || !inTown(mx, mz)) continue;
+      // Not along a road that's up on a bridge (or its lines down in the swamp beside one).
+      if (map.terrain.underDeck?.(mx, mz, 10) || map.terrain.besideDeck?.(mx, mz, r.name)) continue;
       const dx = r.x2 - r.x1, dz = r.z2 - r.z1, len = Math.hypot(dx, dz);
       if (len < 6) continue;
       const ux = dx / len, uz = dz / len, nx = -uz, nz = ux, half = (r.width || 8) / 2, seed = hash(`${Math.round(r.x1)},${Math.round(r.z1)}`);

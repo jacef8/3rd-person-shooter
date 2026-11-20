@@ -521,7 +521,7 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
       const runs = [];
       for (let k = 0; k < n; k++) {
         const t0 = k / n - (k === 0 ? ext : 0), t1 = (k + 1) / n + (k === n - 1 ? ext : 0), [mx, mz] = pt((t0 + t1) / 2);
-        const inside = mx >= x0 && mx < x0 + CHUNK && mz >= z0 && mz < z0 + CHUNK && terrain.drawn(mx, mz) > 0.15 && !terrain.underDeck(mx, mz, 6);
+        const inside = mx >= x0 && mx < x0 + CHUNK && mz >= z0 && mz < z0 + CHUNK && terrain.drawn(mx, mz) > 0.15 && !terrain.underDeck(mx, mz, 6) && !terrain.besideDeck(mx, mz, r.name);
         if (!inside) { flush(); continue; }
         if (!run.length) run.push(pt(t0));
         run.push(pt(t1));
@@ -530,7 +530,7 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
       const surface = r.dirt ? ROAD_COL.dirt : r.hw ? ROAD_COL.route : ROAD_COL.asphalt;
       // A round patch at each end, so bends and junctions have no wedge-shaped gaps.
       for (const [ex, ez] of [[r.x1, r.z1], [r.x2, r.z2]]) {
-        if (ex < x0 || ex >= x0 + CHUNK || ez < z0 || ez >= z0 + CHUNK || terrain.drawn(ex, ez) <= 0.15 || terrain.underDeck(ex, ez, 6)) continue;
+        if (ex < x0 || ex >= x0 + CHUNK || ez < z0 || ez >= z0 + CHUNK || terrain.drawn(ex, ez) <= 0.15 || terrain.underDeck(ex, ez, 6) || terrain.besideDeck(ex, ez, r.name)) continue;
         disc(ex, ez, w / 2, surface, 0.055);
       }
       for (const pts of runs) {
