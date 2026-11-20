@@ -1012,3 +1012,14 @@ body.touchui #voicebar { bottom: auto; top: 262px; left: calc(8px + env(safe-are
 body.touchui #chatlog { bottom: auto; top: 92px; width: min(360px, 44vw); }
 body.touchui #chatlog .cl { font-size: 14px; }
 body.touchui #chatbox { bottom: auto; top: 10px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 24px)); }
+
+/* Quick chat (hold ▼ on a controller): a dozen lines, one press each. */
+#quickchat { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(620px, calc(100vw - 32px)); z-index: 40; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; }
+#quickchat[hidden] { display: none; }
+#quickchat .qchead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; font: 800 18px var(--font-text); }
+#quickchat .qcgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+#quickchat .qcgrid button, #quickchat > button { min-height: 48px; border-radius: 12px; font: 700 16px var(--font-text); }
+#quickchat > button { width: 100%; }
+#quickchat .qcch { background: #1d2a44; color: #cfe0ff; border: 1px solid #8fb4ff; min-height: 44px; border-radius: 12px; padding: 0 14px; }
+#quickchat .qcch.crew { background: #12301e; color: #b8ffcb; border-color: #7dff9a; }
+#quickchat .qchint { margin: 8px 0 0; color: var(--ink-2, #b9c0cc); font: 600 14px var(--font-text); text-align: center; }

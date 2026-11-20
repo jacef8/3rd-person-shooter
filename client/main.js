@@ -3907,7 +3907,7 @@ $('name').value = localStorage.getItem('dz_name') || '';
   } else {
     hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<span class="more"><br />'
       + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm) · <b>L3</b> sprint<br />'
-      + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag (hold: stun gun out, RT fires it) · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping · <b>◀</b> rally · <b>▶</b> build<br />'
+      + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag (hold: stun gun out, RT fires it) · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping (hold: quick chat) · <b>◀</b> rally · <b>▶</b> build<br />'
       + 'The two small buttons: <b>⧉</b> (left) bag (Crew & settings are in it), hold to accept an invite · <b>☰</b> (right) map · <b>Ⓑ</b> always goes back</span>';
   }
   if (MOBILE) document.body.classList.add('mobile');
@@ -4018,7 +4018,42 @@ function renderChat() {
   chatLog.hidden = !show.length;
   chatLog.innerHTML = show.map((l) => `<div class="cl ${l.ch}${!chat.open && now - l.at > 16000 ? ' old' : ''}"><b>${l.ch === 'crew' ? '<i>Crew</i> ' : ''}${esc(l.from)}</b> ${esc(l.text)}</div>`).join('');
 }
-setInterval(() => { if (chat.lines.length) renderChat(); }, 1000);
+setInterval(() => {
+  if (chat.lines.length) renderChat();
+  if (chat.viaOsk && chat.open && !osk.input) { chat.viaOsk = false; closeChat(); }   // the on-screen keyboard was cancelled
+}, 250);
+// Typed on the on-screen keyboard (a controller): Done sends it.
+$('chatIn').addEventListener('change', () => { if (chat.viaOsk && chat.open) { chat.viaOsk = false; chatForm.requestSubmit(); } });
+
+// ---- quick chat: hold ▼ on a controller. A line in one press, for a TV with no microphone or
+// keyboard (or the on-screen keyboard for anything else). To your crew, or whoever's nearby.
+const QUICK = ['Come to me', 'On my way', 'Need help!', 'Enemy here!', 'Need ammo', 'Need a medkit', 'Follow me', 'Wait for me', 'Let\'s go home', 'Good job!', 'Yes', 'No'];
+const qc = Object.assign(document.createElement('div'), { id: 'quickchat', hidden: true, className: 'panel' });
+document.body.append(qc);
+function renderQuickChat() {
+  if (!state.squad?.id) chat.ch = 'near';
+  qc.innerHTML = '';
+  const head = document.createElement('div'); head.className = 'qchead';
+  head.append(Object.assign(document.createElement('b'), { textContent: 'Quick chat' }));
+  const ch = btn(chat.ch === 'crew' ? 'To: Crew' : 'To: Nearby', () => {
+    if (chat.ch === 'near' && !state.squad?.id) return toast('Join a crew to message them anywhere on the map');
+    chat.ch = chat.ch === 'crew' ? 'near' : 'crew'; renderQuickChat(); padFocus(qc.querySelector('[data-pad="qch"]'));
+  }, chat.ch === 'crew' ? 'qcch crew' : 'qcch');
+  ch.dataset.pad = 'qch';
+  head.append(ch);
+  const grid = document.createElement('div'); grid.className = 'qcgrid';
+  for (const line of QUICK) grid.append(btn(line, () => { send({ t: 'chat', ch: chat.ch, text: line }); closeQuickChat(); }));
+  const type = btn('⌨ Type a message…', () => { closeQuickChat(); openChat(); chat.viaOsk = true; setTimeout(() => openOsk($('chatIn')), 30); }, 'ghost');
+  qc.append(head, grid, type, Object.assign(document.createElement('p'), { className: 'qchint', textContent: 'Ⓐ send · Ⓑ close' }));
+}
+function openQuickChat() {
+  if (!state.me || !$('quickchat').hidden) return;
+  renderQuickChat();
+  qc.hidden = false;
+  document.exitPointerLock?.();
+  setTimeout(() => padFocus(qc.querySelector('.qcgrid button')), 0);
+}
+function closeQuickChat() { qc.hidden = true; }
 
 // ---- voice chat (client/voice.js). Crew chat on unless turned off; nearby chat off unless turned on.
 // Hold N to talk (or the TALK button on a phone); "open mic" in Settings keeps the mic on instead.
@@ -4920,7 +4955,7 @@ function readPad() {
 const deadzone = (v, d = 0.16) => (Math.abs(v) < d ? 0 : Math.sign(v) * (Math.abs(v) - d) / (1 - d));
 
 function topPanel() {
-  for (const id of ['osk', 'ridepanel', 'tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
+  for (const id of ['osk', 'quickchat', 'ridepanel', 'tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
   return null;
 }
 function focusables(root) {
@@ -5018,6 +5053,7 @@ function panelJump(panel, step) {
 }
 function padBack() {
   if (osk.input) return closeOsk(false);
+  if (!$('quickchat').hidden) return closeQuickChat();
   if (state.invOpen && invUi.menuFor) return closeInvMenu();
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
   if (state.rideOpen) return closeRidePicker();
@@ -5166,7 +5202,12 @@ function pollPad(dt, now) {
       if (firing && !state.mouseDown) state.firedThisPress = false;
       state.mouseDown = firing;
     }
-    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B, BTN.RB].includes(Number(i)) && just(Number(i))) doAction(action);
+    for (const [i, action] of Object.entries(PAD_ACTIONS)) if (![BTN.LB, BTN.MENU, BTN.VIEW, BTN.B, BTN.RB, BTN.DOWN].includes(Number(i)) && just(Number(i))) doAction(action);
+    // ▼: a tap pings; held, the quick chat (no microphone or keyboard needed: a TV, a controller).
+    const dn = b(BTN.DOWN);
+    if (dn && !pad.prev[BTN.DOWN]) { pad.dnAt = now; pad.dnHeld = false; }
+    if (dn && !pad.dnHeld && now - (pad.dnAt || now) > 400) { pad.dnHeld = true; openQuickChat(); }
+    if (!dn && pad.prev[BTN.DOWN] && !pad.dnHeld) doAction('ping');
     // RB: a tap tags; held, the stun gun is out (RT fires it) until you let go.
     const rb = b(BTN.RB);
     if (rb && !pad.prev[BTN.RB]) { pad.rbAt = now; pad.rbHeld = false; }
@@ -6149,7 +6190,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug/test hook (used by the automated smoke test).
-window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, openInventory, state, send, renderer, boatVis, structVis, houseVis, voice, openChat, me: () => selfMesh };   // (me(): your character as it is now)
+window.__dz = { setMyLook, nadeFx, nadeArc, openGunsmith, openInventory, state, send, renderer, boatVis, structVis, houseVis, voice, openChat, openQuickChat, me: () => selfMesh };   // (me(): your character as it is now)
 
 // ------------------------------------------------------------------ touch controls
 // Phones without a controller: a thumbstick on the left (push to the edge to sprint), drag anywhere
