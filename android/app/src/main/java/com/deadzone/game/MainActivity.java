@@ -104,7 +104,7 @@ public class MainActivity extends Activity {
         if (key != KeyEvent.KEYCODE_BACK || fromController(e)) return super.dispatchKeyEvent(e);
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             if (e.getRepeatCount() == 0) leftOnHold = false;
-            else if (!leftOnHold && e.getEventTime() - e.getDownTime() >= HOLD_MS) {
+            else if (!leftOnHold && (e.isLongPress() || e.getEventTime() - e.getDownTime() >= HOLD_MS)) {
                 leftOnHold = true;
                 moveTaskToBack(true);
             }
