@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from '/addons/geometries/RoundedBoxGeometry.js';
 import {
   generateMap, mapChecksum, moveWithCollision, rayAgainstBoxes, rayBox, characterBounds, insideBuilding, INTERACT_RANGE,
-  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy, LADDER, ladderAt, drawMs } from '/shared/world.js';
+  PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, WALK_SPEED, SPRINT_SPEED, CROUCH_SPEED, ADS_SPEED, SLIDE, JUMP_V, JUMP_G, climbAhead, climbVy, LADDER, ladderAt, drawMs, SWIM_Y, SWIM, maxDive, swimmingAt } from '/shared/world.js';
 import {
   ARCHETYPES, MODELS, PARTS, PAINTS, ARMORS, SLOTS, SLOT_LABELS, weaponStats, armorStats, statBars, partFits,
   xpForLevel, MAX_LEVEL, GADGETS, isUnlocked, UPGRADES, CONTRACT_TYPES, FIELD_PERKS, DEFAULT_PARTS,
@@ -1355,6 +1355,8 @@ function gunPose(g, c, now, adt) {
 }
 const SIDE_ON = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
 function updateCharacterMesh(g, c, dt) {
+  // Swimming: lying along the water, just under the surface (or down where they've dived), stroking.
+  if (c.sw && !c.boat) c = { ...c, prone: true, crouch: false, y: (c.y ?? SWIM_Y) + 1.05 };
   if (c.lad && c.ly != null) c = { ...c, yaw: c.ly };   // on a ladder: facing it
   // On a ride: sit right on your seat, facing the way it points (no lag behind a fast car).
   const rv = c.boat && boatVis.get(c.boat), onRide = rv && BOATS[rv.data.type].land;
@@ -1401,7 +1403,7 @@ function updateCharacterMesh(g, c, dt) {
     const act = c.dead ? (fallenFor < DEAD_SHOWN_MS ? 'fallen' : null) : c.skate ? 'skate' : c.lad && !c.boat ? 'climb' : crawling ? 'crawl'
       : c.act && !c.downed && !c.boat && !c.air && ACT_POSE[c.act] && !(['rummage', 'pickup', 'putdown', 'getup'].includes(c.act) && u.speed > 0.6) ? c.act : null;   // (these only standing still: walking on, you just walk)
     const kneel = act && ['pry', 'revive', 'cook'].includes(ACT_POSE[act]);
-    const armed = !!gunObj && !act && !(seated && !aimNow) && !c.downed && !(c.air && c.air !== 'chute');
+    const armed = !!gunObj && !act && !(seated && !aimNow) && !c.downed && !c.sw && !(c.air && c.air !== 'chute');
     u.gun.visible = armed;
     const cd = camera.position.distanceTo(g.position), detail = cd < 60 ? 1 : cd < 130 ? 0.3 : 0.1;
     const pitch = c.pitch || 0;
@@ -3779,8 +3781,40 @@ function openSettings() {
 }
 /** One place for every gameplay action, shared by keyboard and controller. */
 /** Jump (your client shows it at once; the server runs the same arc for everyone else and for hits). */
+// ---- swimming (shared/world.js SWIM): crouch to dive, jump to come up; let go of both and you float
+// up. Your breath (SWIM.breathS) runs down under the water; the server drowns you when it's gone.
+const underwaterEl = Object.assign(document.createElement('div'), { id: 'underwater', hidden: true });
+const breathEl = Object.assign(document.createElement('div'), { id: 'breath', hidden: true, innerHTML: '<span>🫧 Air</span><i><b></b></i>' });
+document.body.append(underwaterEl, breathEl);
+function updateSwim(dt, now) {
+  const me = state.me, T = state.map.terrain;
+  const was = state.swim;
+  state.swim = !!me && !me.dead && !me.boat && !state.air && !state.hop && myY() <= SWIM_Y + 0.001 && swimmingAt(T, state.x, state.z, myY());
+  if (!state.swim) { state.dive = 0; if (was) state.breath = state.breath ?? SWIM.breathS; }
+  else {
+    if (!was) { state.prone = false; state.slide = null; if (now - (state.swimTipAt || 0) > 60000) { state.swimTipAt = now; toast(touchy() ? '🏊 Swimming · CROUCH to dive · JUMP to come up · no shooting in the water' : `🏊 Swimming · ${glyph('C')} dive · ${glyph('Space')} up · no shooting in the water`); } }
+    const deep = maxDive(T, state.x, state.z);
+    const up = now < (state.swimUpUntil || 0) || state.keys.has('Space');
+    const rate = up ? -SWIM.up : state.crouch ? SWIM.down : -SWIM.float;
+    state.dive = Math.max(0, Math.min(deep, (state.dive || 0) + rate * dt));
+  }
+  const under = state.swim && state.dive > 0.3;
+  state.breath = Math.max(0, Math.min(SWIM.breathS, (state.breath ?? SWIM.breathS) + (under ? -dt : SWIM.refill * dt)));
+  if (me && typeof me.breath === 'number' && Math.abs(me.breath - state.breath) > 3) state.breath = me.breath;   // the server's count wins
+  breathEl.hidden = state.breath >= SWIM.breathS - 0.01;
+  if (!breathEl.hidden) { const f = state.breath / SWIM.breathS; breathEl.querySelector('b').style.width = `${(f * 100).toFixed(0)}%`; breathEl.classList.toggle('low', f < 0.3); }
+}
+function touchy() { return document.body.classList.contains('touchui'); }
+/** Under the water (the camera below the surface over water): a murky blue-green tint. */
+function updateUnderwater() {
+  const p = camera.position, T = state.map?.terrain;
+  const under = !!T && p.y < -0.05 && T.height(p.x, p.z) < p.y;
+  underwaterEl.hidden = !under;
+  if (under) underwaterEl.style.opacity = String(Math.min(0.85, 0.45 + (-p.y) * 0.06));
+}
 function jump() {
   const me = state.me, now = performance.now();
+  if (state.swim) { state.crouch = false; state.swimUpUntil = now + 900; if (climbLadder()) return; return; }   // in the water: up to the surface (or up a ladder)
   if (!me || me.dead || me.downed || me.boat || state.air || state.hop || state.prone || now - (state.lastJump || 0) < 650 || build.on) return;
   state.lastJump = now;
   state.slide = null;   // a jump out of a slide keeps its speed, as momentum does
@@ -3894,7 +3928,7 @@ function doAction(a) {
       if (state.prone) { state.prone = false; state.crouch = true; } else state.crouch = !state.crouch;
       stanceNote(); break;
     }
-    case 'prone': state.prone = !state.prone; if (state.prone) state.crouch = false; stanceNote(); break;
+    case 'prone': if (state.swim) break; state.prone = !state.prone; if (state.prone) state.crouch = false; stanceNote(); break;
     case 'sprint': touch.sprintOn = !touch.sprintOn; if (touch.sprintOn) { state.prone = false; state.crouch = false; } break;
   }
 }
@@ -4162,7 +4196,7 @@ function lookDir() {
 
 /** Where you stand: up on a bridge deck (tracked as you walk) or the ground. */
 function myY() { return state.y !== undefined && state.yx === state.x && state.yz === state.z ? state.y : ground(state.x, state.z); }
-function eyeHeight() { return state.me?.boat ? rideFeet(state.me.boat.id) + (myRide()?.land && !myRide().stand ? STAND_EYE - 0.45 : myRide()?.land ? STAND_EYE : 0.1 + STAND_EYE) : myY() + (state.air ? state.air.alt : 0) + (state.hop ? state.hop.alt : 0) + (state.eyeNow ?? STAND_EYE); }
+function eyeHeight() { return state.me?.boat ? rideFeet(state.me.boat.id) + (myRide()?.land && !myRide().stand ? STAND_EYE - 0.45 : myRide()?.land ? STAND_EYE : 0.1 + STAND_EYE) : state.swim ? SWIM_Y - state.dive + 1.55 : myY() + (state.air ? state.air.alt : 0) + (state.hop ? state.hop.alt : 0) + (state.eyeNow ?? STAND_EYE); }
 /** Ease the eye (and the body) toward the stance you picked: about a quarter second to crouch, most
  *  of a second to go prone or get up from it, and you can't move while you're dropping or rising. */
 const PRONE_SHIFT_MS = 700;
@@ -4295,6 +4329,7 @@ function tryFire(now) {
   if (state.nadeAim) return;
   const me = state.me;
   if (!me || me.dead || state.invOpen || topPanel()) return;
+  if (state.swim) { if (!state.firedThisPress) { state.firedThisPress = true; if (now - (state.swimNoteAt || 0) > 4000) { state.swimNoteAt = now; toast('🏊 You can\'t shoot while swimming: get to the bank (or a ladder) first'); } } return; }
   if (me.taserOut) {   // the stun gun: one shot a pull of the trigger, then it recharges
     if (state.firedThisPress || state.sprint) return;
     state.firedThisPress = true;
@@ -5945,7 +5980,7 @@ function frame(now) {
     if (me.downed || (me.food ?? 100) < HOMESTEAD.hunger.noSprintBelow) state.sprint = false;
     if (wasSprint && !state.sprint) state.drawUntil = now + drawMs(me.inv[me.active]?.archetype);
     const stunnedNow = performance.now() < (state.stunnedUntil || 0);
-    const speed = me.downed ? COMBAT_RULES.downed.crawlSpeed : state.prone ? PRONE_SPEED : (state.sprint ? SPRINT_SPEED : state.crouch ? CROUCH_SPEED : state.aiming ? ADS_SPEED : WALK_SPEED) * mobility;
+    const speed = state.swim ? (state.sprint ? SWIM.sprint : SWIM.speed) : me.downed ? COMBAT_RULES.downed.crawlSpeed : state.prone ? PRONE_SPEED : (state.sprint ? SPRINT_SPEED : state.crouch ? CROUCH_SPEED : state.aiming ? ADS_SPEED : WALK_SPEED) * mobility;
     // Sliding: carried along the way you were sprinting, fast at first and slowing to a crouch; the
     // stick steers it a little. Standing up (sprint or jump) or hitting something ends it.
     const sl = state.slide && now < state.slide.until && !me.downed && !stunnedNow ? state.slide : null;
@@ -6002,7 +6037,7 @@ function frame(now) {
     if (Math.hypot(v[0], v[1]) > 0.05) {
       const y0 = myY();
       const rides = rideSolids([...boatVis.values()].map((bv) => bv.data), state.x, state.z, 3, (b) => b.y ?? state.map.terrain.height(b.x, b.z), PLAYER_RADIUS);
-      const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3).concat(rides), state.map.terrain, y0, state.hop ? state.hop.alt : 0);
+      const p = moveWithCollision(state.x, state.z, v[0] * dt, v[1] * dt, PLAYER_RADIUS, solidsNear(state.x, state.z, 3).concat(rides), state.map.terrain, y0, state.hop ? state.hop.alt : 0, true);
       if (dt > 0 && Math.hypot(p.x - state.x - v[0] * dt, p.z - state.z - v[1] * dt) > 0.01 && !state.climbPush) { v[0] = (p.x - state.x) / dt; v[1] = (p.z - state.z) / dt; }   // walked into something: keep only the slide along it
       state.x = p.x; state.z = p.z; state.y = p.y; state.yx = p.x; state.yz = p.z;
       // Up onto a top in mid-jump: what's left of the jump is measured from there (you land on it).
@@ -6010,13 +6045,14 @@ function frame(now) {
       if (state.hop && p.y !== y0) { state.hop.alt -= p.y - y0; if (state.hop.alt <= 0) { state.hop = null; state.climbPush = null; } }
       else if (!state.hop && y0 - p.y > 0.6) state.hop = { alt: y0 - p.y, vy: 0 };
     } else { v[0] = 0; v[1] = 0; }
+    updateSwim(dt, now);
     if (build.on) { if (state.mouseDown && !state.firedThisPress) { placePiece(); state.firedThisPress = true; } if (!state.mouseDown) state.firedThisPress = false; }
     else if (state.nadeAim) updateNadeAim(now);
     else if ((state.mouseDown || autoFireNow(me)) && !me.downed && !stunnedNow) tryFire(now); else state.firedThisPress = false;
   }
   if (now - state.lastSend > 50 && alive) {
     state.lastSend = now;
-    send({ t: 'state', tp: state.tp || 0, ...(state.slide ? { slide: 1 } : {}), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: state.crouch || (state.prone && !proneSettled()), prone: proneSettled(), aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined, crash: state.boat?.crash ? +state.boat.crash.toFixed(1) : undefined });
+    send({ t: 'state', tp: state.tp || 0, ...(state.slide ? { slide: 1 } : {}), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, crouch: !state.swim && (state.crouch || (state.prone && !proneSettled())), prone: proneSettled(), ...(state.swim ? { dive: +state.dive.toFixed(2) } : {}), aim: state.aiming, sprint: state.sprint, boat: state.boat && me.boat?.seat === 0 ? { x: +state.boat.x.toFixed(3), z: +state.boat.z.toFixed(3), yaw: +state.boat.yaw.toFixed(4) } : undefined, crash: state.boat?.crash ? +state.boat.crash.toFixed(1) : undefined });
     if (state.boat) state.boat.crash = 0;
   }
 
@@ -6040,8 +6076,8 @@ function frame(now) {
   const myAct = state.hack ? { act: state.hack.kind, ap: Math.min(1, (nowP - state.hack.start) / state.hack.total) }
     : state.gesture && nowP < state.gesture.until ? { act: state.gesture.kind, ap: (nowP - state.gesture.start) / (state.gesture.until - state.gesture.start) }
       : state.container && state.invOpen ? { act: 'rummage', ap: 0 } : {};
-  setHolstered(selfMesh, !!state.me && !state.me.boat && (state.sprint || now < (state.drawUntil || 0) - 150));   // gun on your back at a sprint
-  updateCharacterMesh(selfMesh, { ...myAct, hp: state.me?.hp, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: myY(), ...(state.hop?.ladder ? { lad: 1, yaw: Math.atan2(state.hop.dir[0], state.hop.dir[1]) } : {}) }, 1);
+  setHolstered(selfMesh, !!state.me && !state.me.boat && (state.sprint || state.swim || now < (state.drawUntil || 0) - 150));   // gun on your back at a sprint
+  updateCharacterMesh(selfMesh, { ...myAct, hp: state.me?.hp, slide: !!state.slide, rl: myRl, tiltK: state.air ? 1 : Math.min(1, dt * 4.5), x: state.x, z: state.z, yaw: touch.freeLook ? touch.freeLook.yaw : state.yaw, crouch: state.crouch || (state.prone && !proneSettled()), prone: state.prone, dead: !alive, downed: !!state.me?.downed, boat: state.me?.boat?.id || null, seat: state.me?.boat?.seat, aim: state.aiming, pitch: touch.freeLook ? touch.freeLook.pitch : state.pitch, air: state.air?.mode, alt: state.air?.alt ?? state.hop?.alt, y: state.swim ? SWIM_Y - state.dive : myY(), ...(state.swim ? { sw: 1 } : {}), ...(state.hop?.ladder ? { lad: 1, yaw: Math.atan2(state.hop.dir[0], state.hop.dir[1]) } : {}) }, 1);
   animateFlyBys(dt);
   animateBoats(dt, now);
   rideSounds(dt);
@@ -6090,9 +6126,14 @@ function frame(now) {
   // A soft lag on the pivot itself, so the view glides behind you instead of being bolted on.
   if (!aim && !afloat && state.camLag && camera.position.distanceTo(state.camLag) < 3) camera.position.lerp(state.camLag, Math.max(0, 1 - dt * 22));   // (not in a ride: at speed the lag reads as judder)
   state.camLag = camera.position.clone();
-  const camGround = Math.max(ground(camera.position.x, camera.position.z), 0);
+  // Kept above the ground and the water, except dived under it, when the camera goes down with you
+  // (and never sits right at the surface, half in and half out).
+  const diving = state.swim && state.dive > 0.3;
+  const camGround = diving ? ground(camera.position.x, camera.position.z) : Math.max(ground(camera.position.x, camera.position.z), 0);
   if (camera.position.y < camGround + 0.4) camera.position.y = camGround + 0.4;
+  if (diving && camera.position.y > -0.25) camera.position.y = -0.25;
   camera.lookAt(camera.position.clone().add(d));
+  updateUnderwater();
   if (state.shake > 0.002) {   // a blast nearby rattles the view, settling over half a second
     const k2 = state.shake;
     camera.rotation.x += (Math.random() - 0.5) * 0.05 * k2; camera.rotation.y += (Math.random() - 0.5) * 0.05 * k2;

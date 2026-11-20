@@ -1023,3 +1023,13 @@ body.touchui #chatbox { bottom: auto; top: 10px; left: 50%; transform: translate
 #quickchat .qcch { background: #1d2a44; color: #cfe0ff; border: 1px solid #8fb4ff; min-height: 44px; border-radius: 12px; padding: 0 14px; }
 #quickchat .qcch.crew { background: #12301e; color: #b8ffcb; border-color: #7dff9a; }
 #quickchat .qchint { margin: 8px 0 0; color: var(--ink-2, #b9c0cc); font: 600 14px var(--font-text); text-align: center; }
+
+/* Under the water: murky river green-blue over the view; the air left, under the health bars. */
+#underwater { position: absolute; inset: 0; pointer-events: none; z-index: 2; background: radial-gradient(ellipse at 50% 30%, rgba(40, 92, 88, 0.55), rgba(10, 34, 38, 0.92)); }
+#underwater[hidden] { display: none; }
+#breath { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; z-index: 6; pointer-events: none; font: 800 14px var(--font-text); color: #dff6ff; background: rgba(16, 19, 26, 0.85); border: 1px solid #7fd6ff; border-radius: 12px; padding: 6px 12px; }
+#breath[hidden] { display: none; }
+#breath i { display: block; width: 160px; height: 10px; border-radius: 6px; background: #1d2a33; overflow: hidden; }
+#breath b { display: block; height: 100%; background: #7fd6ff; transition: width 0.2s; }
+#breath.low { border-color: #ff6b5a; }
+#breath.low b { background: #ff6b5a; }

@@ -28,7 +28,7 @@ import { BOATS, RIDES, RIDE_RULES, floats, seatPos, isLand, riderFeet, rideSolid
 import {
   SpatialGrid, generateMap, mapChecksum, moveWithCollision, HOME_KINDS, VEHICLE_TYPES, resolveCircle, rayAgainstBoxes, throwPath, rayBox, rayHitBox, insideBuilding, characterBounds,
   PLAYER_RADIUS, STAND_EYE, CROUCH_EYE, PRONE_EYE, PRONE_SPEED, SPRINT_SPEED, INTERACT_RANGE, DEFAULT_WORLD_SIZE,
-  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB, LADDER, ladderAt, drawMs,
+  JUMP_V, JUMP_G, blocksAt, circleOverlapsBox, climbAhead, climbVy, CLIMB, LADDER, ladderAt, drawMs, SWIM_Y, SWIM, maxDive,
 } from '../shared/world.js';
 import {
   makeWeapon, makeArmor, makeConsumable, weaponStats, DEFAULT_PARTS, armorStats, worldSupply, partFits, isUnlocked,
@@ -113,7 +113,7 @@ const nth = (list, i) => { const k = typeof i === 'string' && /^\d+$/.test(i) ? 
 /** Where a character stands: a boat deck, a bridge deck (its tracked height, while it's still where it was
  *  measured), or the ground; plus how high it is on a jump. */
 const standing = (c) => (c.y !== undefined && c.yx === c.x && c.yz === c.z ? c.y : terrain.height(c.x, c.z));
-const gy = (c) => (c.boat ? boatFeet(c) : standing(c) + (c.air ? c.air.alt : 0) + (c.hop ? c.hop.alt : 0));   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
+const gy = (c) => (c.boat ? boatFeet(c) : standing(c) - (c.swim ? c.dive || 0 : 0) + (c.air ? c.air.alt : 0) + (c.hop ? c.hop.alt : 0));   // (swimming: down by how deep you've dived)   // where a character's feet are: the ground, a boat deck, or up in the air on a jump
 const MAP_SUM = mapChecksum(map);
 
 // ---------------------------------------------------------------- persistence
@@ -591,7 +591,7 @@ function dirty(p) { p.dirty = true; }
 function privateState(p) {
   const w = activeWeapon(p);
   return {
-    t: 'you', hp: p.hp, maxHp: maxHp(p), armor: p.armor, maxArmor: maxArmor(p), ammo: p.ammo,
+    t: 'you', hp: p.hp, maxHp: maxHp(p), armor: p.armor, maxArmor: maxArmor(p), ammo: p.ammo, breath: Math.round(p.breath ?? SWIM.breathS), swim: !!p.swim,
     mag: w ? (p.mags[w.id] ?? 0) : 0, inv: p.inv, active: p.active, dead: p.dead, kills: p.kills,
     xp: p.xp, level: level(p), ...Object.fromEntries(RESOURCES.map((r) => [r, p[r] || 0])), comms: p.comms,
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
@@ -2804,6 +2804,17 @@ function throwSensor(p, msg) {
 // ---- living off the land: hunger, eating, farming, cooking, fishing, trading posts
 const HUNGER = HOMESTEAD.hunger;
 const CROP_SCALE = Number(process.env.CROP_GROW_SCALE || 1);   // tests speed crops up
+/** Under the water your breath runs down (SWIM.breathS), then you drown; at the surface it comes back. */
+const BREATH_S = Number(process.env.BREATH_S || SWIM.breathS);
+function tickBreath(p) {
+  const under = p.swim && (p.dive || 0) > 0.3 && !p.dead;
+  const before = Math.round(p.breath ?? BREATH_S);
+  p.breath = Math.min(p.breath ?? BREATH_S, BREATH_S);
+  p.breath = under ? Math.max(0, p.breath - 1) : Math.min(BREATH_S, p.breath + SWIM.refill);
+  if (Math.round(p.breath) !== before) dirty(p);
+  if (under && p.breath <= 0) applyDamage(p, SWIM.drownDps, null, false);
+  else if (under && p.breath === 8) toast(p, '🫧 Running out of air: come up (jump)!');
+}
 function tickHunger(p, now) {
   if (p.deploying || p.downed) return;
   const before = Math.round(p.food);
@@ -3759,7 +3770,9 @@ function traceShot(ox, oy, oz, dx, dy, dz, range, shooterId) {
   }
   const check = (c, k) => {
     if (c.dead || c.id === shooterId || Math.abs(c.x - ox) > best + 1 || Math.abs(c.z - oz) > best + 1) return;
+    if (c.swim && (c.dive || 0) > 0.3) return;   // under the water: bullets don't reach you
     const b = characterBounds(c.x, c.z, c.crouch, gy(c), c.prone);
+    if (c.swim) b.minY = Math.max(b.minY, -0.05);   // swimming: only what's above the water can be hit
     const t = rayBox(ox, oy, oz, dx, dy, dz, b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
     if (t < best) { best = t; target = c; kind = k; headshot = oy + dy * t > b.maxY - 0.3; }
   };
@@ -5520,7 +5533,7 @@ function handleState(p, msg) {
   if (d > maxStep) { dx *= maxStep / d; dz *= maxStep / d; }
   p.moveBudget = Math.max(0, p.moveBudget - Math.min(d, maxStep));
   const y0 = standing(p);
-  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2).concat(rideSolids(db.boats, p.x, p.z, maxStep + 2, rideY, PLAYER_RADIUS)), terrain, y0, p.hop ? p.hop.alt : 0);
+  const np = moveWithCollision(p.x, p.z, dx, dz, PLAYER_RADIUS, solidsNear(p.x, p.z, maxStep + 2).concat(rideSolids(db.boats, p.x, p.z, maxStep + 2, rideY, PLAYER_RADIUS)), terrain, y0, p.hop ? p.hop.alt : 0, true);
   if (p.hop && np.y !== y0) { p.hop.alt -= np.y - y0; if (p.hop.alt <= 0) p.hop = null; }   // landed on a top mid-climb
   if (p.hop?.hold && Math.hypot(p.x - p.hop.x0, p.z - p.hop.z0) > 3) p.hop.hold = 0;   // stepped away from the top of a ladder without landing: let go
   p.speed = dt > 0 ? Math.hypot(np.x - p.x, np.z - p.z) / dt : 0;
@@ -5537,6 +5550,16 @@ function handleState(p, msg) {
   p.aiming = !!msg.aim;
   if (p.camoOn && msg.sprint) breakCamo(p, 500);
   p.y = np.y; p.yx = p.x; p.yz = p.z;
+  // Swimming: at the surface (np.y), or dived down as far as the client says, at a believable rate and
+  // never through the bottom.
+  const wasSwim = p.swim;
+  p.swim = !p.boat && !p.air && np.y <= SWIM_Y + 0.001 && terrain.standY(p.x, p.z, np.y) < SWIM_Y;
+  if (p.swim) {
+    const want = Math.max(0, Math.min(Number(msg.dive) || 0, maxDive(terrain, p.x, p.z))), step = 3.5 * Math.max(dt, 0.05) + 0.3;
+    p.dive = Math.max((p.dive || 0) - step, Math.min((p.dive || 0) + step, want));
+    p.prone = false;
+  } else p.dive = 0;
+  if (p.swim !== wasSwim) { p.breath = p.breath ?? SWIM.breathS; dirty(p); }
   if (Math.hypot(p.x - tx, p.z - tz) > 0.5) send(p.ws, { t: 'correct', x: p.x, z: p.z, y: +p.y.toFixed(2) });
   if (p.openContainer && !nearContainer(p, p.openContainer.kind, p.openContainer.id)) { p.openContainer = null; send(p.ws, { t: 'container', closed: true }); }
 }
@@ -5590,7 +5613,7 @@ function tickAir(p, dt) {
   if (p.air.alt <= 0) landAir(p);
 }
 function handleShoot(p, msg) {
-  if (p.dead || p.taserOut) return;
+  if (p.dead || p.taserOut || p.swim) return;   // (no shooting while swimming)
   if (p.hack?.walk) cancelHack(p, p.hack.kind === 'eat' ? 'Stopped eating' : 'Stopped patching up');
   const w = activeWeapon(p);
   if (!w) return;
@@ -5800,9 +5823,9 @@ wss.on('connection', (ws) => {
       case 'squad': return squadAction(p, msg);
       case 'rally': return !p.dead && rally(p);
       case 'mark': return !p.dead && markTarget(p, msg);
-      case 'sensor': return !p.dead && throwSensor(p, msg);
-      case 'stun': return !p.dead && throwStun(p, msg);
-      case 'frag': return !p.dead && !p.downed && throwFrag(p, msg);
+      case 'sensor': return !p.dead && !p.swim && throwSensor(p, msg);
+      case 'stun': return !p.dead && !p.swim && throwStun(p, msg);
+      case 'frag': return !p.dead && !p.downed && !p.swim && throwFrag(p, msg);
       case 'camo': {   // a charge that runs out, then recharges (shared/data/gadgets.json)
         if (p.dead) return;
         if (level(p) < GADGETS.camo.level) return toast(p, `Optical camo unlocks at level ${GADGETS.camo.level}`);
@@ -5977,6 +6000,7 @@ function worldTick() {
       const HR = COMBAT.healthRegen;   // and health, part of the way, once you're out of the fight
       if (HR && !p.downed && now - (p.lastHit || 0) >= HR.afterMs && p.hp < HR.upTo && p.food >= HUNGER.noRegenBelow) { p.hp = Math.min(HR.upTo, p.hp + HR.perSec); dirty(p); }
       tickHunger(p, now);
+      tickBreath(p);
       for (const c of [...p.contracts]) if (c.expires < now) { abandonContract(p, c.id); toast(p, `Contract expired: ${CONTRACT_TYPES[c.type].name}`); }
     }
     if (tick % (TICK_HZ * 5) === 0) for (const s of squads.values()) pushSquadState(s);   // squadmate positions for the map
@@ -5990,6 +6014,7 @@ function worldTick() {
       ...(p.hop?.ladder ? { lad: 1, ly: +p.hop.ly.toFixed(2) } : {}),   // on a ladder: climbing pose
       air: p.air ? p.air.mode : undefined, alt: p.air ? Math.round(p.air.alt * 10) / 10 : p.hop ? Math.round(p.hop.alt * 100) / 100 : undefined,
       y: !p.boat && standing(p) > terrain.height(p.x, p.z) + 0.8 ? +standing(p).toFixed(2) : undefined,   // up on a bridge deck
+      ...(p.swim ? { sw: 1, y: +(SWIM_Y - (p.dive || 0)).toFixed(2) } : {}),   // swimming (y: how deep)
       aim: p.aiming && !p.dead ? 1 : 0,
       ...(p.sprint && !p.dead ? { sp: 1 } : {}),   // sprinting: gun put away
       gl: p.aiming && !p.dead && activeWeapon(p) && stats(p).glint ? 1 : 0,

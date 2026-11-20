@@ -907,9 +907,29 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
   terrain.setDecks(decks);
   // Rails along both edges (solid: cover, and they keep you on the deck), and a slab under the deck that
   // stops shots from below. Turned boxes following each 10 m piece; the client draws the bridge itself.
+  // Ladders: every 150 m or so, on alternate sides, wherever the deck stands well clear of the ground
+  // or the water, a ladder up the outside with a gap in the rail at the top (d.ladders: [i, side], for
+  // the client's parapet). Fall off, or swim to one, and climb back up.
+  for (const d of decks) {
+    d.ladders = [];
+    let flip = 1;
+    for (let i = 7; i < d.pts.length - 8; i += 15) {
+      const [x1, z1, y1] = d.pts[i], [x2, z2, y2] = d.pts[i + 1], len = Math.hypot(x2 - x1, z2 - z1) || 1;
+      const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2, my = (y1 + y2) / 2, g = terrain.exact(mx, mz);
+      if (my - Math.max(g, 0) < 2.5) continue;
+      const side = (flip = -flip), ux = (x2 - x1) / len, uz = (z2 - z1) / len;
+      const nx = -uz * side, nz = ux * side, off = DECK_HALF + 0.42;   // just outside the rail
+      const lx = mx + nx * off, lz = mz + nz * off;
+      const foot = g < 0 ? Math.max(g, -3) : g;   // over water: down into it, so you can climb out
+      const ex = Math.abs(ux) * 0.35 + Math.abs(uz) * 0.11, ez = Math.abs(uz) * 0.35 + Math.abs(ux) * 0.11;
+      box(lx - ex, lz - ez, lx + ex, lz + ez, my - foot + 0.15, 'ladder', { y0: foot, ladderTop: my, ladderIn: [-nx, -nz], ang: Math.atan2(uz, ux), cx: lx, cz: lz, ca: ux, sa: uz, hw: 0.35, hd: 0.11 });
+      d.ladders.push([i, side]);
+    }
+  }
+  const GAP = 0.75;   // half the opening in the rail at a ladder
   for (const d of decks) for (let i = 0; i < d.pts.length - 1; i++) {
     const [x1, z1, y1] = d.pts[i], [x2, z2, y2] = d.pts[i + 1], len = Math.hypot(x2 - x1, z2 - z1) || 1;
-    const ux = (x2 - x1) / len, uz = (z2 - z1) / len, lo = Math.min(y1, y2), rise = Math.abs(y2 - y1);
+    const ux = (x2 - x1) / len, uz = (z2 - z1) / len, lo = Math.min(y1, y2);
     const turned = (cx, cz, hw, hd, y0, h, type) => {
       const ex = Math.abs(ux) * hw + Math.abs(uz) * hd, ez = Math.abs(uz) * hw + Math.abs(ux) * hd;
       box(cx - ex, cz - ez, cx + ex, cz + ez, h, type, { y0, ang: Math.atan2(uz, ux), cx, cz, ca: ux, sa: uz, hw, hd });
@@ -917,12 +937,18 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
     // Rails a metre above the deck all the way along, as drawn (in short pieces up a slope, so they
     // don't stand higher at the low end): you can shoot over them, and climb over them.
-    const nR = Math.max(1, Math.ceil(rise / 0.1));
-    for (let k = 0; k < nR; k++) {
-      const t0 = k / nR, t1 = (k + 1) / nR, ya = y1 + (y2 - y1) * t0, yb = y1 + (y2 - y1) * t1;
-      const cx = x1 + (x2 - x1) * (t0 + t1) / 2, cz = z1 + (z2 - z1) * (t0 + t1) / 2;
-      const rlo = Math.min(ya, yb), rhi = Math.max(ya, yb);
-      for (const side of [-1, 1]) turned(cx - uz * side * (DECK_HALF + 0.15), cz + ux * side * (DECK_HALF + 0.15), len / nR / 2 + 0.05, 0.15, rlo - 0.3, rhi - rlo + 1.3, 'rail');   // (0.3 m thick, from the deck's edge out)
+    const rise = Math.abs(y2 - y1), nR = Math.max(1, Math.ceil(rise / 0.1));
+    for (const side of [-1, 1]) {
+      const gapAt = d.ladders.some(([li, ls]) => li === i && ls === side);
+      const spans = gapAt ? [[0, 0.5 - GAP / len], [0.5 + GAP / len, 1]] : [[0, 1]];
+      for (const [s0, s1] of spans) for (let k = 0; k < nR; k++) {
+        const t0 = Math.max(s0, k / nR), t1 = Math.min(s1, (k + 1) / nR);
+        if (t1 - t0 < 0.01) continue;
+        const ya = y1 + (y2 - y1) * t0, yb = y1 + (y2 - y1) * t1;
+        const cx = x1 + (x2 - x1) * (t0 + t1) / 2, cz = z1 + (z2 - z1) * (t0 + t1) / 2;
+        const rlo = Math.min(ya, yb), rhi = Math.max(ya, yb);
+        turned(cx - uz * side * (DECK_HALF + 0.15), cz + ux * side * (DECK_HALF + 0.15), (t1 - t0) * len / 2 + (gapAt ? 0 : 0.05), 0.15, rlo - 0.3, rhi - rlo + 1.3, 'rail');   // (0.3 m thick, from the deck's edge out)
+      }
     }
     if (lo - Math.min(terrain.exact(x1, z1), terrain.exact(x2, z2)) > 2.5) turned(mx, mz, len / 2 + 0.05, DECK_HALF + 0.3, lo - 1.2, 0.8, 'deckslab');
   }
@@ -1661,12 +1687,25 @@ export function resolveCircle(x, z, r, solids, y) {
  */
 /** A jump: straight up at JUMP_V m/s against JUMP_G: about 0.6 s in the air, 0.75 m up at the top. */
 export const JUMP_V = 5.2, JUMP_G = 18;
-export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift = 0) {
+// ---- swimming: past wading depth you swim, head and shoulders out of the water (the surface is at
+// y = 0), slower than walking. Hold crouch to dive (down to the bottom), jump to come up; under the
+// water your breath lasts BREATH_S, then you start to drown. No shooting in the water.
+export const SWIM_Y = -1.35;                       // your feet, swimming at the surface
+export const SWIM = { speed: 2.4, sprint: 3.4, down: 1.6, up: 2.8, float: 0.7, breathS: 30, refill: 4, drownDps: 12 };
+/** Swimming here: the bottom (or a deck you'd stand on) is deeper than SWIM_Y. */
+export const swimmingAt = (terrain, x, z, y) => (terrain.standY ? terrain.standY(x, z, y) : terrain.height(x, z)) < SWIM_Y;
+/** How far down you can dive here (to just above the bottom). */
+export const maxDive = (terrain, x, z) => Math.max(0, SWIM_Y - terrain.height(x, z) - 0.5);
+
+export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift = 0, swim = false) {
   const dist = Math.hypot(dx, dz);
   const steps = Math.max(1, Math.ceil(dist / 0.15));
   // Where you stand: the ground, a bridge deck, or the top of something you've climbed onto (a crate,
-  // a car, a loading dock, a low wall: see platformTop).
-  const stand = (px, pz, from, reach) => Math.max(terrain.standY ? terrain.standY(px, pz, from) : terrain.height(px, pz), solids ? platformTop(solids, px, pz, from + reach) : -Infinity);
+  // a car, a loading dock, a low wall: see platformTop). Swimming (`swim` allowed), the water's surface.
+  const stand = (px, pz, from, reach) => {
+    const h = Math.max(terrain.standY ? terrain.standY(px, pz, from) : terrain.height(px, pz), solids ? platformTop(solids, px, pz, from + reach) : -Infinity);
+    return swim && h < SWIM_Y ? SWIM_Y : h;
+  };
   let y = terrain ? (fromY !== undefined ? stand(x, z, fromY, 0.05) : terrain.height(x, z)) : undefined;
   for (let i = 0; i < steps; i++) {
     const p = resolveCircle(x + dx / steps, z + dz / steps, r, solids, y === undefined ? y : y + lift);   // up in a jump, low things pass under you
@@ -1678,7 +1717,8 @@ export function moveWithCollision(x, z, dx, dz, r, solids, terrain, fromY, lift 
       // as high as you've jumped in a jump. Only onto a deck or a top, never up a hillside.
       const th = terrain.height(p.x, p.z);
       const curb = ny - y <= 0.5 + lift && (ny > th + 0.3 || (ny > th + 0.02 && ny - y <= 0.35 && solids && platformTop(solids, p.x, p.z, ny + 0.01) >= ny - 0.01));
-      if (ny < DEEP_WATER || (run > 1e-6 && !curb && (ny - y) / run > MAX_STEP_SLOPE)) break;
+      const outOfWater = swim && y <= SWIM_Y + 0.01 && ny - y <= 0.7;   // swimming up to a bank: you haul yourself out
+      if ((!swim && ny < DEEP_WATER) || (run > 1e-6 && !curb && !outOfWater && (ny - y) / run > MAX_STEP_SLOPE)) break;
       y = ny;
     }
     x = p.x; z = p.z;

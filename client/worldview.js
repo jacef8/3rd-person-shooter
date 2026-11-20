@@ -240,7 +240,7 @@ export function createWorldView(scene, map, { viewRange: view0 = 300, farRange: 
   // Water: small waves rolling across it (worked out per pixel from where it is and the time), and the
   // sky showing in it more the flatter you look across it, like the real thing.
   const waterTime = { value: 0 };
-  const waterMat = new THREE.MeshStandardMaterial({ color: 0x22566e, transparent: true, opacity: 0.86, roughness: 0.08, metalness: 0.05 });
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x22566e, transparent: true, opacity: 0.86, roughness: 0.08, metalness: 0.05, side: THREE.DoubleSide });   // (both sides: seen from below when you dive)
   waterMat.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = waterTime;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWaterP;')
@@ -660,7 +660,14 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
         const yaw = Math.atan2(x2 - x1, z2 - z1), pitch = -Math.atan2(y2 - y1, len), ux = (x2 - x1) / len, uz = (z2 - z1) / len;
         const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2, my = (y1 + y2) / 2, L = Math.hypot(len, y2 - y1) + 0.15;
         put(truss ? parts.old : parts.deck, mx, my - 0.42, mz, 9.6, 0.85, L, yaw, pitch);
-        for (const sd of [-1, 1]) put(truss ? parts.steel : parts.parapet, mx - uz * sd * 4.75, my + (truss ? 0.45 : 0.5), mz + ux * sd * 4.75, truss ? 0.18 : 0.4, truss ? 0.9 : 1.0, L, yaw, pitch);
+        for (const sd of [-1, 1]) {
+          // (with a gap where a ladder comes up: shared/world.js d.ladders)
+          const gap = (d.ladders || []).some(([li, ls]) => li === i && ls === sd) ? 0.75 / len : 0;
+          for (const [t0, t1] of gap ? [[0, 0.5 - gap], [0.5 + gap, 1]] : [[0, 1]]) {
+            const tm = (t0 + t1) / 2, px = x1 + (x2 - x1) * tm, pz = z1 + (z2 - z1) * tm, py = y1 + (y2 - y1) * tm;
+            put(truss ? parts.steel : parts.parapet, px - uz * sd * 4.75, py + (truss ? 0.45 : 0.5), pz + ux * sd * 4.75, truss ? 0.18 : 0.4, truss ? 0.9 : 1.0, gap ? L * (t1 - t0) : L, yaw, pitch);
+          }
+        }
         // A bent every 30 m where the deck stands clear of the ground: two columns and a cap.
         const gnd = terrain.height(mx, mz), clear = my - gnd;
         const sC = (i - d.sC) * 10, channel = Math.abs(sC) < 200 && gnd < 1;
