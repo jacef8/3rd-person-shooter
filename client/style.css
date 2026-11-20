@@ -54,7 +54,7 @@ button.ghost { background: transparent; color: var(--ink); border-color: var(--l
 #toasts div { background: var(--surface); padding: 6px 14px; margin: 4px; border-radius: 4px; font-size: 14px; border-left: 3px solid var(--accent); }
 #feed { position: absolute; top: 12px; left: 12px; font-size: 13px; }
 #feed div { opacity: 0.9; margin-bottom: 3px; }
-#minimap { position: absolute; top: 12px; right: 12px; border: 1px solid #ff7a1a66; border-radius: 50%; background: var(--surface-2); }
+#minimap { position: absolute; top: 12px; right: 12px; width: 200px; height: 200px; border: 1px solid #ff7a1a66; border-radius: 50%; background: var(--surface-2); }   /* (its pixels are set to the screen's density in drawMinimap: the size on screen is fixed here) */
 /* On-screen keyboard for controllers: a solid panel, big keys, sharp text. */
 #osk { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 60; width: min(620px, 94vw); padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
 #oskLabel { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px; }

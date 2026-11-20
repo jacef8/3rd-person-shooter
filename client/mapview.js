@@ -9,7 +9,7 @@ export function fillBox(g, b, X, Z, min = 1) {
 }
 /** Map colours: state routes amber, main roads light, streets a shade darker, dirt tracks brown. */
 const roadColor = (r) => (r.dirt ? COL.dirt : r.hw ? COL.route : (r.width || 12) >= 8 ? COL.road : COL.street);
-const HIDDEN = new Set(['border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail', 'tower', 'beacon', 'pole', 'fence', 'equipment', 'marker', 'windsock', 'plane']);
+const HIDDEN = new Set(['furn', 'deckslab', 'border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail', 'tower', 'beacon', 'pole', 'fence', 'equipment', 'marker', 'windsock', 'plane']);
 const boxColor = (b) => (b.type === 'solar' ? '#2b3a5c' : b.type === 'tank' ? '#d8dde2' : b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : b.type === 'home' ? COL.home : b.type === 'civic' ? COL.civic : COL.building);
 // Label chips: solid panels with sharp text (no outlines or glows).
 const PLACE_INK = { pawn: '#ffd27a', airstrip: '#ffffff', sheriff: '#9cc3ff', 'fire station': '#ff9f8a', hospital: '#ff9f8a', 'gas station': '#ffd27a', prison: '#c9b8ff', overlook: '#9fe39f', park: '#9fe39f', campground: '#9fe39f', 'post office': '#e8e8e8' };
@@ -54,14 +54,74 @@ export function landColor(terrain, x, z, h) {
   if (cc) for (let i = 0; i < 3; i++) c[i] = cc[i] * 0.85 + c[i] * 0.15;
   return c;
 }
-/** Map colour (0-255 RGB) for a point: land colour, water, shaded by slope. */
+// The maps' own palette (not the 3D ground's): a few calm, flat colours, so the map reads like a map
+// (woods, open ground, fields, town, wetland, water) instead of a patchwork of every field and tree.
+const MAP_RGB = { 0: [76, 92, 60], 1: [60, 78, 51], 2: [70, 87, 57], 3: [80, 97, 62], 4: [88, 100, 64], 5: [76, 80, 84], 6: [140, 132, 102], 8: [45, 100, 130], 9: [62, 80, 63] };
+const MAP_SAND = [170, 158, 118], MAP_WATER = [45, 100, 130], MAP_DEEP = [36, 84, 114];
+// The blend's sample points (in units of the patch radius) and weights: the middle, a ring of eight.
+const MAP_TAPS = [[0, 0, 0.12], ...[0, 1, 2, 3, 4, 5].map((a) => [0.5 * Math.cos(a * Math.PI / 3), 0.5 * Math.sin(a * Math.PI / 3), 0.08]), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((a) => [Math.cos(a * Math.PI / 5 + 0.3), Math.sin(a * Math.PI / 5 + 0.3), 0.04])];
+/** The map's colour for dry land at a point: its land cover, blended across the nearest cells. */
+function mapLandRgb(terrain, x, z, h) {
+  if (h < 0.7) return MAP_SAND;
+  if (!terrain.hasCover) return landColor(terrain, x, z, h);
+  // Averaged over a 50 m patch (the land cover comes in 10 m squares: blended, a wood reads as a
+  // soft-edged shape, not a stack of blocks).
+  const r = (terrain.coverStep || 10) * 2.5, out = [0, 0, 0];
+  for (const [ox, oz, wt] of MAP_TAPS) {
+    const c = MAP_RGB[terrain.cover(x + ox * r, z + oz * r)] || MAP_RGB[0];
+    out[0] += c[0] * wt; out[1] += c[1] * wt; out[2] += c[2] * wt;
+  }
+  return out;
+}
+/** Map colour (0-255 RGB) for a point: land colour, water, gently shaded by slope. */
 export function mapGroundColor(map, x, z, H = map.terrain.height) {
   const h = H(x, z);
-  if (h < -6) return GC.deep;
-  if (h < 0) return GC.water;
-  // Hill shading from the slope toward the light (north-west).
-  const shade = Math.max(0.6, Math.min(1.35, 1 + (h - H(x - 12, z - 12)) * 0.04));
-  return landColor(map.terrain, x, z, h).map((v) => Math.min(255, v * shade));
+  if (h < -6) return MAP_DEEP;
+  if (h < 0) return MAP_WATER;
+  // Hill shading from the slope toward the light (north-west), soft: hills show, the map stays calm.
+  const shade = Math.max(0.88, Math.min(1.12, 1 + (h - H(x - 12, z - 12)) * 0.02));
+  return mapLandRgb(map.terrain, x, z, h).map((v) => Math.min(255, v * shade));
+}
+
+// ---- map icons: one look on the minimap and the big map, each a coloured badge with a symbol, and a
+// name for the key (the big map lists the ones on screen).
+export const ICONS = {
+  crew: { color: '#7dff9a', glyph: '', label: 'Crewmate' },
+  enemy: { color: '#ff4d4d', glyph: '', label: 'Enemy spotted' },
+  home: { color: '#4fbf6a', glyph: '⌂', label: 'Your stash house' },
+  hideout: { color: '#9fe39f', glyph: '▲', label: 'Your hideout' },
+  waypoint: { color: '#ff7a1a', glyph: 'W', label: 'Waypoint' },
+  contract: { color: '#ffc53d', glyph: '!', label: 'Contract' },
+  objective: { color: '#ffc53d', glyph: '★', label: 'Crew objective' },
+  ping: { color: '#ffffff', glyph: '◆', label: 'Ping' },
+  drop: { color: '#ff3b3b', glyph: '+', label: 'Supply drop' },
+  extract: { color: '#ff2a2a', glyph: 'H', label: 'Extraction' },
+  pickup: { color: '#5dff8a', glyph: 'H', label: 'Hot-zone pickup' },
+  hotzone: { color: '#ff5a1f', glyph: '!', label: 'Hot zone' },
+  hotloot: { color: '#ff5a1f', glyph: '$', label: 'Hot loot carrier' },
+  event: { color: '#c77dff', glyph: '★', label: 'World event' },
+  trader: { color: '#7fd6ff', glyph: '$', label: 'Contact (trader)' },
+  alert: { color: '#ff3b3b', glyph: '!', label: 'Base under attack' },
+  enemystash: { color: '#ff8a2a', glyph: '⌂', label: 'Enemy stash house' },
+  ride: { color: '#7dff9a', glyph: 'V', label: 'Your vehicle' },
+  camp: { color: '#9fe39f', glyph: 'C', label: 'Safe camp' },
+  dock: { color: '#7fd6ff', glyph: 'D', label: 'Boat dock' },
+  lz: { color: '#cfcfcf', glyph: 'L', label: 'Landing zone' },
+  died: { color: '#ff4d4d', glyph: '✕', label: 'Where you died' },
+  site: { color: '#ffc53d', glyph: '◆', label: 'Place to loot (grey: cleared)' },
+};
+/** Draw an icon: a coloured badge, a dark outline, and its symbol (radius s). */
+export function drawIcon(g, x, y, key, s = 7, color = null) {
+  const ic = ICONS[key] || ICONS.ping, col = color || ic.color;
+  g.beginPath(); g.arc(x, y, s, 0, Math.PI * 2);
+  g.fillStyle = col; g.fill();
+  g.lineWidth = Math.max(1.5, s * 0.28); g.strokeStyle = ic.glyph ? '#0f1218' : '#ffffff'; g.stroke();
+  if (ic.glyph) {
+    g.fillStyle = '#0f1218'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `900 ${Math.round(s * 1.35)}px 'Atkinson Hyperlegible', Segoe UI, system-ui, sans-serif`;
+    g.fillText(ic.glyph, x, y + s * 0.08);
+    g.textBaseline = 'alphabetic';
+  }
 }
 /**
  * One coarse sampling of the whole map: height and land colour every `step` metres. Shared by the
@@ -118,11 +178,12 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
     const k = j * res + i, h = land.h[k], o = k * 4;
     let col;
-    if (h < -6) col = GC.deep;
-    else if (h < 0) col = GC.water;
+    if (h < -6) col = MAP_DEEP;
+    else if (h < 0) col = MAP_WATER;
     else {
-      const shade = Math.max(0.6, Math.min(1.35, 1 + (h - land.h[Math.max(0, j - 1) * res + Math.max(0, i - 1)]) * relief));
-      col = [land.rgb[k * 3] * shade, land.rgb[k * 3 + 1] * shade, land.rgb[k * 3 + 2] * shade];
+      const shade = Math.max(0.88, Math.min(1.12, 1 + (h - land.h[Math.max(0, j - 1) * res + Math.max(0, i - 1)]) * relief * 0.5));
+      const base = mapLandRgb(map.terrain, -map.half + i * land.step, -map.half + j * land.step, h);
+      col = [base[0] * shade, base[1] * shade, base[2] * shade];
     }
     img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
   }
@@ -146,7 +207,6 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
   g.lineCap = 'round';
   for (const t of map.towns) { if (t.paved === false) continue; g.fillStyle = COL.town; g.fillRect(X(t.rect.minX), Z(t.rect.minZ), (t.rect.maxX - t.rect.minX) * k, (t.rect.maxZ - t.rect.minZ) * k); }
   for (const b of map.boxes) {
-    if (b.type === 'tree' || b.type === 'pine') { g.fillStyle = COL.tree; g.fillRect(X(b.minX) - 1, Z(b.minZ) - 1, 2.2, 2.2); continue; }
     if (HIDDEN.has(b.type)) continue;
     g.fillStyle = boxColor(b);
     fillBox(g, b, X, Z);
@@ -277,7 +337,7 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
       fillBox(g, b, sx, sz);
     }
   }
-  const names = [];
+  const names = [], used = new Set();
   g.textAlign = 'center';
   for (const m of markers) {
     const x = sx(m.x), y = sz(m.z);
@@ -285,7 +345,10 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
     const s = m.size || 7;
     g.fillStyle = m.color || '#fff';
     g.strokeStyle = '#000'; g.lineWidth = 2;
-    if (m.kind === 'player') {
+    if (m.icon) {
+      drawIcon(g, x, y, m.icon, Math.max(6, (m.size || 6) + 1), m.color);
+      used.add(m.icon);
+    } else if (m.kind === 'player') {
       g.save(); g.translate(x, y); g.rotate(-m.yaw + Math.PI);
       g.beginPath(); g.moveTo(0, -s * 1.4); g.lineTo(s, s); g.lineTo(-s, s); g.closePath(); g.fill(); g.stroke(); g.restore();
     } else if (m.kind === 'ring') {
@@ -299,6 +362,24 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
     if (m.label) names.push({ text: m.label, x, y: y - s - 13, highlight: !!m.highlight, min: m.labelMin });
   }
   drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H, hereRoad }, names);
+  // The key: what each icon on screen means (bottom right).
+  const keys = Object.keys(ICONS).filter((kk) => used.has(kk));
+  if (keys.length) {
+    g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif";
+    const rowH = 22, kw = Math.max(...keys.map((kk) => g.measureText(ICONS[kk].label).width)) + 44, kh = keys.length * rowH + 30;
+    const kx = W - kw - 12, ky = 12;   // top right (the zoom buttons are bottom right)
+    g.fillStyle = 'rgba(15,18,24,0.94)'; g.strokeStyle = '#2a2f3a'; g.lineWidth = 1;
+    g.beginPath(); g.roundRect(kx, ky, kw, kh, 10); g.fill(); g.stroke();
+    g.fillStyle = '#b9c0cc'; g.font = "800 12px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'left'; g.textBaseline = 'middle';
+    g.fillText('KEY', kx + 12, ky + 14);
+    keys.forEach((kk, i) => {
+      const yy = ky + 32 + i * rowH;
+      drawIcon(g, kx + 20, yy, kk, 7);
+      g.fillStyle = '#ffffff'; g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'left'; g.textBaseline = 'middle';
+      g.fillText(ICONS[kk].label, kx + 34, yy + 1);
+    });
+    g.textBaseline = 'alphabetic'; g.textAlign = 'center';
+  }
   // Scale bar in feet / miles.
   const STEPS = [[100, 'ft'], [250, 'ft'], [500, 'ft'], [1000, 'ft'], [0.25, 'mi'], [0.5, 'mi'], [1, 'mi'], [2, 'mi'], [5, 'mi']];
   const toM = ([v, u]) => (u === 'ft' ? v / 3.28084 : v * 1609.344);

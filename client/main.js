@@ -24,7 +24,7 @@ import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom
 import { ACT_POSE, updateAction, disposeActionProps } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
-import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox } from '/mapview.js';
+import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox, drawIcon } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, structureBoxes, planPiece, isKitPiece } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS, hourLabel, windowText } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
@@ -1713,35 +1713,39 @@ function feedLine(text) {
 }
 
 // ------------------------------------------------------------------ minimap
-const MM_COLORS = { home: '#9a9186', civic: '#a65f4b', rail: 'rgba(0,0,0,0)', roomwall: '#8a8a86', vehiclebody: '#d6c79a', dam: '#999', scrub: '#55603a', pine: '#1f3a24', boulder: '#6a6560', adobe: '#a88a64', cactus: '#3f6a33', cavewall: '#5a5550', caveroof: 'rgba(0,0,0,0)', rockwall: '#8c7258', logwall: '#5a3d24', plankwall: '#7a5e3e', canopy: 'rgba(0,0,0,0)', jetty: '#7a5e3e', building: '#4a5058', warehouse: '#4a5058', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
+const MM_COLORS = { home: '#9a9186', civic: '#a65f4b', rail: 'rgba(0,0,0,0)', roomwall: '#8a8a86', vehiclebody: '#d6c79a', dam: '#999', scrub: '#55603a', pine: '#1f3a24', boulder: '#6a6560', adobe: '#a88a64', cactus: '#3f6a33', cavewall: '#5a5550', caveroof: 'rgba(0,0,0,0)', rockwall: '#8c7258', logwall: '#5a3d24', plankwall: '#7a5e3e', canopy: 'rgba(0,0,0,0)', jetty: '#7a5e3e', building: '#9aa0a8', warehouse: '#8d939b', farmhouse: '#6b5a44', barn: '#6b3a30', housewall: '#a8774c', crate: '#ff8a2a', tree: '#2c4a26', rock: '#555', car: '#5a3434', cover: '#3a3f44', terminal: '#16c2ff', border: '#000' };
 const mmTerrain = { canvas: null, x: 0, z: 0, span: 1 };
+const MM_HIDE = new Set(['furn', 'tree', 'pine', 'scrub', 'bush', 'cactus', 'boulder', 'rock', 'canopy', 'caveroof', 'rail', 'border', 'cover', 'terminal', 'pole', 'fence', 'marker', 'windsock', 'deckslab']);
 function drawMinimap() {
   const c = $('minimap'), g = c.getContext('2d');
   const R = 100, view = 80;   // metres shown radius
-  // Text sized for how big the minimap is on screen (it's drawn at 200 px and shown smaller on a
-  // phone): road names come out about 12 px however it's shown.
-  const fs = Math.min(2, Math.max(1, 200 / (c.clientWidth || 200)));
+  // Drawn at the screen's own pixel density (sharp on a phone), in a 200-unit frame.
+  const css = c.clientWidth || 200, want = Math.round(css * Math.min(3, window.devicePixelRatio || 1));
+  if (c.width !== want) { c.width = want; c.height = want; mmTerrain.canvas = null; }
+  g.setTransform(c.width / 200, 0, 0, c.width / 200, 0, 0);
+  const fs = Math.min(2, Math.max(1, 200 / css));   // text and icons the same size on screen however big the minimap is
   const k = R / view;
   g.clearRect(0, 0, 200, 200);
   g.save();
   g.beginPath(); g.arc(R, R, R, 0, Math.PI * 2); g.clip();
   // Terrain layer (re-rendered when you've moved a bit).
   if (!mmTerrain.canvas || Math.hypot(state.x - mmTerrain.x, state.z - mmTerrain.z) > 12) {
-    mmTerrain.canvas ??= Object.assign(document.createElement('canvas'), { width: 48, height: 48 });
+    const N = 72;   // ground samples across (about 2.7 m each, smoothed)
+    mmTerrain.canvas ??= Object.assign(document.createElement('canvas'), { width: N, height: N });
     const tg = mmTerrain.canvas.getContext('2d');
-    const img = tg.createImageData(48, 48);
+    const img = tg.createImageData(N, N);
     const span = view * 2 * 1.2;
-    for (let i = 0; i < 48; i++) for (let j = 0; j < 48; j++) {
-      const x = state.x - span / 2 + (i + 0.5) * span / 48, z = state.z - span / 2 + (j + 0.5) * span / 48;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const x = state.x - span / 2 + (i + 0.5) * span / N, z = state.z - span / 2 + (j + 0.5) * span / N;
       const c = mapGroundColor(state.map, x, z);
-      const o = (j * 48 + i) * 4;
+      const o = (j * N + i) * 4;
       img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
     }
     tg.putImageData(img, 0, 0);
     mmTerrain.x = state.x; mmTerrain.z = state.z; mmTerrain.span = span;
   }
   const X = (x) => R + (x - state.x) * k, Z = (z) => R + (z - state.z) * k;
-  g.imageSmoothingEnabled = true;
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
   g.drawImage(mmTerrain.canvas, X(mmTerrain.x - mmTerrain.span / 2), Z(mmTerrain.z - mmTerrain.span / 2), mmTerrain.span * k, mmTerrain.span * k);
   // Roads, as on the big map: state routes amber, main roads light, streets a shade darker, tracks brown.
   const mmRoads = state.map.roadsNear(state.x, state.z, view * 1.42);
@@ -1752,26 +1756,26 @@ function drawMinimap() {
     g.beginPath(); g.moveTo(X(r.x1), Z(r.z1)); g.lineTo(X(r.x2), Z(r.z2)); g.stroke();
   }
   for (const b of state.map.grid.near(state.x, state.z, view * 1.42)) {
+    if (b.nature || MM_HIDE.has(b.type)) continue;   // (buildings and walls only: no specks for every tree and rock)
     g.fillStyle = b.type === 'housewall' && b.houseId === state.houseId ? '#4fbf6a' : MM_COLORS[b.type] || '#3a3f44';
     fillBox(g, b, X, Z, 1.5);
   }
-  const dot = (x, z, color, size = 4) => { g.fillStyle = color; g.fillRect(X(x) - size / 2, Z(z) - size / 2, size, size); };
-  for (const [id, ready] of state.termState) { const t = state.map.terminals[id]; dot(t.x, t.z, ready ? '#16c2ff' : '#553333', 3); }
-  for (const ct of state.map.contacts) if (Math.abs(ct.x - state.x) < view * 1.5 && Math.abs(ct.z - state.z) < view * 1.5) dot(ct.x, ct.z, '#7fd6ff', 6);
-  for (const [, r] of state.players) if (r.data.sq && !r.data.dead) dot(r.data.x, r.data.z, '#7dff9a', 5);
-  const now = performance.now();
-  for (const p of state.pings) if (p.until > now) dot(p.x, p.z, p.objective ? '#ffc53d' : '#ffffff', p.objective ? 7 : 5);
-  for (const a of state.alerts) if (a.until > now && Math.floor(now / 250) % 2) dot(a.x, a.z, '#ff3b3b', 8);
-  // Off-screen objectives (contracts, drops, home) are pinned to the minimap edge.
-  const edge = (x, z, color, size) => {
+  // Icons (mapview.js ICONS: the big map's key says what each one is). In view, where they are;
+  // off the edge, pinned to the rim in their direction.
+  const IS = 5.5 * Math.min(fs, 1.6), now = performance.now();
+  const icon = (x, z, key, color = null, sz = IS) => drawIcon(g, X(x), Z(z), key, sz, color);
+  const edge = (x, z, key, sz = IS) => {
     const dx = x - state.x, dz = z - state.z, d = Math.hypot(dx, dz);
-    if (d * k < R - 6) return dot(x, z, color, size);
-    g.fillStyle = color; g.beginPath(); g.arc(R + dx / d * (R - 6), R + dz / d * (R - 6), size / 2 + 1, 0, Math.PI * 2); g.fill();
+    if (d * k < R - sz - 2) return icon(x, z, key, null, sz);
+    drawIcon(g, R + dx / d * (R - sz - 2), R + dz / d * (R - sz - 2), key, sz * 0.85);
   };
-  for (const ct of state.contracts) edge(ct.x, ct.z, '#ffc53d', 7);
-  for (const d of state.drops) edge(d.x, d.z, '#ff3b3b', 7);
-  for (const e of state.extracts) edge(e.x, e.z, '#ff2a2a', 8);
-  for (const e of state.worldEvents || []) edge(e.x, e.z, '#c77dff', 8);
+  for (const ct of state.map.contacts) if (Math.abs(ct.x - state.x) < view * 1.5 && Math.abs(ct.z - state.z) < view * 1.5) icon(ct.x, ct.z, 'trader');
+  for (const p of state.pings) if (p.until > now) icon(p.x, p.z, p.objective ? 'objective' : 'ping', null, IS * 0.85);
+  for (const a of state.alerts) if (a.until > now && Math.floor(now / 250) % 2) icon(a.x, a.z, 'alert');
+  for (const ct of state.contracts) edge(ct.x, ct.z, 'contract');
+  for (const d of state.drops) edge(d.x, d.z, 'drop');
+  for (const e of state.extracts) edge(e.x, e.z, 'extract');
+  for (const e of state.worldEvents || []) edge(e.x, e.z, 'event');
   for (const st of state.sites || []) {
     const dx = st.x - state.x, dz = st.z - state.z;
     if (Math.hypot(dx, dz) * k > R + 8) continue;
@@ -1783,21 +1787,17 @@ function drawMinimap() {
   if (state.hotZone) {
     const hz = state.hotZone;
     g.strokeStyle = '#ff5a1f'; g.lineWidth = 2; g.beginPath(); g.arc(X(hz.x), Z(hz.z), hz.radius * k, 0, Math.PI * 2); g.stroke();
-    for (const c of hz.crates) if (!c.opened) dot(c.x, c.z, '#ff5a1f', 6);
-    if (hz.extract) dot(hz.extract.x, hz.extract.z, '#5dff8a', 7);
-    edge(hz.x, hz.z, '#ff5a1f', 10);
+    for (const c of hz.crates) if (!c.opened) { g.fillStyle = '#ff5a1f'; g.beginPath(); g.arc(X(c.x), Z(c.z), 2.5, 0, Math.PI * 2); g.fill(); }
+    if (hz.extract) edge(hz.extract.x, hz.extract.z, 'pickup');
+    edge(hz.x, hz.z, 'hotzone');
   }
-  for (const d of state.map.docks) if (Math.abs(d.x - state.x) < view * 1.5 && Math.abs(d.z - state.z) < view * 1.5) dot(d.x, d.z, '#7fd6ff', 5);
-  for (const [, v] of boatVis) {
-    const land = BOATS[v.data.type].land;
-    if (land && !v.data.mine && (v.data.owner || Math.hypot(v.data.x - state.x, v.data.z - state.z) > view * 0.7)) continue;   // free rides close by only
-    dot(v.mesh.position.x, v.mesh.position.z, v.data.mine ? '#7dff9a' : land ? '#d8d2b0' : '#ffd27a', land && !v.data.mine ? 3 : 5);
-  }
-  if (state.enemyStash && state.enemyStash.untilPerf > performance.now()) edge(state.enemyStash.x, state.enemyStash.z, '#ff8a2a', 8);
-  for (const [id, e] of state.exposed) { if (e.until < performance.now()) continue; const c = state.players.get(id)?.data; if (c && !c.dead && !c.sq) edge(c.x, c.z, '#ff4d4d', 6); }
+  for (const [, v] of boatVis) if (v.data.mine && state.me?.boat?.id !== v.data.id) icon(v.mesh.position.x, v.mesh.position.z, 'ride', null, IS * 0.85);   // (your own rides only)
+  if (state.enemyStash && state.enemyStash.untilPerf > performance.now()) edge(state.enemyStash.x, state.enemyStash.z, 'enemystash');
+  for (const [id, e] of state.exposed) { if (e.until < performance.now()) continue; const c = state.players.get(id)?.data; if (c && !c.dead && !c.sq) edge(c.x, c.z, 'enemy', IS * 0.85); }
   const hp0 = homePos();
-  if (hp0) edge(hp0.x, hp0.z, '#4fbf6a', 7);
-  if (state.waypoint) edge(state.waypoint.x, state.waypoint.z, '#ff7a1a', 9);
+  if (hp0) edge(hp0.x, hp0.z, 'home');
+  for (const h of state.me?.hideouts || []) edge(h.x, h.z, 'hideout', IS * 0.85);
+  if (state.waypoint) edge(state.waypoint.x, state.waypoint.z, 'waypoint');
   // Crewmates: a green dot when they're in view; further off, a green arrow on the rim pointing at
   // them, with their name and how far. Live position when they're near, else the crew update (5 s).
   const crewChips = [];
@@ -1805,7 +1805,7 @@ function drawMinimap() {
     if (!m.online || m.id === state.id || m.x == null) continue;
     const live = state.players.get(m.id)?.data, x = live ? live.x : m.x, z = live ? live.z : m.z;
     const dx = x - state.x, dz = z - state.z, d = Math.hypot(dx, dz);
-    if (d * k < R - 8) { dot(x, z, '#7dff9a', 6); continue; }
+    if (d * k < R - 8) { icon(x, z, 'crew'); continue; }
     const ux = dx / d, uz = dz / d, ex = R + ux * (R - 9), ez = R + uz * (R - 9);
     g.save(); g.translate(ex, ez); g.rotate(Math.atan2(uz, ux));
     g.fillStyle = '#7dff9a'; g.strokeStyle = '#0f1218'; g.lineWidth = 1.5;
@@ -1827,47 +1827,7 @@ function drawMinimap() {
     g.strokeStyle = '#7dff9a'; g.lineWidth = 1; g.stroke();
     g.fillStyle = '#ffffff'; g.fillText(cc.text, x0 + w / 2, y0 + h / 2 + 0.5);
   }
-  // Road names: the two nearest named roads, on solid chips.
-  const named = new Map();
-  for (const r of mmRoads) {
-    if (!r.name) continue;
-    const d = distToSeg(state.x, state.z, r);
-    if (!named.has(r.name) || d < named.get(r.name).d) named.set(r.name, { d, r });
-  }
-  g.font = `700 ${Math.round(12 * fs)}px 'Atkinson Hyperlegible', Segoe UI, sans-serif`;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  const placed = [];   // chips already drawn: [x, y, w, h]
-  const H = Math.round(20 * fs), PAD = 5, top = 30 + 12 * fs;   // (the N marker sits above `top`)
-  /** Half the width the circle has across a chip whose middle is at y (its corners must stay inside). */
-  const halfAt = (y) => { const far = Math.max(Math.abs(y - H / 2 - R), Math.abs(y + H / 2 - R)); return Math.sqrt(Math.max(0, (R - PAD) ** 2 - far * far)); };
-  const hits = (x, y, w) => placed.some(([px, py, pw]) => Math.abs(py - y) < H + 3 && x < px + pw + 4 && px < x + w + 4);
-  for (const [name, { r }] of [...named].sort((a, b) => a[1].d - b[1].d).slice(0, 2)) {
-    // On the road, at the point of it nearest the middle of the minimap; then moved up or down (toward
-    // the middle first) until the whole chip fits inside the circle without covering another one.
-    const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1;
-    const t = Math.max(0.1, Math.min(0.9, ((state.x - r.x1) * dx + (state.z - r.z1) * dz) / l2));
-    const lx0 = X(r.x1 + dx * t), ly0 = Math.max(top, Math.min(2 * R - PAD - H / 2, Z(r.z1 + dz * t)));
-    let text = name, w = g.measureText(text).width + 14 * fs, spot = null;
-    const tryAt = () => {
-      for (let k = 0; k < 16 && !spot; k++) {
-        const step = Math.ceil(k / 2) * 12 * fs * (k % 2 ? 1 : -1) * Math.sign(R - ly0 || 1);
-        const y = ly0 + step;
-        if (y < top || y > 2 * R - PAD - H / 2) continue;
-        const half = halfAt(y);
-        if (w > 2 * half) continue;
-        const x = Math.max(R - half, Math.min(R + half - w, lx0 - w / 2));
-        if (!hits(x, y, w)) spot = [x, y];
-      }
-    };
-    tryAt();
-    // Still no room (a long name near the edge): shorten it until it fits.
-    while (!spot && text.length > 4) { text = text.slice(0, -2).trimEnd() + '…'; w = g.measureText(text).width + 14 * fs; tryAt(); }
-    if (!spot) continue;
-    const [x, y] = spot;
-    placed.push([x, y, w]);
-    g.fillStyle = '#161a22'; g.beginPath(); g.roundRect(x, y - H / 2, w, H, 6); g.fill();
-    g.fillStyle = '#ffffff'; g.fillText(text, x + w / 2, y + 1);
-  }
+  // (No road names here: the road you're on is in the banner at the top, and the big map has them all.)
   g.textBaseline = 'alphabetic';
   g.translate(R, R);
   g.rotate(-state.yaw + Math.PI);
@@ -3392,11 +3352,11 @@ function drawMapCanvas() {
   cv._dpr = dpr;
   const map = state.map, markers = [];
   const dim = new Set(state.me?.discovered || []);
-  for (const c of map.contacts) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: dim.has(c.id) ? '#7fd6ff' : '#3a5560', size: 5 });
+  for (const c of map.contacts) markers.push({ x: c.x, z: c.z, icon: 'trader', color: dim.has(c.id) ? null : '#3a5560', size: 5 });
   const deploying = state.mapMode === 'first' || state.mapMode === 'redeploy';
   if (state.mapMode === 'redeploy') {
     const rs = respawnLeft();
-    if (rs.away > 0) { markers.push({ x: rs.spot.x, z: rs.spot.z, kind: 'ring', radius: rs.radius, color: '#ff4d4d' }); markers.push({ x: rs.spot.x, z: rs.spot.z, kind: 'diamond', color: '#ff4d4d', size: 7, label: 'Where you died', labelMin: 0 }); }
+    if (rs.away > 0) { markers.push({ x: rs.spot.x, z: rs.spot.z, kind: 'ring', radius: rs.radius, color: '#ff4d4d' }); markers.push({ x: rs.spot.x, z: rs.spot.z, icon: 'died', size: 7, label: 'Where you died', labelMin: 0 }); }
   }
   const lit = new Set(state.mapHover?.group || []);
   const lzPick = state.mapMode === 'first' || state.mapMode === 'travel';
@@ -3404,25 +3364,25 @@ function drawMapCanvas() {
   for (const l of map.labels || []) if (l.kind === 'place' && ['prison', 'sheriff', 'hospital'].includes(l.place)) l.hidden = (state.sites || []).some((q) => Math.hypot(q.x - l.x, q.z - l.z) < 500);
   for (const st of state.sites || []) {
     const c = siteColor(st, Date.now()) || '#ff3b3b';
-    markers.push({ x: st.x, z: st.z, kind: 'diamond', color: c, size: st.kind === 'prison' ? 10 : 8, label: `${SITES.kinds[st.kind].icon} ${st.name.replace('Correctional Institution', 'Prison')}${st.state === 'stocked' ? '' : st.state === 'alarm' ? ' · 🚨 ALARM' : ' · cleared'}`, labelMin: st.kind === 'prison' || st.kind === 'hospital' ? 0 : 0.08 });
+    markers.push({ x: st.x, z: st.z, icon: 'site', color: c, size: st.kind === 'prison' ? 9 : 7, label: `${SITES.kinds[st.kind].icon} ${st.name.replace('Correctional Institution', 'Prison')}${st.state === 'stocked' ? '' : st.state === 'alarm' ? ' · 🚨 ALARM' : ' · cleared'}`, labelMin: st.kind === 'prison' || st.kind === 'hospital' ? 0 : 0.08 });
   }
-  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, color: lit.has(lz.id) ? '#ff7a1a' : '#cfcfcf', size: lzPick ? 6 : 4, highlight: lit.has(lz.id), label: lzPick ? lz.name.split(' (')[0] : '', labelMin: 0 });
-  for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, kind: 'diamond', color: '#ffc53d', size: 7, label: CONTRACT_TYPES[ct.type].name });
-  for (const d of state.drops) markers.push({ x: d.x, z: d.z, color: '#ff3b3b', size: 7, label: 'Supply drop' });
+  for (const lz of map.landingZones) markers.push({ x: lz.x, z: lz.z, icon: 'lz', color: lit.has(lz.id) ? '#ff7a1a' : null, size: lzPick ? 6 : 4, highlight: lit.has(lz.id), label: lzPick ? lz.name.split(' (')[0] : '', labelMin: 0 });
+  for (const ct of state.contracts) markers.push({ x: ct.x, z: ct.z, icon: 'contract', size: 7, label: CONTRACT_TYPES[ct.type].name });
+  for (const d of state.drops) markers.push({ x: d.x, z: d.z, icon: 'drop', size: 7, label: 'Supply drop' });
   if (state.hotZone) {
     const hz = state.hotZone;
     markers.push({ x: hz.x, z: hz.z, kind: 'ring', radius: hz.radius, color: '#ff5a1f' });
     markers.push({ x: hz.x, z: hz.z, kind: 'ring', radius: HELI.hotZone.keepOutM, color: 'rgba(255,90,31,0.45)' });
-    markers.push({ x: hz.x, z: hz.z, kind: 'diamond', color: '#ff5a1f', size: 9, label: `🔥 ${hotZoneLine().replace(/^🔥 Hot zone: /, 'Hot zone: ')}`, labelMin: 0 });
+    markers.push({ x: hz.x, z: hz.z, icon: 'hotzone', size: 9, label: `🔥 ${hotZoneLine().replace(/^🔥 Hot zone: /, 'Hot zone: ')}`, labelMin: 0 });
     for (const c of hz.crates) if (!c.opened) markers.push({ x: c.x, z: c.z, color: '#ff5a1f', size: 5 });
-    if (hz.extract) markers.push({ x: hz.extract.x, z: hz.extract.z, color: '#5dff8a', size: 7, label: 'Hot-zone pickup', labelMin: 0 });
+    if (hz.extract) markers.push({ x: hz.extract.x, z: hz.extract.z, icon: 'pickup', size: 7, label: 'Hot-zone pickup', labelMin: 0 });
   }
-  for (const a of state.alerts) if (a.hot && a.until > performance.now()) markers.push({ x: a.x, z: a.z, kind: 'diamond', color: '#ff5a1f', size: 7, label: 'Hot loot' });
-  for (const d of map.docks) markers.push({ x: d.x, z: d.z, color: '#7fd6ff', size: 4, label: d.campId != null ? '' : `⚓ ${d.name}` });
-  for (const c of map.camps) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: '#9fe39f', size: 6, label: `🏕 ${c.name}` });
-  for (const [, v] of boatVis) if (v.data.mine && state.me?.boat?.id !== v.data.id) markers.push({ x: v.mesh.position.x, z: v.mesh.position.z, color: '#7dff9a', size: 5, label: `${BOATS[v.data.type].icon || '🚤'} ${BOATS[v.data.type].name}` });
+  for (const a of state.alerts) if (a.hot && a.until > performance.now()) markers.push({ x: a.x, z: a.z, icon: 'hotloot', size: 7, label: 'Hot loot' });
+  for (const d of map.docks) markers.push({ x: d.x, z: d.z, icon: 'dock', size: 4, label: d.campId != null ? '' : d.name });
+  for (const c of map.camps) markers.push({ x: c.x, z: c.z, icon: 'camp', size: 6, label: c.name });
+  for (const [, v] of boatVis) if (v.data.mine && state.me?.boat?.id !== v.data.id) markers.push({ x: v.mesh.position.x, z: v.mesh.position.z, icon: 'ride', size: 5, label: `${BOATS[v.data.type].icon || '🚤'} ${BOATS[v.data.type].name}` });
   for (const e of state.worldEvents || []) {
-    markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#c77dff', size: 9, label: `📣 ${e.name}` });
+    markers.push({ x: e.x, z: e.z, icon: 'event', size: 9, label: e.name });
     if (e.radius) markers.push({ x: e.x, z: e.z, kind: 'ring', radius: e.radius, color: '#c77dff' });
   }
   // Enemies lit up by a hack, a scan, a tag or a sensor, and any enemy stash house you've located.
@@ -3430,18 +3390,18 @@ function drawMapCanvas() {
   for (const [id, e] of state.exposed) {
     if (e.until < pnow) continue;
     const c = state.players.get(id)?.data || state.bots.get(id)?.data;
-    if (c && !c.dead) markers.push({ x: c.x, z: c.z, kind: 'diamond', color: '#ff4d4d', size: 6, label: state.players.has(id) ? c.name : '' });
+    if (c && !c.dead) markers.push({ x: c.x, z: c.z, icon: 'enemy', size: 6, label: state.players.has(id) ? c.name : '' });
   }
-  if (state.enemyStash && state.enemyStash.untilPerf > pnow) markers.push({ x: state.enemyStash.x, z: state.enemyStash.z, kind: 'diamond', color: '#ff8a2a', size: 9, label: `🏠 ${state.enemyStash.owner}'s stash` });
-  for (const e of state.extracts) markers.push({ x: e.x, z: e.z, kind: 'diamond', color: '#ff2a2a', size: 8, label: `🚁 Extraction (${e.by})` });
-  for (const m of state.squad.members) if (m.online && m.id !== state.id) markers.push({ x: m.x, z: m.z, color: '#7dff9a', size: 5, label: m.name });
-  for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, kind: 'diamond', color: '#ffc53d', size: 6, label: 'Objective' });
+  if (state.enemyStash && state.enemyStash.untilPerf > pnow) markers.push({ x: state.enemyStash.x, z: state.enemyStash.z, icon: 'enemystash', size: 9, label: `${state.enemyStash.owner}'s stash` });
+  for (const e of state.extracts) markers.push({ x: e.x, z: e.z, icon: 'extract', size: 8, label: `Extraction (${e.by})` });
+  for (const m of state.squad.members) if (m.online && m.id !== state.id) markers.push({ x: m.x, z: m.z, icon: 'crew', size: 5, label: m.name });
+  for (const p of state.pings) if (p.objective) markers.push({ x: p.x, z: p.z, icon: 'objective', size: 6, label: 'Objective' });
   const hpos = homePos();
-  if (hpos) markers.push({ x: hpos.x, z: hpos.z, color: '#4fbf6a', size: 7, label: `Home (Lv${state.me.claim.level})` });
-  for (const h of state.me?.hideouts || []) markers.push({ x: h.x, z: h.z, color: '#9fe39f', size: 6, label: `⛺ Hideout ${h.n}`, labelMin: 0 });
+  if (hpos) markers.push({ x: hpos.x, z: hpos.z, icon: 'home', size: 7, label: `Home (Lv${state.me.claim.level})` });
+  for (const h of state.me?.hideouts || []) markers.push({ x: h.x, z: h.z, icon: 'hideout', size: 6, label: `Hideout ${h.n}`, labelMin: 0 });
   for (const o of mapOptions()) { if (o.noMarker) continue; const hl = state.mapHover?.label === o.label; markers.push({ x: o.x, z: o.z, color: o.color, size: 6, highlight: hl, label: hl ? o.label : '' }); }
   if (state.mapPick) markers.push({ x: state.mapPick.x, z: state.mapPick.z, kind: 'diamond', color: '#ff7a1a', size: 10, highlight: true, label: state.mapPick.label.replace(/^\S+ /, '') });
-  if (state.waypoint) markers.push({ x: state.waypoint.x, z: state.waypoint.z, kind: 'diamond', color: '#ff7a1a', size: 8, label: `Waypoint · ${distText(Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z))}` });
+  if (state.waypoint) markers.push({ x: state.waypoint.x, z: state.waypoint.z, icon: 'waypoint', size: 8, label: `Waypoint · ${distText(Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z))}` });
   if (state.me && !state.me.dead) markers.push({ x: state.x, z: state.z, kind: 'player', yaw: state.yaw, color: '#5aa8ff', size: 7 });
   // The road you're on is always named on the map, whatever the zoom.
   const here = state.me && !state.me.dead ? state.map.roadsNear(state.x, state.z, 25).filter((r) => r.name).sort((a, b) => distToSeg(state.x, state.z, a) - distToSeg(state.x, state.z, b))[0] : null;
