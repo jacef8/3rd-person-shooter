@@ -1998,6 +1998,7 @@ function updateWhere(now) {
 function connect(name, world = 1, ticket = null) {
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/world/${world}`);
   state.ws = ws;
+  ws.binaryType = 'arraybuffer';   // (binary frames are relayed voice)
   state.worldId = world;
   ws.onopen = () => ws.send(JSON.stringify({ t: 'join', name, token: localStorage.getItem('dz_token'), ticket }));
   ws.onclose = (e) => {
@@ -2015,6 +2016,7 @@ function connect(name, world = 1, ticket = null) {
     setTimeout(() => connect(name, world), Math.min(4000, 700 * state.reconnects));
   };
   ws.onmessage = (ev) => {
+    if (typeof ev.data !== 'string') { voice.relayIn(ev.data); return; }
     const m = JSON.parse(ev.data);
     // While real-world map data downloads, hold everything else until the world exists.
     if (state.loadingWorld) return state.loadingWorld.push(m);
@@ -2273,6 +2275,7 @@ function handle(m) {
     case 'zap': drawZap(m.from, m.to, m.hit); break;
     case 'voicePeers': voice.setPeers(m.peers); break;
     case 'rtc': voice.signal(m.from, m.data); break;
+    case 'vrelay': voice.useRelay(m.id); break;
     case 'stunned':
       state.stunnedUntil = performance.now() + (m.until - Date.now());
       $('stunfx').style.opacity = 1;
@@ -4021,6 +4024,7 @@ setInterval(() => { if (chat.lines.length) renderChat(); }, 1000);
 // Hold N to talk (or the TALK button on a phone); "open mic" in Settings keeps the mic on instead.
 const voice = createVoice({
   send: (m) => send(m),
+  sendBin: (buf) => state.ws?.readyState === 1 && state.ws.bufferedAmount < 64 * 1024 && state.ws.send(buf),
   myId: () => state.id || '',
   posOf: (id) => state.players.get(id)?.data || null,
   onTalking: (on, err) => { if (err) toast(err); document.body.classList.toggle('talking', !!on); },

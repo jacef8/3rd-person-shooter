@@ -3150,6 +3150,26 @@ function textChat(p, msg) {
   if (msg.ch === 'crew' && !crew) toast(p, 'You\'re not in a crew yet: that went to the people near you');
 }
 const VOICE_NEAR = 80;
+/**
+ * The voice relay (client/voice.js): a player's speech, as small binary frames [1, seq, ...mu-law],
+ * passed on to everyone they're relayed with who may still hear them, tagged with who it's from:
+ * [1, seq, idLen, ...id, ...mu-law]. Frames past a sensible size or rate are dropped, and so is
+ * anything for a listener whose connection is backed up.
+ */
+function relayVoice(p, buf) {
+  if (!p || !p.relayTo?.size || buf.length < 3 || buf.length > 2200 || buf[0] !== 1) return;
+  const now = Date.now();
+  if (now - (p.vrWin || 0) > 1000) { p.vrWin = now; p.vrCount = 0; }
+  if (++p.vrCount > 40) return;   // (about 24 a second is normal)
+  const idb = Buffer.from(p.id);
+  const out = Buffer.concat([Buffer.from([1, buf[1], idb.length]), idb, buf.subarray(2)]);
+  for (const id of p.relayTo) {
+    const o = players.get(id);
+    if (!o) { p.relayTo.delete(id); continue; }
+    if (!voiceLink(p, o) || o.ws.readyState !== 1 || o.ws.bufferedAmount > 256 * 1024) continue;
+    o.ws.send(out, { binary: true });
+  }
+}
 function voiceLink(a, b) {
   if (!a.voice || !b.voice || a.dead || b.dead) return null;
   if (a.voice.crew && b.voice.crew && sameSquad(a, b)) return 'crew';
@@ -5649,8 +5669,9 @@ const server = TLS ? https.createServer(TLS, handler) : http.createServer(handle
 
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 wss.on('connection', (ws) => {
-  ws.on('message', (raw) => {
+  ws.on('message', (raw, isBinary) => {
     // One bad message must never take the whole world down with it.
+    if (isBinary) { try { relayVoice(ws.player, raw); } catch (e) { console.error('Voice relay failed:', e); } return; }
     try { onMessage(ws, raw); } catch (e) { console.error(`Message from ${ws.player?.name || 'a new connection'} failed:`, e); }
   });
   function onMessage(ws, raw) {
@@ -5708,6 +5729,13 @@ wss.on('connection', (ws) => {
         const o = players.get(msg.to);
         if (!o || o === p || !msg.data || JSON.stringify(msg.data).length > 12000 || !(voiceLink(p, o) || p.voicePeers?.[o.id])) return;
         return send(o.ws, { t: 'rtc', from: p.id, data: msg.data });
+      }
+      case 'vrelay': {   // voice: these two can't reach each other directly; their speech goes through here
+        const o = players.get(msg.id);
+        if (!o || o === p || !voiceLink(p, o)) return;
+        (p.relayTo ||= new Set()).add(o.id); (o.relayTo ||= new Set()).add(p.id);
+        send(p.ws, { t: 'vrelay', id: o.id }); send(o.ws, { t: 'vrelay', id: p.id });
+        return;
       }
       case 'reload': return handleReload(p);
       case 'swap': {   // next gun you're carrying: main gun 1, main gun 2, sidearm, round again
