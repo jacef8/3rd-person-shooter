@@ -1,44 +1,56 @@
 # Story: how Liberty County became the Zone
 
-Draft story bible. Everything here is fiction set on the real geography. Every company, storm and
-event is invented. The goal is that every system in the game has a reason to exist in the world.
+Draft story bible. Everything here is fiction set on the real geography. The Annex, Halyard, the
+Authority and every event are invented; no real agency, company or site is meant.
 
 ## The short version
 
-A storm drowned the Apalachicola valley. Washington walled it off and hired a private army to run it.
-Then the money ran out. Most of that army went home; some of it didn't. Two years on, the people
-inside are rebuilding it with guns, gardens and boats. Whoever is holding land when the Zone reopens
-gets to keep it.
+A secret research site hidden in the forest south of Bristol had an accident nobody will explain.
+Washington sealed the county and left the private army that ran the site in charge of keeping it
+sealed. Then the money ran out. Most of that army went home; some of it didn't. Two years on, the
+people inside are rebuilding with guns, gardens and boats, and digging for the truth. Whoever is
+holding land when the Zone reopens gets to keep it.
+
+## Why a county gets sealed (the premise)
+
+A storm or a flood brings the Guard and FEMA for a season, then they leave. A county stays closed
+only if someone wants it closed: something happened that can't be seen from outside. That's the
+Annex. It also explains why a farm county is full of military tech nobody else has.
 
 ## Timeline
 
-**Year 0: The Long Storm.** A Category 5 hurricane stalls over the Florida Panhandle for four days.
-Upriver, the Jim Woodruff Dam's spillway gates jam and the Apalachicola leaves its banks from
-Chattahoochee to the Gulf. Bridges go out. Only the SR 20 bridge between Bristol and Blountstown
-still stands. Liberty County, already the emptiest county in Florida, is cut off.
+**Before: the Annex.** For years a federal research site sat deep in the Apalachicola National
+Forest south of Bristol, listed on paper as a forestry station and on no map. It was run under
+contract by a private military company, **Halyard Security Group**, and it field-tested gear that
+couldn't be tested anywhere else: optical camo, sensor nets, stun charges, tag-linked HUDs, and a
+program nobody named.
 
-**Weeks later: the Zone.** The Gulf Recovery Act declares the basin the *Apalachicola Restricted
-Recovery Zone*, and everyone just calls it **the Zone**. Recovery is outsourced to a private military
-contractor, **Halyard Security Group**. Halyard puts up:
+**Year 0, August: the Breach.** One night the Annex goes dark. The power fails across the county, phones
+die, and people in Telogia and Hosford report a glow over the trees. By morning Halyard roadblocks
+close every road and boat ramp out of Liberty County. The official word is a chemical release:
+shelter in place. Nobody is allowed in to check, and nobody is allowed out.
+
+**Weeks later: the Zone.** Washington declares the county the *Liberty Restricted Zone*, and everyone
+just calls it **the Zone**. Containment goes to the people already there: Halyard. Halyard puts up:
 - checkpoints and a cordon around the Zone (**the Line**, which is the edge of the map);
 - a relay and sensor network (the **terminals** you hack);
 - helipads (the **landing zones**) and an air-drop resupply system (the **supply drops**);
 - **Zone tags**, biometric IDs everyone inside must wear so drops and checkpoints recognise them;
 - a scrip system for paying locals to work: **commendations**, spent at the **Quartermaster**.
 
-Halyard also used the Zone to field-test gear it couldn't test at home: optical camo, sensor
-grenades, stun charges, tag-linked HUDs. That's why a flooded farm county is full of
-next-generation military tech.
+The Annex's gear spreads with Halyard's patrols: that's why the Zone is full of next-generation
+military tech.
 
-**Year 1: the money stops.** A budget fight in Washington ends the contract and Halyard is ordered
-out. Most of it leaves. A few hundred contractors don't. They keep the rifles, the armored trucks and
-the depots, and they become the **Rogues**: they raid towns, run armed **convoys** on SR 20 between
+**Year 1: the money stops.** Hearings in Washington end the contract and Halyard is ordered out. Most
+of it leaves. A few hundred contractors don't: whatever is still in the Annex is worth more than
+going home. They keep the rifles, the armored trucks and the depots, and they become the **Rogues**: they raid towns, run armed **convoys** on SR 20 between
 their depots, and take over town squares (**riots**).
 
 **Year 2: now.** The National Guard holds the Line from outside and nobody official comes in. The
 Authority keeps one thin thread into the Zone: a **Contact** (a liaison officer with a radio) in each
-town. Contacts pay commendations for anything that makes the Zone stable enough to reopen: clearing
-Rogue camps, recovering lost supply crates, pulling data off Halyard terminals. The Authority still
+town. Contacts pay commendations for proof of what happened at the Annex and for anything that makes
+the Zone stable enough to reopen: clearing Rogue camps, recovering lost supply crates, pulling data
+off Halyard terminals. The Authority still
 flies the extraction helicopter and still drops supplies.
 
 ## Why people are here
@@ -57,8 +69,8 @@ flies the extraction helicopter and still drops supplies.
 - **Halyard Rogues:** ex-contractors with military discipline and no rules. They're the main AI enemy.
 - **Townsfolk:** farmers, fishermen and travelling merchants trying to live normally. Blountstown
   still holds its **county fair** every season out of stubbornness.
-- **River people:** families who have lived in the Apalachicola swamps for generations. The flood
-  didn't scare them. They live in **swamp camps** reachable only by boat, sell tupelo honey,
+- **River people:** families who have lived in the Apalachicola swamps for generations. The Breach
+  didn't scare them off. They live in **swamp camps** reachable only by boat, sell tupelo honey,
   moonshine and gator hides, and run goods on the river because the roads belong to the Rogues. They
   don't trust Halyard or the Authority. Their landings are neutral ground: no fighting where they trade.
 
@@ -79,7 +91,7 @@ flies the extraction helicopter and still drops supplies.
 
 ## Opening scene (for new players)
 
-Night. You're waist-deep in the Apalachicola with a flashlight in your teeth and a duffel on your
+Night. You're waist-deep in the Apalachicola, slipping past the Line, with a flashlight in your teeth and a duffel on your
 shoulder. The Line's searchlights sweep behind you. Your Zone tag blinks green when it finds the
 network, and a radio crackles:
 
@@ -90,8 +102,10 @@ Then the deploy screen: pick the town you made it to.
 
 ## Threads to pull later (story the players uncover)
 
-- **Intel** pickups are Halyard documents. Collected together, they tell what really happened:
-  were the spillway gates jammed, or opened?
+- **Intel** pickups are Annex and Halyard documents. Collected together, they tell what really
+  happened the night of the Breach, and what the program nobody named was.
+- **The Annex itself:** a sealed compound deep in the national forest, the endgame. Crews that gather
+  enough intel learn the way in.
 - **The Torreya depot:** Halyard's sealed bunker on the bluffs. What's still inside, and who's guarding it?
 - **The Reopening date:** a long-running server event. The Authority announces a date and crews race
   to hold the most land. A natural "season" ending.

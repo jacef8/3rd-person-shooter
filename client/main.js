@@ -2550,10 +2550,10 @@ function renderIntroSettings(box) {
 
 // ------------------------------------------------------------------ the story so far (lobby, first time; Settings any time)
 const STORY = [
-  ['The Long Storm', 'A hurricane stalled over the Panhandle for four days. Upriver, the dam gates jammed and the Apalachicola left its banks all the way to the Gulf. Bridges went out. Only the SR 20 bridge between Bristol and Blountstown still stands. Liberty County was cut off.'],
-  ['The Zone', 'Washington walled off the valley as a Restricted Recovery Zone and hired a private army, Halyard Security, to run it: checkpoints on the Line, sensor relays, helipads, supply drops, and an ID tag on everyone inside.'],
-  ['The money ran out', "A year later the contract ended and Halyard was ordered out. Most of it went home. A few hundred didn't. They kept the rifles and the trucks and became the Rogues: they raid towns and run armed convoys on SR 20."],
-  ['Now', 'Two years on, nobody official comes in. A Contact in each town pays for work that makes the Zone safe enough to reopen. Whoever is holding land when it reopens gets to keep it. Make a home. Hold it.'],
+  ['The Annex', "For years the forest south of Bristol hid a federal research annex that wasn't on any map. A private contractor, Halyard Security, ran it: field-testing optical camo, sensor nets and stun weapons, and things they never named."],
+  ['The Breach', 'One August night the Annex went dark. By morning, Halyard roadblocks closed every road and boat ramp out of Liberty County. The official word was a chemical leak. Nobody was allowed in to check, and nobody was allowed out.'],
+  ['The Zone', 'Washington declared the county a Restricted Zone and left Halyard in charge. Then the money stopped. Most of Halyard went home. Some stayed, kept the rifles and the gear, and became the Rogues.'],
+  ['Now', 'Two years on, the Line still holds. A Contact in each town pays for proof of what really happened, and for anything that makes the Zone safe enough to reopen. Whoever holds land when it reopens keeps it.'],
 ];
 let storyAt = 0;
 function openStory() { storyAt = 0; showStory(); $('story').hidden = false; }
