@@ -288,8 +288,8 @@ function initWorld(m) {
   state.map = map;
   // One coarse pass over the whole county, shared by the far landscape and the map screen.
   const land = sampleLand(map, MOBILE ? 120 : 75);
-  state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: MOBILE, land });
-  state.towns = createTownDressing(scene, map, m.realData?.businesses, ground, m.realData?.hydrants, () => state.view?.setPaved((x, z) => state.towns.pavedAt(x, z)));
+  state.view = createWorldView(scene, map, { viewRange: GFX[gfxMode].view, farRange: GFX[gfxMode].far, mobile: LOW_POWER, land });   // (the TV app too: a Shield has no touch screen but a phone's chip)
+  state.towns = createTownDressing(scene, map, m.realData?.businesses, ground, m.realData?.hydrants, () => state.view?.setPaved((x, z) => state.towns.pavedAt(x, z)), { lowPower: LOW_POWER });
   try { state.places = createPlaces(scene, map, ground); } catch (e) { console.warn('places', e); }   // town signs, parks (client/places.js)
   state.env = createEnvironment({ scene, far: state.view.far, sky: state.view.sky, sun, hemi, renderer, camera, towns: state.towns, thunder: (x, y, z) => sfx.thunder(x, y, z) });
   applyGfx();
@@ -6289,7 +6289,9 @@ function frame(now) {
   updateScopeView(aimNow());
   drawLockMark(now);
   const r0 = performance.now();
-  renderWorld();
+  // The big map covers the screen: the world behind it is only redrawn twice a second (on a TV box
+  // that's most of each frame given back to the map).
+  if (!state.mapOpen || now - (state.mapBgAt || 0) > 500) { state.mapBgAt = state.mapOpen ? now : 0; renderWorld(); }
   perf.cpu = (perf.cpu || []).concat(r0 - frameT0).slice(-60);   // the game's own work this frame, before the draw
   perf.draw = (perf.draw || []).concat(performance.now() - r0).slice(-60);   // handing the draw to the graphics chip
   drawGunsmith(dt);

@@ -700,12 +700,20 @@ vec3 dzN = vec3(0.0, 0.0, 1.0);`)
       if (!cells.has(ck)) cells.set(ck, { x: (Math.floor(p.x / CELL) + 0.5) * CELL, z: (Math.floor(p.z / CELL) + 0.5) * CELL, parts: {} });
       (cells.get(ck).parts[k] ??= []).push(mm);
     }
+    // One draw a piece: every part in one instanced batch, each box its part's colour (the old span's
+    // steel keeps its own shine as a second batch only where there's truss).
+    const plainMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92 });
     for (const c of cells.values()) {
       c.near = new THREE.Group(); c.far = new THREE.Group();
-      for (const [k, list] of Object.entries(c.parts)) {
-        const im = new THREE.InstancedMesh(unit, mats[k], list.length);
-        list.forEach((mm, i) => im.setMatrixAt(i, mm));
+      const batches = [[plainMat, Object.entries(c.parts).filter(([k]) => k !== 'steel')], [mats.steel, Object.entries(c.parts).filter(([k]) => k === 'steel')]];
+      for (const [mat, groups] of batches) {
+        const n = groups.reduce((a, [, l]) => a + l.length, 0);
+        if (!n) continue;
+        const im = new THREE.InstancedMesh(unit, mat, n);
+        let i = 0;
+        for (const [k, list] of groups) for (const mm of list) { im.setMatrixAt(i, mm); if (mat === plainMat) im.setColorAt(i, mats[k].color); i++; }
         im.instanceMatrix.needsUpdate = true;
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
         im.castShadow = true; im.receiveShadow = true;
         im.computeBoundingSphere();
         c.near.add(im); c.far.add(im.clone());
@@ -982,7 +990,7 @@ vBlade = position.y;
       if (!list.length) return;
       const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, list.length);
       const byBuild = new Map();
-      for (const t of list) { const [v, sx] = treePick(kit, kind, t.id, t.h); if (!byBuild.has(v)) byBuild.set(v, []); byBuild.get(v).push([t, sx]); }
+      for (const t of list) { const [v, sx] = treePick(kit, kind, t.id, t.h, mobile); if (!byBuild.has(v)) byBuild.set(v, []); byBuild.get(v).push([t, sx]); }
       let ti = 0;
       for (const [v, ts] of byBuild) {
         const mk = (geo, mat, depth) => {

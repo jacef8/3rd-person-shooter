@@ -116,7 +116,22 @@ const paveMesh = (d, mat) => {
   const m = new THREE.Mesh(g, mat); m.receiveShadow = true; return m;
 };
 
-export function createTownDressing(scene, map, rows, ground, realHydrants = null, onPaved = null) {
+export function createTownDressing(scene, map, rows, ground, realHydrants = null, onPaved = null, opts = {}) {
+  // Phones and TV boxes: signs, gas stations and parked cars only close by (each is a draw or more,
+  // and past ~90 m they're a few pixels).
+  const DETAIL_SEE = opts.lowPower ? 90 : Infinity, CARS_SEE = opts.lowPower ? 90 : CAR_SEE;
+  const PLANE = new THREE.PlaneGeometry(1, 1);
+  /** A sign board: a dark box with the sign's face on the front (and the back, for a sign on a post).
+   *  (Not a box with a material per side: that's six draws a sign.) */
+  const signBoard = (m, both) => {
+    const box = new THREE.Mesh(GEO.box, MAT.dark);
+    for (const back of both ? [0, 1] : [0]) {
+      const f = new THREE.Mesh(PLANE, m);
+      f.position.z = back ? -0.51 : 0.51; if (back) f.rotation.y = Math.PI;
+      box.add(f);
+    }
+    return box;
+  };
   const size = map.size;
   // Businesses on the map, by cell.
   const biz = new Map();
@@ -150,9 +165,11 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
   const inTown = (x, z) => (map.terrain.hasCover ? map.terrain.cover(x, z) === COVER.town : map.towns.some((t) => x > t.rect.minX && x < t.rect.maxX && z > t.rect.minZ && z < t.rect.maxZ));
 
   function buildCell(cx, cz) {
-    const grp = new THREE.Group(), mats = [], lights = [], hydrants = [], stripes = [];
+    const grp = new THREE.Group(), mats = [], lights = [], hydrants = [], stripes = [], details = [];
     const lot = { pos: [], uv: [], idx: [] }, walk = { pos: [], uv: [], idx: [] }, paved = [];   // paved: [corner x, z, along x, z, across x, z, a0, a1, b0, b1], for the grass
     const add = (o) => { grp.add(o); return o; };
+    const detail = (o, at = null) => { details.push([o, at]); return add(o); };   // (shown only close by on phones and TV boxes)
+    const mid = { x: (cx + 0.5) * CELL, z: (cz + 0.5) * CELL };   // where a cell-wide batch (lamps, hydrants, stripes) counts from
     let cars = 0;
     const solids = [], carList = [];
     const park = (x, z, yaw, seed) => {
@@ -179,8 +196,8 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
         // A sign on a post by the road.
         const tex = signTexture(bz.name, st); const m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.25 }); mats.push(m);
         const sx = road ? bz.x + (road.x - bz.x) * 0.3 : bz.x, sz = road ? bz.z + (road.z - bz.z) * 0.3 : bz.z, y = ground(sx, sz);
-        const pole = add(new THREE.Mesh(GEO.box, MAT.pole)); pole.scale.set(0.15, 4, 0.15); pole.position.set(sx, y + 2, sz);
-        const s = add(new THREE.Mesh(GEO.box, [MAT.dark, MAT.dark, MAT.dark, MAT.dark, m, m])); s.scale.set(3.2, 0.8, 0.15); s.position.set(sx, y + 4.2, sz);
+        const pole = detail(new THREE.Mesh(GEO.box, MAT.pole)); pole.scale.set(0.15, 4, 0.15); pole.position.set(sx, y + 2, sz);
+        const s = detail(signBoard(m, true)); s.scale.set(3.2, 0.8, 0.15); s.position.set(sx, y + 4.2, sz);
         if (road) s.rotation.y = Math.atan2(road.x - sx, road.z - sz);
         continue;
       }
@@ -195,7 +212,7 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
       const base = (bld.y0 || 0) + 3.4, hgt = Math.max(0.7, Math.min(1.7, w / 3.6, top - 0.15 - base));
       const tex = signTexture(bz.name, st);
       const m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.25 }); mats.push(m);
-      const sign = add(new THREE.Mesh(GEO.box, [MAT.dark, MAT.dark, MAT.dark, MAT.dark, m, MAT.dark]));
+      const sign = detail(signBoard(m, false));
       sign.scale.set(w, hgt, 0.18);
       const sy = base + hgt / 2;
       sign.position.set(f.cx + nx * (out + 0.12), sy, f.cz + nz * (out + 0.12));
@@ -214,7 +231,7 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
       if (gas) {
         const gx = fx + nx * 10, gz = fz + nz * 10, gy = ground(gx, gz);
         if (!solidAt(gx, gz, 2) && roadClear(gx, gz, 3)) {
-          const can = new THREE.Group(); can.position.set(gx, gy, gz); can.rotation.y = Math.atan2(nx, nz); add(can);
+          const can = new THREE.Group(); can.position.set(gx, gy, gz); can.rotation.y = Math.atan2(nx, nz); detail(can);
           const roof = new THREE.Mesh(GEO.box, MAT.canopy); roof.scale.set(13, 0.7, 8); roof.position.y = 5.1; can.add(roof);
           const bandMat = M(new THREE.Color(st.stripe || st.bg).getHex(), { roughness: 0.5 }); bandMat.userData.cellOwn = true;
           const band = new THREE.Mesh(GEO.box, bandMat); band.scale.set(13.05, 0.32, 8.05); band.position.y = 5.0; can.add(band);
@@ -231,8 +248,8 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
           const px = road.x + (fx - road.x) * Math.min(1, ((road.r.width || 8) / 2 + 3) / Math.max(1, road.d)), pz = road.z + (fz - road.z) * Math.min(1, ((road.r.width || 8) / 2 + 3) / Math.max(1, road.d));
           if (!solidAt(px, pz, 0.8)) {
             const py = ground(px, pz), pt = signTexture(bz.name, st, 'REGULAR  ·  DIESEL'), pm = new THREE.MeshStandardMaterial({ map: pt, roughness: 0.6, emissive: 0xffffff, emissiveMap: pt, emissiveIntensity: 0.3 }); mats.push(pm);
-            const pole = add(new THREE.Mesh(GEO.box, MAT.pole)); pole.scale.set(0.3, 6.5, 0.3); pole.position.set(px, py + 3.25, pz);
-            const s = add(new THREE.Mesh(GEO.box, [MAT.dark, MAT.dark, MAT.dark, MAT.dark, pm, pm])); s.scale.set(3.6, 1.6, 0.3); s.position.set(px, py + 6.8, pz);
+            const pole = detail(new THREE.Mesh(GEO.box, MAT.pole)); pole.scale.set(0.3, 6.5, 0.3); pole.position.set(px, py + 3.25, pz);
+            const s = detail(signBoard(pm, true)); s.scale.set(3.6, 1.6, 0.3); s.position.set(px, py + 6.8, pz);
             s.rotation.y = Math.atan2(road.r.x2 - road.r.x1, road.r.z2 - road.r.z1) + Math.PI / 2;
           }
         }
@@ -282,24 +299,25 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
       for (const [geo, mat] of [[GEO.pole, MAT.pole], [GEO.arm, MAT.pole], [GEO.lamp, MAT.lamp]]) {
         const im = new THREE.InstancedMesh(geo, mat, lights.length);
         lights.forEach(([x, z, yaw], i) => { q.setFromAxisAngle(up, yaw); im.setMatrixAt(i, m4.compose(new THREE.Vector3(x, ground(x, z), z), q, one)); });
-        im.castShadow = geo === GEO.pole; add(im);
+        im.castShadow = geo === GEO.pole; detail(im, mid);
       }
     }
     for (const h of hyd.get(`${cx},${cz}`) || []) hydrants.push(h);
     if (hydrants.length) {
       const im = new THREE.InstancedMesh(GEO.hydrant, MAT.hydrant, hydrants.length), m4 = new THREE.Matrix4();
-      hydrants.forEach(([x, z], i) => im.setMatrixAt(i, m4.makeTranslation(x, ground(x, z), z))); add(im);
+      hydrants.forEach(([x, z], i) => im.setMatrixAt(i, m4.makeTranslation(x, ground(x, z), z))); detail(im, mid);
     }
     for (const [d, mat] of [[lot, PAVE.lot], [walk, PAVE.walk]]) { const m = paveMesh(d, mat); if (m) add(m); }
     if (stripes.length) {
       const im = new THREE.InstancedMesh(GEO.box, PAVE.line, stripes.length), m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
       stripes.forEach(([x, z, yaw], i) => { q.setFromAxisAngle(up, yaw); im.setMatrixAt(i, m4.compose(new THREE.Vector3(x, ground(x, z) + 0.09, z), q, new THREE.Vector3(0.12, 0.02, 5))); });
-      add(im);
+      detail(im, mid);
     }
     grp.userData.mats = mats;
     grp.userData.paved = paved;
     grp.userData.solids = solids;
     grp.userData.cars = carList;
+    grp.userData.details = details;
     scene.add(grp);
     onPaved?.();
     return grp;
@@ -316,7 +334,7 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
   return {
     /** Build what's near (a cell per call at most) and drop what's far. */
     update(px, pz) {
-      const ci = Math.floor(px / CELL), cj = Math.floor(pz / CELL), n = Math.ceil(RANGE / CELL);
+      const ci = Math.floor(px / CELL), cj = Math.floor(pz / CELL), n = Math.ceil((opts.lowPower ? 260 : RANGE) / CELL);   // (phones and TV boxes: past Low's view, no further)
       let built = false;
       for (let r = 0; r <= n && !built; r++) for (let i = ci - r; i <= ci + r && !built; i++) for (let j = cj - r; j <= cj + r && !built; j++) {
         if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
@@ -328,10 +346,15 @@ export function createTownDressing(scene, map, rows, ground, realHydrants = null
         const [i, j] = k.split(',').map(Number);
         if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) > n + 1) { dispose(g); cells.delete(k); }
       }
-      // Parked cars only near you (a car a quarter mile off is a few pixels, and each is a draw).
+      // Parked cars only near you (a car a quarter mile off is a few pixels, and each is a draw), and on
+      // phones and TV boxes the signs and gas stations too.
       if (!carsAt || Math.hypot(px - carsAt.x, pz - carsAt.z) > 8) {
         carsAt = { x: px, z: pz };
-        for (const g of cells.values()) for (const c of g.userData.cars || []) c.visible = Math.hypot(c.position.x - px, c.position.z - pz) < CAR_SEE;
+        for (const g of cells.values()) {
+          for (const c of g.userData.cars || []) c.visible = Math.hypot(c.position.x - px, c.position.z - pz) < CARS_SEE;
+          // (a cell-wide batch: while you're within a cell's width of its middle)
+          if (DETAIL_SEE < Infinity) for (const [o, at] of g.userData.details || []) o.visible = at ? Math.hypot(at.x - px, at.z - pz) < DETAIL_SEE + CELL * 0.6 : Math.hypot(o.position.x - px, o.position.z - pz) < DETAIL_SEE;
+        }
       }
     },
     /** The abandoned cars near (x, z): solid, so you walk round them, not through. */

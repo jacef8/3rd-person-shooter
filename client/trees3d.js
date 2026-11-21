@@ -303,8 +303,9 @@ export function makeTreeKit() {
  * Which build a tree uses (always the same for the same tree) and its size: [variant, widthScale].
  * `h` is the tree's height in metres.
  */
-export function treePick(kit, kind, id, h) {
-  const list = kit.kinds[kind], v = list[(id * 7 + 3) % list.length];
+export function treePick(kit, kind, id, h, one = false) {
+  // (`one`: phones and TV boxes use a single build per kind, so a patch of woods is two draws a kind.)
+  const list = kit.kinds[kind], v = list[one ? 0 : (id * 7 + 3) % list.length];
   // Crowns widen with height more slowly than they grow taller, and never past ~22 m across.
   const w = Math.min(h, 12 * (h / 12) ** 0.72);
   const sx = Math.min(w, 22 / v.wide) * (0.9 + ((id * 13) % 7) * 0.035);
