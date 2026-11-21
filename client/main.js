@@ -164,6 +164,8 @@ const farCamera = new THREE.PerspectiveCamera(70, 1, 20, 130000);
 // slow once you're playing, the finish steps down by itself (perfWatch below), for this visit only.
 const POST_STEPS = ['off', 'medium', 'high'];
 const perf = { cap: 2, ratioCap: 0, frames: [], at: 0, since: 0 };
+// Where a frame's time goes, by job (for the perf report): each job's total and its worst single run.
+const PT = { s: {}, add(name, t0) { const d = performance.now() - t0, e = this.s[name] ??= [0, 0]; e[0] += d; if (d > e[1]) e[1] = d; return d; } };
 const postQuality = (mode) => {
   const want = /[?&]nopost\b/.test(location.search) || mode === 'fast' || (LOW_POWER && mode !== 'ultra') ? 0 : mode === 'ultra' && !MOBILE ? 2 : 1;
   return POST_STEPS[Math.min(want, perf.cap)];
@@ -2028,6 +2030,10 @@ function connect(name, world = 1, ticket = null) {
     setTimeout(() => connect(name, world), Math.min(4000, 700 * state.reconnects));
   };
   ws.onmessage = (ev) => {
+    const tNet = performance.now();
+    try { onWorldMessage(ev); } finally { PT.add('net', tNet); }
+  };
+  const onWorldMessage = (ev) => {
     if (typeof ev.data !== 'string') { voice.relayIn(ev.data); return; }
     const m = JSON.parse(ev.data);
     // While real-world map data downloads, hold everything else until the world exists.
@@ -5964,7 +5970,11 @@ function perfReport(now, ms) {
     game: +mid(perf.cpu).toFixed(1), draw: +mid(perf.draw).toFixed(1), gfx: gfxMode, eased: [perf.cap < 2 && 'post', perf.ratioCap && 'sharp', perf.grassCut && 'grass', perf.noShadows && 'shadows'].filter(Boolean).join(','),
     px: `${renderer.domElement.width}x${renderer.domElement.height}`, css: `${innerWidth}x${innerHeight}@${devicePixelRatio}`, chip: GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 70),
     app: /DeadzoneApp/.test(navigator.userAgent) ? 'tv-app' : MOBILE ? 'phone' : 'browser', low: LOW_POWER, input: state.inputMode, map: !!state.mapOpen, calls: renderer.info.render.calls, tris: renderer.info.render.triangles,
+    // The jobs that took longest at once (worst ms / total ms over the 15 s), and JS memory if known.
+    jobs: Object.entries(PT.s).sort((a, b) => b[1][1] - a[1][1]).slice(0, 7).map(([k, [sum, mx]]) => `${k}:${Math.round(mx)}/${Math.round(sum)}`).join(' '),
+    heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : 0,
   });
+  PT.s = {};
   Object.assign(r, { at: now, frames: [], slow: 0 });
 }
 function perfWatch(now, ms) {
@@ -6005,7 +6015,7 @@ function frame(now) {
   frameT0 = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000), rawMs = now - last;
   last = now;
-  pollPad(dt, now);   // also drives the login and death screens
+  { const t0 = performance.now(); pollPad(dt, now); PT.add('pad', t0); }   // also drives the login and death screens
   if (!state.map) { renderWorld(); perf.since = now; return; }
   if (GPU_SOFTWARE && !/[?&]debug\b/.test(location.search)) gpuCheck(false);
   perfWatch(now, rawMs);
@@ -6200,6 +6210,7 @@ function frame(now) {
   animateBoats(dt, now);
   rideSounds(dt);
   sfx.tick();
+  const tPl = performance.now();
   for (const [, r] of state.players) { updateCharacterMesh(r.mesh, smoothed(r), dt); remoteSteps(r, dt); }
   updateGunFx(dt);
   for (const [, r] of state.bots) {
@@ -6214,6 +6225,7 @@ function frame(now) {
   for (const [, l] of state.loot) l.mesh.rotation.y += dt;
   for (const [, b] of state.bags) b.mesh.rotation.y += dt * 0.5;
 
+  PT.add('people', tPl);
   updateAimAssist(dt);
   // Over-the-shoulder camera with wall collision.
   const d = lookDir();
@@ -6284,8 +6296,8 @@ function frame(now) {
 
   // Hide stash labels you're standing right under.
   for (const [id, v] of houseVis) { const h = state.map.houses[id]; v.label.visible = Math.hypot(h.x - state.x, h.z - state.z) > 9; }
-  state.view.update(state.x, state.z, state.boat ? Math.abs(state.boat.speed || 0) : state.me?.boat ? 12 : 0);
-  state.towns?.update(state.x, state.z);
+  { const t0 = performance.now(); state.view.update(state.x, state.z, state.boat ? Math.abs(state.boat.speed || 0) : state.me?.boat ? 12 : 0); PT.add('world', t0); }
+  { const t0 = performance.now(); state.towns?.update(state.x, state.z); PT.add('towns', t0); }
   for (const g of state.contactMeshes) {
     g.visible = Math.abs(g.position.x - state.x) < 300 && Math.abs(g.position.z - state.z) < 300;
     // Name tags float at a fixed size: up close they'd fill the screen, so they hide within 7 m.
@@ -6338,7 +6350,7 @@ function frame(now) {
   const pkey = state.touchUI && state.inputMode !== 'pad' ? `<kbd class="tk">${ticon('use')}${useVerb(prompt)}</kbd>` : `<kbd>${glyph('E')}</kbd>`;
   { const html = state.air && alive ? airHud() : prompt && !(alive && me?.boat) ? `${pkey}${prompt}` : ''; if (html !== state.promptHtml) { state.promptHtml = html; $('prompt').innerHTML = html; } }
   updateRideHud(now, alive);
-  if (now - (state.miniAt || 0) > 100) { state.miniAt = now; drawMinimap(); }   // ten times a second is plenty
+  if (now - (state.miniAt || 0) > 100) { state.miniAt = now; const t0 = performance.now(); drawMinimap(); PT.add('minimap', t0); }   // ten times a second is plenty
   drawVoiceBar();
   updateWhere(now);
   if (now - (state.lootUiAt || 0) > 150) { state.lootUiAt = now; updateTouchLoot(); }
@@ -6347,7 +6359,7 @@ function frame(now) {
   const r0 = performance.now();
   // The big map covers the screen: the world behind it is only redrawn twice a second (on a TV box
   // that's most of each frame given back to the map).
-  if (!state.mapOpen || now - (state.mapBgAt || 0) > 500) { state.mapBgAt = state.mapOpen ? now : 0; renderWorld(); }
+  if (!state.mapOpen || now - (state.mapBgAt || 0) > 500) { state.mapBgAt = state.mapOpen ? now : 0; renderWorld(); PT.add('draw', r0); }
   perf.cpu = (perf.cpu || []).concat(r0 - frameT0).slice(-60);   // the game's own work this frame, before the draw
   perf.draw = (perf.draw || []).concat(performance.now() - r0).slice(-60);   // handing the draw to the graphics chip
   drawGunsmith(dt);

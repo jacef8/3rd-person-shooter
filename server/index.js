@@ -5752,7 +5752,7 @@ wss.on('connection', (ws) => {
         if (Date.now() - (p.perfAt || 0) < 10000) return;
         p.perfAt = Date.now();
         const clean = {};
-        for (const [k, v] of Object.entries(msg)) if (k !== 't' && Object.keys(clean).length < 24) clean[k.slice(0, 12)] = typeof v === 'number' ? Math.round(v * 10) / 10 : typeof v === 'boolean' ? v : String(v).replace(/[^\w .,:@x()/+-]/g, '').slice(0, 80);
+        for (const [k, v] of Object.entries(msg)) if (k !== 't' && Object.keys(clean).length < 24) clean[k.slice(0, 12)] = typeof v === 'number' ? Math.round(v * 10) / 10 : typeof v === 'boolean' ? v : String(v).replace(/[^\w .,:@x()/+-]/g, '').slice(0, 160);
         console.log(`[perf] ${p.name} ${JSON.stringify(clean)}`);
         return;
       }
