@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.View;
@@ -86,12 +87,16 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() { }
 
-    private static final long HOLD_MS = 800;   // how long to hold the remote's Back to leave the game
+    private static final long HOLD_MS = 800;     // how long to hold the remote's Back to leave the game
+    private static final long TWICE_MS = 700;    // two Back presses this close together also leave
     private boolean leftOnHold;
+    private long lastBackUp;
 
     /**
      * The TV remote has no Home button on every setup, so the remote's Back gets a way out:
-     * a tap closes the open menu (like Esc), holding it goes to the Shield's home screen.
+     * a tap closes the open menu (like Esc); two quick taps, or holding it, go to the Shield's
+     * home screen. A TV remote over HDMI sends a held button as a burst of separate presses with
+     * no timing, so "two presses close together" is what catches a hold there.
      * The controller's Xbox button also goes home. The controller's B still only crouches.
      */
     @Override
@@ -104,15 +109,23 @@ public class MainActivity extends Activity {
         if (key != KeyEvent.KEYCODE_BACK || fromController(e)) return super.dispatchKeyEvent(e);
         if (e.getAction() == KeyEvent.ACTION_DOWN) {
             if (e.getRepeatCount() == 0) leftOnHold = false;
-            else if (!leftOnHold && (e.isLongPress() || e.getEventTime() - e.getDownTime() >= HOLD_MS)) {
-                leftOnHold = true;
-                moveTaskToBack(true);
+            else if (!leftOnHold && (e.isLongPress() || e.getEventTime() - e.getDownTime() >= HOLD_MS)) leaveGame();
+        } else if (e.getAction() == KeyEvent.ACTION_UP && !leftOnHold) {
+            long now = SystemClock.uptimeMillis();
+            if (now - lastBackUp <= TWICE_MS) leaveGame();
+            else {
+                lastBackUp = now;
+                web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE));
+                web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE));
             }
-        } else if (e.getAction() == KeyEvent.ACTION_UP && !leftOnHold && !e.isCanceled()) {
-            web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE));
-            web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE));
         }
         return true;
+    }
+
+    private void leaveGame() {
+        leftOnHold = true;
+        lastBackUp = 0;
+        moveTaskToBack(true);
     }
 
     private static boolean fromController(KeyEvent e) {
@@ -140,5 +153,5 @@ public class MainActivity extends Activity {
     protected void onPause() { super.onPause(); web.onPause(); }
 
     @Override
-    protected void onResume() { super.onResume(); web.onResume(); fullScreen(); }
+    protected void onResume() { super.onResume(); leftOnHold = false; web.onResume(); fullScreen(); }
 }
