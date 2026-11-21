@@ -198,9 +198,12 @@ test('boats get stolen and sunk; swamp camps trade and are safe ground', async (
   const partsRow = tv.trade.sells.find((x) => x.good === 'parts');
   sh.send({ t: 'trade', npcId: tv.npc, action: 'sell', good: 'parts', qty: 'all' });
   await until(() => sh.you.parts === 0 && sh.you.cash === c0 - honey.price + 100 * partsRow.pays);
-  // Shots inside the camp do nothing to people.
-  await o.tp(camp.x + 5, camp.z);
-  await sh.tp(camp.x, camp.z);
+  // Shots at the camp's landing (where the trader deals) do nothing to people.
+  const land = map.docks[camp.dockId];
+  assert.ok(Math.hypot(tr.x - land.x, tr.z - land.z) < camp.safe.r - 6, 'the camp trader stands on the safe ground');
+  assert.ok(camp.shacks.every((id) => Math.hypot(map.houses[id].x - land.x, map.houses[id].z - land.z) > camp.safe.r + 4), 'the shacks are outside it');
+  await o.tp(tr.x + 4, tr.z);
+  await sh.tp(tr.x, tr.z);
   await sleep(300);
   for (let i = 0; i < 5; i++) { sh.send({ t: 'shoot', dir: [1, -0.1, 0] }); await sleep(150); }
   await sleep(300);

@@ -1219,7 +1219,7 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
       const dock = addDock(`${C.names[id % C.names.length]} Landing`, c, { campId: id });
       if (!dock) continue;
       const shackIds = spots.slice(0, C.shacks).map(([sx, sz]) => addHome('shack', sx, sz, null, { campId: id }));
-      camps.push({ id, name, x: cx, z: cz, dockId: dock.id, shacks: shackIds, radius: C.safeRadius });
+      camps.push({ id, name, x: cx, z: cz, dockId: dock.id, shacks: shackIds, radius: C.areaRadius ?? 45, safe: { x: dock.x, z: dock.z, r: C.safeRadius } });   // (no fighting at the landing only: see river.json)
       reserve({ minX: cx - 8, minZ: cz - 8, maxX: cx + 8, maxZ: cz + 8 });
     }
     // Real public ramps that aren't a town's landing get one of their own (added last, so the

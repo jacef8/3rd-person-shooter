@@ -265,7 +265,7 @@ The Apalachicola runs the length of the map and it's the one road the Rogues don
   freight: $60 plus $22 a km, plus XP.
 - **Swamp camps.** Three river-people camps (Moccasin Bend, Cypress Hole, Gator Slough) out in the
   floodplain, far from roads. Each has a landing, three **river shacks** you can claim as a stash
-  house, and a **camp trader**. Camps are **neutral ground**: no player can hurt another inside one.
+  house, and a **camp trader**. Camps are **neutral ground** at the landing, where the trader deals: no player can hurt another there. The shacks up the bank are outside it, so they can be defended.
   The trader sells **tupelo honey, moonshine and gator hides** cheap and pays well for what the swamp
   can't make (parts, tech, salvage, seeds, crops). Towns far from the river (Hosford, Telogia) pay
   the most for swamp goods. That's the trade loop.

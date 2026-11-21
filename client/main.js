@@ -352,7 +352,7 @@ function initWorld(m) {
   }
   for (const c of map.camps) {
     const g = new THREE.Group();
-    const label = makeLabel(`🏕 ${c.name} · no fighting`, 0.009, '#9fe39f');
+    const label = makeLabel(`🏕 ${c.name} · no fighting at the landing`, 0.009, '#9fe39f');
     label.position.y = 7;
     g.add(label);
     g.userData.label = label;

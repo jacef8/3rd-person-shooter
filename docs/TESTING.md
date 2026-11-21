@@ -171,7 +171,7 @@ The river:
 - Walk to your boat at the end of the jetty and press Ⓐ to take the helm. The left stick is throttle
   and steering, ⧉ opens the hold, and you steer up to the bank and press Ⓐ to get out.
 - Run the freight to the other landing and deliver it at the post.
-- Head downriver to a **swamp camp** (🏕 on the map). No fighting there. Buy honey or moonshine from the
+- Head downriver to a **swamp camp** (🏕 on the map). No fighting at its landing (the shacks up the bank can be fought over). Buy honey or moonshine from the
   camp trader and sell it in Hosford or Telogia. Claim a river shack. Watch for gators on the banks.
 - With a friend: one drives, one rides and shoots. Try hotwiring each other's boats, and shooting a boat until it sinks.
 

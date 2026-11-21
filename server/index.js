@@ -1704,7 +1704,7 @@ function boatFeet(c) {
 /** How far rides are seen: further than most things, so you can spot one to run to. */
 const RIDE_SEEN = 420;
 function inCamp(x, z) {
-  for (const c of map.camps) if (Math.hypot(x - c.x, z - c.z) <= c.radius) return c;
+  for (const c of map.camps) if (Math.hypot(x - c.safe.x, z - c.safe.z) <= c.safe.r) return c;   // the landing, where the trader deals (the shacks are outside it)
   for (const sh of map.shops || []) if (Math.hypot(x - sh.x, z - sh.z) <= PAWN.safeRadius) return sh;   // no fighting at Lamar's
   return null;
 }
@@ -2193,7 +2193,8 @@ function dockAction(p, msg) {
 // River traders: a dockhand at every town landing, a camp trader at every swamp camp.
 const traderPosts = map.docks.map((d) => {
   const camp = d.campId != null ? map.camps[d.campId] : null;
-  const x = camp ? camp.x : d.x - d.nz * 4 + d.nx * 2, z = camp ? camp.z : d.z + d.nx * 4 + d.nz * 2;
+  // (At the head of the landing, camp or town: a camp's no-fighting ground is round its landing.)
+  const x = d.x - d.nz * 4 + d.nx * 2, z = d.z + d.nx * 4 + d.nz * 2;
   const at = resolveCircle(x, z, PLAYER_RADIUS, solidsNear(x, z, 3), terrain.height(x, z));
   return { dock: d, camp, x: at.x, z: at.z, bot: null };
 });

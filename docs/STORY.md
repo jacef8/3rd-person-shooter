@@ -60,7 +60,7 @@ flies the extraction helicopter and still drops supplies.
 - **River people:** families who have lived in the Apalachicola swamps for generations. The flood
   didn't scare them. They live in **swamp camps** reachable only by boat, sell tupelo honey,
   moonshine and gator hides, and run goods on the river because the roads belong to the Rogues. They
-  don't trust Halyard or the Authority. Their camps are neutral ground: no fighting at the camp.
+  don't trust Halyard or the Authority. Their landings are neutral ground: no fighting where they trade.
 
 ## How the systems fit the story
 
