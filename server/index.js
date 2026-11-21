@@ -5748,6 +5748,14 @@ wss.on('connection', (ws) => {
       case 'taser': return handleTaser(p, msg);
       case 'voice': p.voice = { crew: !!msg.crew, near: !!msg.near }; p.voiceAt = 0; return;   // voice chat settings
       case 'chat': return textChat(p, msg);
+      case 'perf': {   // how smoothly the game runs on this player's device (client perfReport): logged
+        if (Date.now() - (p.perfAt || 0) < 10000) return;
+        p.perfAt = Date.now();
+        const clean = {};
+        for (const [k, v] of Object.entries(msg)) if (k !== 't' && Object.keys(clean).length < 24) clean[k.slice(0, 12)] = typeof v === 'number' ? Math.round(v * 10) / 10 : typeof v === 'boolean' ? v : String(v).replace(/[^\w .,:@x()/+-]/g, '').slice(0, 80);
+        console.log(`[perf] ${p.name} ${JSON.stringify(clean)}`);
+        return;
+      }
       case 'rtc': {   // voice chat: a connection message for one player, only to someone you may talk to
         const o = players.get(msg.to);
         if (!o || o === p || !msg.data || JSON.stringify(msg.data).length > 12000 || !(voiceLink(p, o) || p.voicePeers?.[o.id])) return;

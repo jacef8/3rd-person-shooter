@@ -3910,7 +3910,7 @@ $('name').value = localStorage.getItem('dz_name') || '';
     hint.innerHTML = '🎮 <b>Built for a controller.</b> Press any button on your Backbone One or gamepad to wake it, then D-pad and Ⓐ to pick. Ⓐ on a text box opens a keyboard.<span class="more"><br />'
       + '<b>Left stick</b> move · <b>Right stick</b> look · <b>LT</b> aim · <b>RT</b> fire · <b>Ⓐ</b> use · <b>Ⓑ</b> crouch · <b>Ⓧ</b> reload · <b>Ⓨ</b> next gun (main 1 · main 2 · sidearm) · <b>L3</b> sprint<br />'
       + '<b>LB</b> grenade (hold: switch) · <b>RB</b> tag (hold: stun gun out, RT fires it) · <b>R3</b> camo (aiming: flip magnification) · <b>▲</b> medkit · <b>▼</b> ping (hold: quick chat) · <b>◀</b> rally · <b>▶</b> build<br />'
-      + 'The two small buttons: <b>⧉</b> (left) bag (Crew & settings are in it), hold to accept an invite · <b>☰</b> (right) map · <b>Ⓑ</b> always goes back</span>';
+      + 'The two small buttons: <b>⧉</b> (left) bag (Crew is in it), hold to accept an invite · <b>☰</b> (right) map, hold for Settings · <b>Ⓑ</b> always goes back</span>';
   }
   if (MOBILE) document.body.classList.add('mobile');
 }
@@ -5278,9 +5278,13 @@ function pollPad(dt, now) {
     if (!bb && pad.prev[BTN.B] && !pad.bHeld && !pad.bEat) doAction(now - pad.bAt > 400 ? 'prone' : 'crouch');   // judged by how long it was down, even on a slow frame
     if (!bb) pad.bEat = false;   // a B that closed a window is spent once it's let go
     if (viewTap) doAction('inventory');
-    // ☰: the map (press it again, or Ⓑ, to close it). Crew and settings are in the bag.
-    if (just(BTN.MENU) && !pad.menuEat) doAction('map');
-    if (!b(BTN.MENU)) pad.menuEat = false;
+    // ☰: a tap is the map (press it again, or Ⓑ, to close it); held, Settings (graphics, controller,
+    // frame rate).
+    const mb = b(BTN.MENU);
+    if (mb && !pad.prev[BTN.MENU] && !pad.menuEat) { pad.menuAt = now; pad.menuHeld = false; pad.menuDown = true; }
+    if (mb && pad.menuDown && !pad.menuHeld && now - pad.menuAt > 500) { pad.menuHeld = true; openSettings(); }
+    if (!mb && pad.menuDown) { pad.menuDown = false; if (!pad.menuHeld) { if (now - pad.menuAt > 500) openSettings(); else doAction('map'); } }   // (judged by how long it was down, even on a slow frame)
+    if (!mb) pad.menuEat = false;
     // LB: tap throws your grenade, hold to switch between sensor and stun.
     const lb = !!g.buttons[BTN.LB]?.pressed;
     if (lb && !pad.prev[BTN.LB]) { pad.lbAt = performance.now(); pad.lbSwitched = false; }
@@ -5886,7 +5890,25 @@ function gpuCheck(slow) {
   el.append(Object.assign(document.createElement('button'), { textContent: 'OK', onclick: () => el.remove() }));
   document.body.append(el);
 }
+// Every 15 s while you play, a few numbers about how smoothly the game runs here go to the server's
+// log (frame times, where they go, the graphics setting and chip; nothing about you), so slowness on
+// a particular device - a TV box, a phone - can be looked into without guessing.
+function perfReport(now, ms) {
+  const r = perf.report ??= { at: now, frames: [], slow: 0 };
+  r.frames.push(ms); if (ms > 100) r.slow++;
+  if (now - r.at < 15000 || !state.me || document.hidden) return;
+  const f = r.frames.sort((x, y) => x - y), q = (v) => f[Math.min(f.length - 1, Math.floor(f.length * v))] || 0;
+  const mid = (a) => { const v = [...(a || [])].sort((x, y) => x - y); return v[v.length >> 1] || 0; };
+  send({
+    t: 'perf', fps: Math.round(1000 / (q(0.5) || 16.7)), ms50: Math.round(q(0.5)), ms90: Math.round(q(0.9)), worst: Math.round(f[f.length - 1] || 0), slow: r.slow,
+    game: +mid(perf.cpu).toFixed(1), draw: +mid(perf.draw).toFixed(1), gfx: gfxMode, eased: [perf.cap < 2 && 'post', perf.ratioCap && 'sharp', perf.grassCut && 'grass', perf.noShadows && 'shadows'].filter(Boolean).join(','),
+    px: `${renderer.domElement.width}x${renderer.domElement.height}`, css: `${innerWidth}x${innerHeight}@${devicePixelRatio}`, chip: GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 70),
+    app: /DeadzoneApp/.test(navigator.userAgent) ? 'tv-app' : MOBILE ? 'phone' : 'browser', low: LOW_POWER, input: state.inputMode, map: !!state.mapOpen, calls: renderer.info.render.calls, tris: renderer.info.render.triangles,
+  });
+  Object.assign(r, { at: now, frames: [], slow: 0 });
+}
 function perfWatch(now, ms) {
+  perfReport(now, ms);
   perf.recent = (perf.recent || []).concat(ms).slice(-60);
   fpsEl.hidden = !tset.showFps;
   if (tset.showFps && now - (perf.shownAt || 0) > 500) {
