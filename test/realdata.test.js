@@ -189,5 +189,7 @@ test('real infrastructure stands where it really is', () => {
   const T = map.natureTileSize, mx = (strip.x1 + strip.x2) / 2, mz = (strip.z1 + strip.z2) / 2, tx = Math.floor((mx + 15000) / T), tz = Math.floor((mz + 15000) / T);
   for (const tr of map.natureTile(tx, tz)) assert.ok(segDist((tr.minX + tr.maxX) / 2, (tr.minZ + tr.maxZ) / 2, strip.x1, strip.z1, strip.x2, strip.z2).d > strip.width / 2, 'no tree on the runway');
   assert.ok(map.labels.some((l) => l.kind === 'place' && l.text === 'Alum Bluff Overlook'));
-  assert.ok(!map.labels.some((l) => /school|church/i.test(l.text) && l.kind === 'place'), 'schools and churches are not named');
+  // Churches stay unnamed; of the schools, Hosford School is named (asked for: its building has no name in the data).
+  assert.ok(!map.labels.some((l) => /church/i.test(l.text) && l.kind === 'place'), 'churches are not named');
+  assert.deepEqual(map.labels.filter((l) => /school/i.test(l.text) && l.kind === 'place').map((l) => l.text), ['Hosford School']);
 });

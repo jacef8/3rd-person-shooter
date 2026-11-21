@@ -135,7 +135,7 @@ The world is built from open data for the real place, in `data/real/` (about 3.8
   between, the Flowers Creek solar farm, and the railways (the Apalachicola Northern through Hosford
   and Telogia, the Marianna & Blountstown, and Bristol's park train). Bristol's and Blountstown's
   boat landings are at their real public ramps, and the map names sheriff's offices, fire stations,
-  the hospital, parks, overlooks and campgrounds (not schools or churches, and no shop brands).
+  the hospital, parks, overlooks and campgrounds (not churches, and no shop brands; of the schools, Hosford School only, by request).
 - **Lamar's Pawn** (10508 FL-20, Bristol): the real building there is a pawn shop. Lamar buys guns
   and armor at half their value (more for attachments), sells at full price, and whatever players
   sell goes in his case for the next customer. He also buys and sells goods and supplies. No
