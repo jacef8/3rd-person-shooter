@@ -1,6 +1,8 @@
 {
   "_about": "Stash houses: claiming, home levels and upgrades. Upgrade tier \"home\" = home level needed.",
   "claim": {
+    "_awayFromTraders": "No new stash house, claimed building, claim flag or hideout within this many metres of a trader: a town Contact, a landing's dockhand, a swamp camp's trader or Lamar's Pawn (so the swamp camps' shacks can't be claimed). Places already held there stay held.",
+    "awayFromTraders": 80,
     "plantMs": 8000,
     "markerCraft": {
       "wood": 10,

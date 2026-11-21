@@ -509,13 +509,25 @@ function claimSummary(p) {
   const xp = c.store.hxp || 0, lvl = homeLevel(xp);
   return { kind: c.kind, id: c.id, name: claimName(c), x: c.x, z: c.z, level: lvl, xp: Math.floor(xp), perks: homePerks(lvl), crew: c.store.crew ? squads.get(c.store.crew)?.name || null : null, raid: raidSummary(c.store), ruined: !!c.store.ruined };
 }
+/** A trader within CLAIM.awayFromTraders of (x, z), by what to call it, or null: nobody sets up house
+ *  next to a Contact, a dockhand, a camp trader or Lamar's. */
+function traderNear(x, z) {
+  const R = CLAIM.awayFromTraders ?? 80;
+  for (const c of map.contacts) if (Math.hypot(c.x - x, c.z - z) < R) return `the ${c.name}`;
+  for (const t of traderPosts) if (Math.hypot(t.x - x, t.z - z) < R) return t.camp ? `${t.camp.name}'s trader` : `the ${t.dock.name} dockhand`;
+  for (const sh of map.shops || []) if (Math.hypot(sh.x - x, sh.z - z) < R) return sh.name || 'the shop';
+  return null;
+}
+const tooNearTrader = (p, x, z, what = 'claim it') => { const t = traderNear(x, z); if (t) toast(p, `Too close to ${t} to ${what}: nobody can set up within ${Math.round((CLAIM.awayFromTraders ?? 80) * 3.28084)} ft of a trader. Try further out.`); return !!t; };
 function startClaim(p, houseId) {
+  { const h = map.houses[houseId]; if (h && tooNearTrader(p, h.x, h.z)) return; }
   if (claimOf(p)) return toast(p, squadOf(p) ? 'Your crew already has a stash house. An officer can abandon it from its stash menu.' : 'You already have a stash house. Abandon it (from its stash menu) before claiming another.');
   if (!hasMarker(p)) return toast(p, 'Unclaimed — plant a claim marker here to make it your stash house (craft one, find one, or buy one from a Contact)');
   startHack(p, 'claim', houseId);
 }
 function finishClaim(p, houseId) {
   const h = db.houses[houseId];
+  { const mh = map.houses[houseId]; if (mh && traderNear(mh.x, mh.z)) return send(p.ws, { t: 'hack', done: true, text: 'Too close to a trader to claim' }); }
   if (h.owner) return send(p.ws, { t: 'hack', done: true, text: 'Someone else claimed it first' });
   if (claimOf(p) || !takeMarker(p)) return send(p.ws, { t: 'hack', done: true, text: 'Claim failed' });
   // Whatever the last owner left behind stays in the stash.
@@ -797,6 +809,7 @@ function buildingClaimant(idx) { for (const st of structs.values()) if (PIECES[s
 const spawnBuilding = map.lootSpawns.map((sp) => (sp.indoor ? buildingAt(sp.x, sp.z) : -1));
 function startClaimBuilding(p, idx) {
   if (NO_CLAIM.has(idx)) return toast(p, NO_CLAIM.get(idx));
+  { const b = map.buildings[idx]; if (tooNearTrader(p, (b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2)) return; }
   const held = buildingClaimant(idx);
   if (held) return toast(p, `${storeOwnerLabel(held)} holds this building — break in through a door`);
   if (claimOf(p)) return toast(p, squadOf(p) ? 'Your crew already has a stash house' : 'You already have a stash house. Abandon it before claiming another.');
@@ -4285,7 +4298,7 @@ function tutAim(p) {
     }
   }
   else if (s === 'claim') {   // (the nearest free home's door: that's where the marker goes in)
-    const h = near(map.houses.filter((q) => !db.houses[q.id]?.owner && q.campId == null), 3000);
+    const h = near(map.houses.filter((q) => !db.houses[q.id]?.owner && q.campId == null && !traderNear(q.x, q.z)), 3000);
     if (h) t = { x: h.door ? (h.door.minX + h.door.maxX) / 2 : h.x, z: h.door ? (h.door.minZ + h.door.maxZ) / 2 : h.z, label: `Free ${(HOME_KINDS[h.kind]?.name || 'home').toLowerCase()}`, house: h.id };
   }
   else if (s === 'build' || s === 'stash' || s === 'gunsmith') { const c = claimOf(p); if (c) t = { x: c.x, z: c.z, label: 'Your stash house' }; }
@@ -4378,6 +4391,7 @@ function handleBuild(p, msg) {
   }
   if (!hasTool(p, 'hammer')) return toast(p, 'You need a hammer to build');
   const myClaim = claimOf(p);
+  if ((def.claim || def.hideout) && tooNearTrader(p, x, z, def.claim ? 'plant a claim' : 'set up a hideout')) return;
   if (def.claim) {
     if (myClaim) return toast(p, squadOf(p) ? 'Your crew already has a stash house' : 'You already have a stash house. Abandon it before planting a claim flag.');
     if (!hasMarker(p)) return toast(p, 'A claim flag needs a claim marker');

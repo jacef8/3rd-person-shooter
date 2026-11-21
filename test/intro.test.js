@@ -107,6 +107,16 @@ test('intro mission: a new player is walked through the first steps, paid for ea
   await press(c, 'claim', () => step(c) === 5, 40000);
   assert.ok(c.you.houseId != null || c.you.claim, 'the home is theirs');
   assert.equal(c.you.tut.target?.label, 'Your stash house', 'next: build at home');
+  assert.ok(map.contacts.every((q) => Math.hypot(q.x - h.x, q.z - h.z) >= 80), 'the home it pointed at is away from the traders');
+
+  // Nobody sets up house right by a trader: a home next to a Contact can't be claimed.
+  const byTrader = map.houses.find((q) => map.contacts.some((k) => Math.hypot(k.x - q.x, k.z - q.z) < 60) && q.door);
+  if (byTrader) {
+    const d2 = byTrader.door, n0 = c.msgs.length;
+    await c.tp((d2.minX + d2.maxX) / 2 + (Math.sign((d2.minX + d2.maxX) / 2 - byTrader.x) || 1) * 1.2, (d2.minZ + d2.maxZ) / 2);
+    c.send({ t: 'interact' });
+    await until(() => c.msgs.slice(n0).find((m) => m.t === 'toast' && /Too close to/.test(m.text)), 4000).catch(() => null);
+  }
 
   // Saved: log off and back on, and it carries on from the same step.
   const token = c.welcome.token;

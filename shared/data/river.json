@@ -50,7 +50,7 @@
     "maxFromTown": 4500
   },
   "camps": {
-    "_about": "River-people camps in the swamp, away from roads and towns: a landing, a few claimable shacks and a camp trader. No fighting within safeRadius of the camp's landing (where the trader deals), so the shacks up the bank can be fought over and defended; areaRadius is how far the camp's name reaches.",
+    "_about": "River-people camps in the swamp, away from roads and towns: a landing, a few river shacks (too close to the trader to claim: see stash.json claim.awayFromTraders) and a camp trader. No fighting within safeRadius of the camp's landing (where the trader deals), so the shacks up the bank can be fought over and defended; areaRadius is how far the camp's name reaches.",
     "names": [
       "Gator Slough",
       "Cypress Hole",
