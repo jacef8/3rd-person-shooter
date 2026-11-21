@@ -208,6 +208,12 @@
   </div>
 
   <!-- On-screen keyboard, so a controller can type a callsign or a crew name. -->
+  <div id="story" class="panel" hidden role="dialog" aria-label="The story so far">
+    <div class="stnum" id="storyNum"></div>
+    <h2 id="storyTitle"></h2>
+    <p id="storyBody"></p>
+    <div class="strow"><button id="storyNext">Next</button><button id="storySkip" class="ghost">Skip</button></div>
+  </div>
   <div id="osk" class="panel" hidden>
     <div id="oskLabel"></div>
     <div id="oskText"></div>

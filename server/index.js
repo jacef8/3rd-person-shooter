@@ -524,6 +524,7 @@ function finishClaim(p, houseId) {
   p.houseId = houseId;
   feed(`${p.name} claimed a ${homeLabel(houseId)}`);
   send(p.ws, { t: 'hack', done: true, text: `Claimed! This ${claimName(claimOf(p))} is now your stash house (level 1).` });
+  tutEvent(p, 'claim');
   send(p.ws, { t: 'claimed' });
   const crew = squadOf(p);
   if (crew) for (const m of crewOnline(crew)) { if (m !== p) { toast(m, `${p.name} claimed a stash house for ${crew.name}`); send(m.ws, { t: 'claimed' }); } dirty(m); }
@@ -574,7 +575,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', 'secured', 'buildXpWin', ...RESOURCES];
+const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', 'secured', 'buildXpWin', 'tut', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -597,6 +598,7 @@ function privateState(p) {
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
     unstashed: (() => { const u = unstashed(p); return { ids: u.items.map((i) => i.id), res: u.res }; })(),   // lost if you die before you stash it
     hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })), hideoutsAllowed: hideoutAllowance(p).allowed, hideoutNext: hideoutAllowance(p).next,
+    tut: p.tut ? { step: p.tut.step, done: !!p.tut.done, skipped: !!p.tut.skipped, shots: p.tut.shots || 0, reloaded: !!p.tut.reloaded, target: p.tut.target || null, contact: map.contacts[p.tut.contact]?.name || '', town: map.towns[map.contacts[p.tut.contact]?.townId]?.name || '' } : null,
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     taserOut: !!p.taserOut, taserReadyAt: p.taserReadyAt || 0, camoOn: !!p.camoOn, camoActive: camoActive(p), camoUntil: p.camoOn ? p.camoUntil || 0 : 0, camoReadyAt: p.camoReadyAt || 0, sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
     buffUntil: p.buffUntil || 0, protectedUntil: p.protectedUntil || 0, deploying: !!p.deploying, hotLoose: !!p.hotLoose,
@@ -835,6 +837,7 @@ function finishClaimBuilding(p, idx) {
   locker.spawn = { x: p.x, z: p.z };
   feed(`${p.name} claimed a ${lowerFirst(buildingLabel(idx))}`);
   send(p.ws, { t: 'hack', done: true, text: `Claimed! This ${lowerFirst(buildingLabel(idx))} is now your stash house: stash locker inside, ${b.doors.length} lockable door${b.doors.length > 1 ? 's' : ''}.` });
+  tutEvent(p, 'claim');
   send(p.ws, { t: 'claimed' });
   const s = squadOf(p);
   if (s) for (const m of crewOnline(s)) { if (m !== p) { toast(m, `${p.name} claimed a ${lowerFirst(buildingLabel(idx))} for ${s.name}`); send(m.ws, { t: 'claimed' }); } dirty(m); }
@@ -3484,6 +3487,7 @@ function tickHacks(now) {
       p[h.res] += n;
       wearTool(p, h.res === 'wood' ? 'hatchet' : 'pickaxe', WEAR.harvestUse);
       send(p.ws, { t: 'hack', done: true, text: `+${n} ${h.res}` });
+      tutEvent(p, 'gather');
     } else if (h.kind === 'upgrade') {
       const st = structs.get(h.id);
       if (!st) continue;
@@ -4117,6 +4121,7 @@ function takeLoot(p, l, quiet = false) {
   if (l.site) siteLooted(p, l);
   if (l.item.hot && !wasHot) { p.hotPingAt = Date.now(); toast(p, `🔥 ${l.item.name}: hot loot. Everyone sees where you are every ${Math.round(HZ_CACHE_PING_MS / 1000)}s (every ${Math.round(HZ_PING_MS / 1000)}s with crate loot) until you get it home or fly it out.`); }
   award(p, XP.pickup, l.item.name);
+  tutEvent(p, 'loot');
   dirty(p);
 }
 function addToPack(p, item) {
@@ -4223,6 +4228,78 @@ function abandonContract(p, id) {
   pushContracts(p);
   dirty(p);
 }
+// ---------------------------------------------------------------- the intro mission: "Welcome to the Zone"
+// A first job from the nearest Contact that walks a new player through the game a step at a time:
+// get there, loot, shoot, gather, claim a home, build, stash, the gunsmith, report back. The server
+// follows what you actually do and pays each step once. The words for each step are the client's.
+const TUT = [   // [step, XP, $]
+  ['arrive', 25, 0], ['loot', 25, 0], ['shoot', 25, 0], ['gather', 30, 0], ['claim', 60, 25],
+  ['build', 40, 0], ['stash', 30, 0], ['gunsmith', 30, 0], ['report', 100, 100],
+];
+const TUT_NAMES = { arrive: 'found the Contact', loot: 'first loot', shoot: 'first shots', gather: 'first wood', claim: 'a home of your own', build: 'first build', stash: 'gear stashed', gunsmith: 'the gunsmith', report: 'reported back' };
+const tutStep = (p) => (p.tut && !p.tut.done ? TUT[p.tut.step]?.[0] : null);
+/** Start (or start over) the intro: from the nearest Contact. */
+function tutStart(p) {
+  const ct = map.contacts.reduce((a, c) => (!a || Math.hypot(c.x - p.x, c.z - p.z) < Math.hypot(a.x - p.x, a.z - p.z) ? c : a), null);
+  p.tut = { step: 0, contact: ct ? ct.id : 0, shots: 0, reloaded: false, done: false };
+  tutPass(p); tutAim(p); dirty(p);
+}
+/** Something happened that a step may be waiting for. */
+function tutEvent(p, what) {
+  const s = tutStep(p);
+  if (!s) return;
+  if (what === 'shot') p.tut.shots = Math.min(3, (p.tut.shots || 0) + 1);
+  if (what === 'reload') p.tut.reloaded = true;
+  if (s === what || (s === 'shoot' && p.tut.shots >= 3 && p.tut.reloaded)) tutAdvance(p);
+  else if (s === 'shoot' && (what === 'shot' || what === 'reload')) dirty(p);
+}
+function tutAdvance(p) {
+  const [id, xp, cash] = TUT[p.tut.step];
+  if (xp) award(p, xp, `Intro: ${TUT_NAMES[id]}`);
+  if (cash) p.cash = (p.cash || 0) + cash;
+  p.tut.step++;
+  if (p.tut.step >= TUT.length) { p.tut.done = true; p.tut.target = null; send(p.ws, { t: 'tutDone' }); }
+  else { tutPass(p); tutAim(p); }
+  dirty(p);
+}
+/** Steps already done another way pass at once (a home before the claim step: no second one). */
+function tutPass(p) {
+  while (tutStep(p) === 'claim' && claimOf(p)) {
+    const [id, xp] = TUT[p.tut.step];
+    award(p, xp, `Intro: ${TUT_NAMES[id]}`);
+    p.tut.step++;
+  }
+}
+/** Where the step's marker goes: the Contact, the nearest loot or tree, a free home, your stash. */
+function tutAim(p) {
+  const s = tutStep(p);
+  if (!s) return;
+  const near = (list, max) => { let best = null, bd = max; for (const o of list) { const d = Math.hypot(o.x - p.x, o.z - p.z); if (d < bd) { bd = d; best = o; } } return best; };
+  let t = null;
+  if (s === 'arrive' || s === 'report') { const ct = map.contacts[p.tut.contact]; if (ct) t = { x: ct.x, z: ct.z, label: ct.name }; }
+  else if (s === 'loot') { const l = near(loot.values(), 250); if (l) t = { x: l.x, z: l.z, label: 'Loot' }; }
+  else if (s === 'gather') {   // (in the middle of town the nearest tree can be a couple of blocks off)
+    for (const R of [120, 320]) {
+      const b = near(grid.near(p.x, p.z, R).filter((q) => q.nature && (q.type === 'tree' || q.type === 'pine') && !q.gone).map((q) => ({ x: (q.minX + q.maxX) / 2, z: (q.minZ + q.maxZ) / 2 })), R);
+      if (b) { t = { x: b.x, z: b.z, label: 'Tree' }; break; }
+    }
+  }
+  else if (s === 'claim') {   // (the nearest free home's door: that's where the marker goes in)
+    const h = near(map.houses.filter((q) => !db.houses[q.id]?.owner && q.campId == null), 3000);
+    if (h) t = { x: h.door ? (h.door.minX + h.door.maxX) / 2 : h.x, z: h.door ? (h.door.minZ + h.door.maxZ) / 2 : h.z, label: `Free ${(HOME_KINDS[h.kind]?.name || 'home').toLowerCase()}`, house: h.id };
+  }
+  else if (s === 'build' || s === 'stash' || s === 'gunsmith') { const c = claimOf(p); if (c) t = { x: c.x, z: c.z, label: 'Your stash house' }; }
+  if (t) { t.x = Math.round(t.x); t.z = Math.round(t.z); }
+  const was = JSON.stringify(p.tut.target || null);
+  p.tut.target = t;
+  if (JSON.stringify(t) !== was) dirty(p);
+}
+function tutTick(p, now) {
+  if (!tutStep(p)) return;
+  if (tutStep(p) === 'arrive') { const ct = map.contacts[p.tut.contact]; if (ct && Math.hypot(ct.x - p.x, ct.z - p.z) < 12) return tutAdvance(p); }
+  if (now - (p.tutAimAt || 0) > 3000) { p.tutAimAt = now; tutAim(p); }
+}
+
 function contactView(p, contactId) {
   refreshHauls(Date.now());
   const ct = map.contacts[contactId];
@@ -4336,6 +4413,7 @@ function handleBuild(p, msg) {
   }
   db.structures.push(st);
   indexStruct(st, true);
+  tutEvent(p, 'build');
   if (buildXp(p, 10)) { award(p, 10, `Built ${stage0.name}`); homeBuildXp(p, st, `Built ${stage0.name}`); }
   dirty(p);
 }
@@ -4648,6 +4726,7 @@ function interact(p) {
       completeContract(p, c);
     }
     deliverCargo(p, it.ref.id);
+    tutEvent(p, 'report');
     return send(p.ws, contactView(p, it.ref.id));
   }
   if (it.kind === 'loot') {
@@ -4848,6 +4927,7 @@ function tickStashing(now) {
 function finishStash(p) {
   const u = unstashed(p);
   secureAll(p);
+  tutEvent(p, 'stash');
   send(p.ws, { t: 'hack', done: true, text: hasUnstashed(u) ? `Stashed: ${unstashedText(u)} safe now` : '' });
   dirty(p);
 }
@@ -4918,6 +4998,7 @@ function gunsmithAction(p, msg) {
     if (cost > 0) award(p, XP.build, `Built ${item.name}`);   // a free sidearm teaches nothing
     toast(p, `Built ${item.name}${roomInPack ? '' : ' (sent to stash)'}`);
   } else return;
+  tutEvent(p, 'gunsmith');
   dirty(p);
   refreshClaim(claimOf(p));
 }
@@ -5192,6 +5273,7 @@ function handleDeploy(p, msg) {
   for (const c of p.contracts) instantiateContract(p, c);
   pushContracts(p);
   send(p.ws, { t: 'deployed', kind: msg.kind });
+  if (p.tut === undefined && level(p) <= 3) tutStart(p);   // a new player's first job (see TUT)
   gesture(p, 'getup', 1000);   // back on your feet
   dirty(p);
 }
@@ -5632,6 +5714,7 @@ function handleShoot(p, msg) {
   const at = Array.isArray(msg.at) && msg.at.length === 3 && msg.at.every(Number.isFinite) ? msg.at : null;
   const from = Array.isArray(msg.from) && msg.from.length === 3 && msg.from.every(Number.isFinite) ? msg.from : null;
   fire(p, msg.dir, false, 1, { at, from, since, tid: typeof msg.tid === 'string' ? msg.tid : null });
+  tutEvent(p, 'shot');
   dirty(p);
 }
 function handleReload(p) {
@@ -5641,6 +5724,7 @@ function handleReload(p) {
   const need = s.mag - (p.mags[w.id] ?? 0), pool = s.explosive ? 'rockets' : 'ammo';
   if (need <= 0 || (p[pool] || 0) <= 0 || p.reloadUntil > Date.now()) return;
   p.reloadUntil = Date.now() + s.reloadMs;
+  tutEvent(p, 'reload');
   const take = Math.min(need, p[pool]);
   setTimeout(() => {
     if (p.dead || activeWeapon(p)?.id !== w.id) return;
@@ -5799,6 +5883,12 @@ wss.on('connection', (ws) => {
       case 'closeContainer': p.openContainer = null; return;
       case 'inv': return !p.dead && invAction(p, msg);
       case 'deploy': return handleDeploy(p, msg);
+      case 'tut': {   // the intro mission: start it (again), or skip it
+        if (p.dead || p.deploying) return;
+        if (msg.action === 'start') return tutStart(p);
+        if (msg.action === 'skip' && p.tut && !p.tut.done) { p.tut.done = true; p.tut.skipped = true; p.tut.target = null; dirty(p); }
+        return;
+      }
       case 'respawn': return handleDeploy(p, { kind: claimOf(p) ? 'home' : 'lz', id: 0 });
       case 'abandon': return abandonClaim(p);
       case 'raidWindow': return setRaidWindow(p, msg);
@@ -6002,6 +6092,7 @@ function worldTick() {
     for (const p of players.values()) {
       if (p.dead) continue;
       discoverContacts(p);
+      tutTick(p, now);
       // Time alive pays while you're out and moving: not standing idle, not sitting in a safe camp.
       if (now - (p.lastActive || 0) < XP.idleAfterMs && !inCamp(p.x, p.z) && !inFair(p.x, p.z)) p.aliveMs += 1000;
       if (p.aliveMs >= 60_000) { p.aliveMs -= 60_000; award(p, XP.survivalPerMinute, 'Survived another minute'); }

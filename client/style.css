@@ -1062,3 +1062,25 @@ body.touchui #chatbox { bottom: auto; top: 10px; left: 50%; transform: translate
 #mapKey h3 { margin: 0 0 6px; font: 700 13px/1 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
 #mapKey .mkrow { display: flex; align-items: center; gap: 10px; min-height: 28px; font-size: 15px; color: var(--ink); }
 #mapKey .mkrow canvas { width: 24px; height: 24px; flex: none; }
+
+/* ==== The intro mission card (left side) and the story cards. ==== */
+#tut { position: absolute; top: 64px; left: 12px; width: min(360px, 34vw); padding: 12px 14px; background: var(--surface-0); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 12px; color: var(--ink); pointer-events: none; }
+#tut[hidden] { display: none; }
+#tut .tuthead { display: flex; justify-content: space-between; gap: 8px; font: 700 12px/1.2 var(--font-text); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+#tut .tutbar { height: 4px; margin: 7px 0 9px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+#tut .tutbar i { display: block; height: 100%; background: var(--accent); transition: width 300ms ease-out; }
+#tut h3 { margin: 0 0 5px; font: 800 18px/1.2 var(--font-display); color: var(--ink); }
+#tut p { margin: 0; font-size: 15px; line-height: 1.45; color: var(--ink-2); }
+#tut p b { color: var(--ink); }
+#tut .tutfoot { margin-top: 8px; font-size: 12px; color: var(--ink-3); }
+body.touchui #tut { top: 58px; width: min(300px, 40vw); padding: 8px 10px; }
+body.touchui #tut p { font-size: 13px; }
+body.touchui #tut h3 { font-size: 15px; }
+#story { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(620px, 92vw); z-index: 60; padding: 26px 30px; border-top: 3px solid var(--accent); }
+#story .stnum { font: 700 12px/1 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+#story h2 { margin: 10px 0 10px; font: 800 30px/1.1 var(--font-display); letter-spacing: 0.04em; color: var(--ink); }
+#story p { margin: 0 0 20px; font-size: 18px; line-height: 1.55; color: var(--ink-2); }
+#story .strow { display: flex; justify-content: flex-end; gap: 10px; }
+#story .strow .ghost { order: -1; }   /* Skip shows first, but Next is first in line: a controller starts on Next */
+#story .strow button { min-height: 48px; min-width: 110px; font-size: 16px; }
+@media (prefers-reduced-motion: reduce) { #tut .tutbar i { transition: none; } }

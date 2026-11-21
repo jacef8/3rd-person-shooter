@@ -1846,6 +1846,7 @@ function drawMinimap() {
   if (hp0) edge(hp0.x, hp0.z, 'home');
   for (const h of state.me?.hideouts || []) edge(h.x, h.z, 'hideout', IS * 0.85);
   if (state.waypoint) edge(state.waypoint.x, state.waypoint.z, 'waypoint');
+  { const tt = state.me?.tut; if (tt && !tt.done && tt.target) edge(tt.target.x, tt.target.z, 'objective'); }
   // Crewmates: a green dot when they're in view; further off, a green arrow on the rim pointing at
   // them, with their name and how far. Live position when they're near, else the crew update (5 s).
   const crewChips = [];
@@ -2170,6 +2171,7 @@ function handle(m) {
       syncCharges(m.charges || []);
       break;
     }
+    case 'tutDone': toast('Intro done. The county is yours to work out from here. Good luck in the Zone.'); sfx.levelUp?.(); break;
     case 'you': {
       const wasDead = state.me?.dead;
       if (state.me && !m.dead && !wasDead) {
@@ -2190,6 +2192,7 @@ function handle(m) {
       if (state.mapMode && state.mapOpen) redraw($('mapscreen'), renderMapScreen);
       if (state.contactOpen) redraw($('contactpanel'), renderContact);
       updateHud();
+      renderTut();
       if (state.invOpen) redraw($('inventory'), renderInventory);
       if (state.gunsmithOpen) redraw($('gunsmith'), renderGunsmith);
       setCloak(selfMesh, m.camoActive ? 0.3 : 1);
@@ -2446,6 +2449,76 @@ function stanceNote() {
 }
 setInterval(stanceNote, 250);
 setInterval(() => { if (state.me && (state.me.taserReadyAt || 0) > Date.now() - 1500) updateHud(); }, 1000);   // the stun gun's recharge counting down
+// ------------------------------------------------------------------ the intro mission ("Welcome to the Zone")
+// A card on the left of the screen: which step of the first job you're on, what to do, and the buttons
+// for it on whatever you're playing with. The server follows what you do (server/index.js TUT) and
+// puts the ★ marker where you need to go.
+const tutEl = Object.assign(document.createElement('div'), { id: 'tut', hidden: true });
+$('hud').append(tutEl);
+const TUT_TOTAL = 9;
+function tutText(t) {
+  const pad = state.inputMode === 'pad', touchy = state.touchUI && !pad;
+  const k = (kb, pd, tc) => `<b>${pad ? pd : touchy ? tc : kb}</b>`;
+  const use = k('E', 'Ⓐ', 'USE'), bag = k('Tab', '⧉, the left small button', 'BAG'), build = k('X', '▶ (D-pad right)', '⋯ → BUILD');
+  const move = pad ? '<b>Left stick</b> moves, <b>right stick</b> looks, click the left stick (<b>L3</b>) to sprint, <b>Ⓐ</b> jumps.'
+    : touchy ? 'Your <b>left thumb</b> moves (push to the edge to sprint); drag the <b>right side</b> to look.'
+      : '<b>W A S D</b> move, the <b>mouse</b> looks, <b>Shift</b> sprints, <b>Space</b> jumps.';
+  const who = t.contact || 'Contact';
+  return [
+    [`Find the ${who}`, `The ${who}${t.town ? ` in ${t.town}` : ''} has work for you. Follow the ★ on your screen and minimap. ${move}`],
+    ['Grab some loot', `Supplies lie in and around buildings: walk over them or press ${use}. The ★ marks the nearest. Open your bag (${bag}) to see what you carry.`],
+    ['Fire your gun', `Aim with ${k('right click', 'LT', 'AIM')} and fire with ${k('left click', 'RT', 'FIRE')}: three shots (<b>${t.shots}/3</b>), then reload with ${k('R', 'Ⓧ', 'RELOAD')}${t.reloaded ? ' ✓' : ''}. ${k('Q', 'Ⓨ', 'a gun at the bottom')} switches guns.`],
+    ['Gather wood', `Go to a tree (★) and hold ${use}: the hatchet in your pack chops it. Wood builds walls and floors.`],
+    ['Claim a home', `Free houses, cabins, RVs and caves can be yours. Go to the ★ and press ${use} at the door to plant your claim marker. What you stash there is kept when you die.`],
+    ['Build a wall', `At your place, open building with ${build}, pick <b>Wall</b> and set it down (a wall frame costs 10 wood). Walls snap to a 4 m grid; doorways, windows, floors and stairs too.`],
+    ['Stash your gear', `At your stash house press ${use} to stash what you carry. Anything not stashed drops in a bag where you die, for anyone to take.`],
+    ['Visit the gunsmith', `At your stash, open your bag (${bag}) and choose <b>Gunsmith</b>: change a part or the paint, or build the free sidearm. Better parts unlock as you level up.`],
+    [`Report back to the ${who}`, `Go back to the ★ and talk to them (${use}). Contacts pay for jobs. Bring your family into your crew (bag → <b>Crew</b>) so you can spawn on each other.`],
+  ][t.step] || null;
+}
+function renderTut() {
+  const t = state.me?.tut;
+  const show = !!t && !t.done && !state.me?.dead && !!state.map;
+  tutEl.hidden = !show;
+  if (!show) { tutEl.dataset.sig = ''; return; }
+  const txt = tutText(t);
+  if (!txt) { tutEl.hidden = true; return; }
+  const sig = `${t.step}|${t.shots}|${t.reloaded}|${state.inputMode}|${state.touchUI}`;
+  if (tutEl.dataset.sig === sig) return;
+  tutEl.dataset.sig = sig;
+  tutEl.innerHTML = `<div class="tuthead"><span>Welcome to the Zone</span><span>Step ${t.step + 1} of ${TUT_TOTAL}</span></div><div class="tutbar"><i style="width:${Math.round((t.step / TUT_TOTAL) * 100)}%"></i></div><h3>${txt[0]}</h3><p>${txt[1]}</p><div class="tutfoot">Skip or replay it in Settings</div>`;
+}
+// Settings: start the intro again, or skip it; and the story.
+function renderIntroSettings(box) {
+  const t = state.me?.tut;
+  const row = document.createElement('div'); row.className = 'item';
+  row.innerHTML = `<div class="meta"><div class="nm">Intro mission</div><div class="st">${!t ? 'Not started.' : t.done ? (t.skipped ? 'Skipped.' : 'Done.') : `On step ${t.step + 1} of ${TUT_TOTAL}.`} It walks you through moving, loot, shooting, gathering, a home, building, stashing and the gunsmith.</div></div>`;
+  const go = btn(t && !t.done ? 'Start over' : 'Play the intro', () => { send({ t: 'tut', action: 'start' }); closeSquadPanel(); });
+  go.dataset.pad = 'tutstart'; row.append(go);
+  if (t && !t.done) { const sk = btn('Skip it', () => send({ t: 'tut', action: 'skip' })); sk.dataset.pad = 'tutskip'; row.append(sk); }
+  const story = btn('The story', () => { closeSquadPanel(); openStory(); }); story.dataset.pad = 'story'; row.append(story);
+  box.append(row);
+}
+
+// ------------------------------------------------------------------ the story so far (lobby, first time; Settings any time)
+const STORY = [
+  ['The Long Storm', 'A hurricane stalled over the Panhandle for four days. Upriver, the dam gates jammed and the Apalachicola left its banks all the way to the Gulf. Bridges went out. Only the SR 20 bridge between Bristol and Blountstown still stands. Liberty County was cut off.'],
+  ['The Zone', 'Washington walled off the valley as a Restricted Recovery Zone and hired a private army, Halyard Security, to run it: checkpoints on the Line, sensor relays, helipads, supply drops, and an ID tag on everyone inside.'],
+  ['The money ran out', "A year later the contract ended and Halyard was ordered out. Most of it went home. A few hundred didn't. They kept the rifles and the trucks and became the Rogues: they raid towns and run armed convoys on SR 20."],
+  ['Now', 'Two years on, nobody official comes in. A Contact in each town pays for work that makes the Zone safe enough to reopen. Whoever is holding land when it reopens gets to keep it. Make a home. Hold it.'],
+];
+let storyAt = 0;
+function openStory() { storyAt = 0; showStory(); $('story').hidden = false; }
+function closeStory() { $('story').hidden = true; try { localStorage.setItem('dz_story', '1'); } catch { /* private mode */ } }
+function showStory() {
+  const [title, body] = STORY[storyAt];
+  $('storyNum').textContent = `${storyAt + 1} of ${STORY.length}`;
+  $('storyTitle').textContent = title; $('storyBody').textContent = body;
+  $('storyNext').textContent = storyAt < STORY.length - 1 ? 'Next' : 'Start';
+}
+$('storyNext').onclick = () => { if (storyAt < STORY.length - 1) { storyAt++; showStory(); } else closeStory(); };
+$('storySkip').onclick = closeStory;
+
 function updateHud() {
   const me = state.me;
   if (!me) return;
@@ -4617,6 +4690,7 @@ function drawMarkers() {
     for (const d of state.drops) marker(`d${d.id}`, 'alert', `📦 ${distText(Math.hypot(d.x - state.x, d.z - state.z))}`, new THREE.Vector3(d.x, ground(d.x, d.z) + 3, d.z));
     for (const e of state.worldEvents || []) if (e.type !== 'swing') marker(`w${e.id}`, 'objective', `📣 ${e.name} · ${distText(Math.hypot(e.x - state.x, e.z - state.z))}`, new THREE.Vector3(e.x, ground(e.x, e.z) + 6, e.z));
     for (const e of state.extracts) marker(`e${e.id}`, 'alert', `🚁 ${distText(Math.hypot(e.x - state.x, e.z - state.z))}`, new THREE.Vector3(e.x, ground(e.x, e.z) + 4, e.z));
+    { const tt = state.me?.tut; if (tt && !tt.done && tt.target) marker('tut', 'objective', `★ ${tt.target.label} · ${distText(Math.hypot(tt.target.x - state.x, tt.target.z - state.z))}`, new THREE.Vector3(tt.target.x, ground(tt.target.x, tt.target.z) + 3, tt.target.z)); }
     if (state.waypoint) {
       const dw = Math.hypot(state.waypoint.x - state.x, state.waypoint.z - state.z);
       if (dw < 12) { setWaypoint(null); toast('Waypoint reached'); }
@@ -4836,6 +4910,7 @@ function renderPadSettings() {
   const keep = document.activeElement?.dataset?.pad;
   const save = () => { try { localStorage.setItem('dz_pad', JSON.stringify(pad.settings)); } catch { /* private mode */ } renderPadSettings(); };
   box.innerHTML = '';
+  if (state.me) renderIntroSettings(box);
   const row = document.createElement('div'); row.className = 'item';
   row.innerHTML = `<div class="meta"><div class="nm">Look speed: ${pad.settings.lookSpeed.toFixed(1)}</div><div class="st">How fast the right stick turns you.</div></div>`;
   const slower = btn('Slower', () => { pad.settings.lookSpeed = Math.max(0.8, +(pad.settings.lookSpeed - 0.2).toFixed(1)); save(); });
@@ -5006,6 +5081,7 @@ function setInputMode(m) {
   state.inputMode = m;
   document.body.classList.toggle('pad', m === 'pad');
   if (m === 'pad') document.body.classList.add('padseen');   // the lobby shows controller help from now on
+  setTimeout(() => renderTut(), 0);   // (the intro's button names follow what you're holding)
   // Back on touch or a real keyboard: text boxes may raise the phone's keyboard again.
   if (m !== 'pad') for (const i of document.querySelectorAll('input[inputmode="none"]')) i.removeAttribute('inputmode');
   if (m === 'pad') document.exitPointerLock?.();
@@ -5024,7 +5100,7 @@ function readPad() {
 const deadzone = (v, d = 0.16) => (Math.abs(v) < d ? 0 : Math.sign(v) * (Math.abs(v) - d) / (1 - d));
 
 function topPanel() {
-  for (const id of ['osk', 'quickchat', 'ridepanel', 'tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
+  for (const id of ['story', 'osk', 'quickchat', 'ridepanel', 'tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
   return null;
 }
 function focusables(root) {
@@ -5121,6 +5197,7 @@ function panelJump(panel, step) {
   padFocus(focusables(next)[0]);
 }
 function padBack() {
+  if (!$('story').hidden) return closeStory();
   if (osk.input) return closeOsk(false);
   if (!$('quickchat').hidden) return closeQuickChat();
   if (state.invOpen && invUi.menuFor) return closeInvMenu();
@@ -6952,6 +7029,7 @@ function hubConnect() {
         state.myName = m.name;
         $('lbName').hidden = true; $('lbMain').hidden = false;
         $('lbWho').textContent = m.name;
+        if (!localStorage.getItem('dz_story') && !new URLSearchParams(location.search).get('world')) openStory();   // first time here: the story so far
         // Arrived from an invite link: go straight into that world.
         const q = new URLSearchParams(location.search);
         if (q.get('world') && !lobby.autoJoined && !state.ws) {
@@ -7053,6 +7131,7 @@ function renderLobby() {
   const warn = Object.assign(document.createElement('p'), { className: 'lb-note so-warn', hidden: true, innerHTML: `Signing out lets you play as someone else here (choose <b>Already playing on another device?</b> and enter that callsign and a code from its device). To come back to <b>${esc(lobby.account?.name || '')}</b> later you'll need a code from a device still signed in as it, so get one first if you want to keep it.` });
   me.append(so, warn);
   wl.append(me);
+  { const st = btn('The story so far', openStory, 'ghost lb-wide'); st.dataset.pad = 'story'; wl.append(st); }
   if (!lbNote.hidden) placeNotice();   // (the redraw took it out: back under the same box)
   if (lobby.busy?.dataset.pad === 'rename') { lobby.busy = rb; rb.dataset.label = 'Change callsign'; rb.disabled = true; rb.textContent = 'Changing…'; }
 }
