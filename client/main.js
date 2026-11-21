@@ -1978,6 +1978,10 @@ function connect(name, world = 1, ticket = null) {
     // (an update) or the signal dropped: keep the world on screen and get back in by ourselves.
     if (e.code === 4000 || !state.map || (state.reconnects || 0) > 40) {
       toast(e.reason || 'Disconnected from the world');
+      const why = e.code === 4000
+        ? `${state.myName || 'Your callsign'} just joined the game on another device, so this one was taken out of the world. A callsign plays on one device at a time: give each player their own callsign (each device can make one).`
+        : !state.map ? `Couldn't get into the world${e.reason ? ` (${e.reason})` : ''}. Press Play to try again.` : 'Lost the connection to the world. Press Play to go back in.';
+      try { sessionStorage.setItem('dz_notice', why); } catch { /* private mode */ }
       setTimeout(() => location.replace('/'), 1500);
       return;
     }
@@ -6810,7 +6814,51 @@ setInterval(() => {
 // ------------------------------------------------------------------ lobby: worlds, friends, invites
 // The hub (server/hub.js) runs the lobby: pick a world, manage friends, send and receive invites.
 // Its connection stays open while you play, so invites reach you anywhere.
-const lobby = { ws: null, account: null, state: null, results: null, invite: null, autoJoined: false };
+const lobby = { ws: null, account: null, state: null, results: null, invite: null, autoJoined: false, busy: null, noteAfter: null };
+// The lobby's messages ("that callsign is taken", why you were sent back here): in the card, right
+// under the box you used, not as a pop-up (those belong to the game screen and don't show here).
+const lbNote = Object.assign(document.createElement('div'), { className: 'lb-notice', hidden: true });
+lbNote.setAttribute('role', 'alert');
+const inLobby = () => !$('login').hidden;
+function lobbyNotice(text, kind = 'error', after = null) {
+  if (!text) { lbNote.hidden = true; lobby.noteAfter = null; return; }
+  lbNote.textContent = text; lbNote.className = `lb-notice ${kind}`; lbNote.hidden = false;
+  lobby.noteAfter = after;
+  placeNotice();
+  lbNote.scrollIntoView({ block: 'nearest' });
+}
+function placeNotice() {
+  const at = typeof lobby.noteAfter === 'function' ? lobby.noteAfter() : lobby.noteAfter;
+  if (at?.isConnected) at.after(lbNote);
+  else { const card = $('login').querySelector('.lb-card'); if (lbNote.parentNode !== card || card.firstChild !== lbNote) card.prepend(lbNote); }
+}
+/** A lobby button that's waiting on the server: says so, and gives up with a message after 8 s. */
+function lobbyBusy(button, label) {
+  lobbyDone();
+  button.dataset.label = button.textContent; button.disabled = true; button.textContent = label;
+  lobby.busy = button;
+  lobby.busyT = setTimeout(() => lobbyDone('No answer from the server. Check the internet connection and try again.'), 8000);
+}
+function lobbyDone(err = null) {
+  clearTimeout(lobby.busyT);
+  const b = lobby.busy;
+  lobby.busy = null;
+  if (b) { b.disabled = false; b.textContent = b.dataset.label; if (state.inputMode === 'pad' && b.isConnected && (!document.activeElement || document.activeElement === document.body)) padFocus(b); }
+  if (err) lobbyNotice(err, 'error', lobby.noteAfter);
+}
+/** Ask the hub something from the lobby: not connected yet, or nothing typed, gets a message instead. */
+function lobbyAsk(button, msg, after, label = 'Checking…') {
+  lobby.noteAfter = after;
+  if (lobby.ws?.readyState !== 1) return lobbyNotice("Can't reach the server yet. It keeps trying on its own: give it a few seconds, then try again.", 'error', after);
+  lbNote.hidden = true;
+  lobbyBusy(button, label);
+  hubSend(msg);
+}
+// Sent back here from the world (signed in on another device, or couldn't get in): say why.
+{
+  const why = sessionStorage.getItem('dz_notice');
+  if (why) { sessionStorage.removeItem('dz_notice'); setTimeout(() => lobbyNotice(why, 'warn'), 0); }
+}
 function hubSend(m) { if (lobby.ws?.readyState === 1) lobby.ws.send(JSON.stringify(m)); }
 function hubConnect() {
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/hub`);
@@ -6821,10 +6869,13 @@ function hubConnect() {
     const m = JSON.parse(ev.data);
     switch (m.t) {
       case 'needName':
+        lobbyDone();
         $('lbName').hidden = false; $('lbMain').hidden = true;
         if (m.suggest && !$('name').value) $('name').value = m.suggest;
         break;
       case 'account': {
+        const renamed = lobby.busy?.dataset.pad === 'rename' && lobby.account && lobby.account.name !== m.name;
+        if (lobby.busy) { lobbyDone(); lobbyNotice(renamed ? `Done: you're ${m.name} now.` : null, 'ok', renamed ? () => $('lbWorlds').querySelector('[data-pad=rename]')?.parentNode : null); }
         lobby.account = m;
         localStorage.setItem('dz_token', m.token);
         localStorage.setItem('dz_name', m.name);
@@ -6849,14 +6900,21 @@ function hubConnect() {
       case 'search': lobby.results = m.results; redraw($('login'), renderLobby); if (state.panelOpen) renderSquadPanel(); break;
       case 'linkCode': lobby.link = m; renderLobby(); break;
       case 'invite': showInvite(m); break;
-      case 'note': toast(m.text); break;
-      case 'error': toast(`⚠ ${m.text}`); break;
+      case 'note': if (inLobby()) lobbyNotice(m.text, 'info', lobby.noteAfter); else toast(m.text); break;
+      case 'error': if (inLobby()) { lobbyDone(); lobbyNotice(m.text, 'error', lobby.noteAfter); } else toast(`⚠ ${m.text}`); break;
     }
   };
 }
-$('register').onclick = () => hubSend({ t: 'register', name: $('name').value, token: localStorage.getItem('dz_token') });
+$('register').onclick = () => {
+  const row = $('name').closest('.lb-namerow');
+  if ($('name').value.trim().length < 3) return lobbyNotice('Type a callsign first: at least 3 letters or numbers.', 'error', row);
+  lobbyAsk($('register'), { t: 'register', name: $('name').value, token: localStorage.getItem('dz_token') }, row);
+};
 // Your callsign on this device too: callsign + the code from the device you already play on.
-$('linkGo').onclick = () => hubSend({ t: 'link', name: $('linkName').value, code: $('linkCode').value });
+$('linkGo').onclick = () => {
+  if (!$('linkName').value.trim() || !$('linkCode').value.trim()) return lobbyNotice('Enter the callsign and the code from the other device (in its lobby: Get a code for another device).', 'error', $('linkGo'));
+  lobbyAsk($('linkGo'), { t: 'link', name: $('linkName').value, code: $('linkCode').value }, $('linkGo'));
+};
 $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('register').click(); });
 /** The joining card: what's happening between pressing Play and the deploy screen. */
 function joinStatus(step, sub = '') {
@@ -6908,7 +6966,11 @@ function renderLobby() {
   me.innerHTML = `<h2>Your callsign</h2><p class="lb-note">You're <b>${esc(lobby.account?.name || '')}</b> on this device. A new callsign keeps your level, home, gear and friends.</p>`;
   const row = document.createElement('div'); row.className = 'lb-namerow';
   const inp = Object.assign(document.createElement('input'), { maxLength: 16, placeholder: 'New callsign', autocomplete: 'off' });
-  const rb = btn('Change callsign', () => { if (inp.value.trim()) hubSend({ t: 'rename', name: inp.value }); });
+  const rb = btn('Change callsign', () => {
+    const at = () => $('lbWorlds').querySelector('[data-pad=rename]')?.parentNode;
+    if (inp.value.trim().length < 3) return lobbyNotice('Type the new callsign first: at least 3 letters or numbers.', 'error', at);
+    lobbyAsk(rb, { t: 'rename', name: inp.value }, at, 'Changing…');
+  });
   rb.dataset.pad = 'rename';
   row.append(inp, rb);
   me.append(row);
@@ -6921,6 +6983,8 @@ function renderLobby() {
   const warn = Object.assign(document.createElement('p'), { className: 'lb-note so-warn', hidden: true, innerHTML: `Signing out lets you play as someone else here (choose <b>Already playing on another device?</b> and enter that callsign and a code from its device). To come back to <b>${esc(lobby.account?.name || '')}</b> later you'll need a code from a device still signed in as it, so get one first if you want to keep it.` });
   me.append(so, warn);
   wl.append(me);
+  if (!lbNote.hidden) placeNotice();   // (the redraw took it out: back under the same box)
+  if (lobby.busy?.dataset.pad === 'rename') { lobby.busy = rb; rb.dataset.label = 'Change callsign'; rb.disabled = true; rb.textContent = 'Changing…'; }
 }
 /** Friends list, requests, search and recent players. `inGame` adds invite-to-this-world buttons. */
 function renderFriends(el, inGame) {

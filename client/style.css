@@ -508,8 +508,8 @@ input { min-height: 44px; border-radius: 10px; }
 @keyframes lbIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes lbRule { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes lbSkel { to { background-position: -200% 0; } }
-@media (max-width: 860px) { .lb-shell { grid-template-columns: 1fr; align-content: start; } .lb-pitch { display: none; } .lb-brand h1 { font-size: 44px; } }
-@media (max-height: 520px) {
+@media (max-width: 640px) { .lb-shell { grid-template-columns: 1fr; align-content: start; } .lb-pitch { display: none; } .lb-brand h1 { font-size: 44px; } }
+@media (max-height: 620px) {
   .lb-shell { grid-template-columns: minmax(0, 0.8fr) minmax(320px, 1fr); padding: 10px 14px 4px; gap: 14px; }
   .lb-mark { width: 40px; height: 40px; margin-bottom: 4px; } .lb-brand h1 { font-size: 40px; } .lb-pitch { display: none; }
   .lb-place { font-size: 13px; } .lb-card { padding: 12px 14px; }
@@ -580,7 +580,7 @@ body.touchui #wslots span { padding: 0 9px; }
 #lobbyfx { position: fixed; }
 .lb-shell { min-height: auto; }
 .lb-card { max-height: none; overflow: visible; }
-@media (max-width: 860px) { .lb-shell { display: block; } .lb-brand { margin-bottom: 18px; } }
+@media (max-width: 640px) { .lb-shell { display: block; } .lb-brand { margin-bottom: 18px; } }
 /* Phones and tablets: the phone help line; the controller help once a controller has been used; no keyboard help. */
 .lb-help .touchonly { display: none; }
 @media (pointer: coarse) {
@@ -1033,3 +1033,26 @@ body.touchui #chatbox { bottom: auto; top: 10px; left: 50%; transform: translate
 #breath b { display: block; height: 100%; background: #7fd6ff; transition: width 0.2s; }
 #breath.low { border-color: #ff6b5a; }
 #breath.low b { background: #ff6b5a; }
+
+/* ==== Lobby fixes: the name always fits its column (a TV cut it to "DEADZON"), rows don't run into
+   the heading under them, a button beside a text box leaves the box room, and messages show in the
+   card where you're looking. ==== */
+.lb-brand { container-type: inline-size; min-width: 0; }
+@supports (font-size: 1cqi) {
+  .lb-brand h1 { font-size: min(104px, 15cqi); }
+  @media (max-height: 620px) { .lb-brand h1 { font-size: min(64px, 15cqi); } }
+}
+.lb-card #lbName h2 + .lb-note + .lb-namerow + h2 { margin-top: 26px; }
+.lb-namerow { align-items: stretch; }
+.lb-namerow button { flex: 0 0 auto; width: auto; min-height: 48px; padding: 0 18px; }
+.lb-link .lb-namerow button { width: auto; }
+.lb-namerow input { min-width: 8em; }
+.lb-notice { margin: 10px 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line-2); border-left: 4px solid var(--accent); font-size: 15px; line-height: 1.45; color: var(--ink); }
+.lb-notice.error { border-left-color: var(--danger); }
+.lb-notice.warn { border-left-color: #ffc53d; }
+.lb-notice.ok { border-left-color: var(--good); }
+.lb-notice[hidden] { display: none; }
+#login .lb-namerow input, #lbName .lb-namerow input { height: auto; min-height: 48px; align-self: stretch; margin: 0; }
+.lb-namerow button { min-height: 48px; padding-top: 0; padding-bottom: 0; }
+/* A long card (signed in, with friends): the name stays at the top of the screen, not centred low. */
+@media (min-width: 641px) { .lb-brand { align-self: start; position: sticky; top: clamp(16px, 8vh, 96px); } }
