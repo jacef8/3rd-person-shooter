@@ -2462,7 +2462,7 @@ const TUT_TOTAL = 9;
 function tutText(t) {
   const pad = state.inputMode === 'pad', touchy = state.touchUI && !pad;
   const k = (kb, pd, tc) => `<b>${pad ? pd : touchy ? tc : kb}</b>`;
-  const use = k('E', 'Ⓐ', 'USE'), bag = k('Tab', '⧉, the left small button', 'BAG'), build = k('X', '▶ (D-pad right)', '⋯ → BUILD');
+  const use = k('E', 'Ⓐ', 'USE'), bag = k('Tab', '⧉, the left small button', 'BAG'), build = k('X', '▶ (D-pad right)', 'MORE → BUILD');
   const move = pad ? '<b>Left stick</b> moves, <b>right stick</b> looks, click the left stick (<b>L3</b>) to sprint, <b>Ⓐ</b> jumps.'
     : touchy ? 'Your <b>left thumb</b> moves (push to the edge to sprint); drag the <b>right side</b> to look.'
       : '<b>W A S D</b> move, the <b>mouse</b> looks, <b>Shift</b> sprints, <b>Space</b> jumps.';
@@ -3890,7 +3890,7 @@ function lockPointer() {
   try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* not supported */ }
 }
 
-/** Settings (graphics, controls, sound): the end of the crew panel, scrolled to. O on a keyboard, ⋯ on a phone. */
+/** Settings (graphics, controls, sound): the end of the crew panel, scrolled to. O on a keyboard, MORE on a phone. */
 function openSettings() {
   if (!state.panelOpen) openSquadPanel();
   requestAnimationFrame(() => $('padSettings')?.previousElementSibling?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
@@ -3970,10 +3970,15 @@ function doAction(a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
     case 'settings': openSettings(); return;
     case 'chat': openChat(); return;
-    case 'micToggle':   // phones: the mic on (open mic) or off, from the ⋯ menu
+    case 'nadeOut': toggleNadeAim(); return;   // phones: the grenade, from the MORE menu
+    case 'lookBtn':   // phones: the hold-to-look-around button on the screen, or not
+      tset.lookBtn = !tset.lookBtn; saveTset(); document.body.classList.toggle('lookbtn', !!tset.lookBtn);
+      toast(tset.lookBtn ? '👁 LOOK button on the screen: hold it and drag to look around without turning' : 'LOOK button hidden (MORE → LOOK BUTTON brings it back)');
+      return;
+    case 'micToggle':   // phones: the mic on (open mic) or off, from the MORE menu
       tset.voiceOpen = !tset.voiceOpen; saveTset(); voiceSettings();
       if (!tset.voiceOpen) voice.talk(false);
-      toast(tset.voiceOpen ? '🎙 Mic on: your crew can hear you (⋯ → MIC again to turn it off)' : '🎙 Mic off');
+      toast(tset.voiceOpen ? '🎙 Mic on: your crew can hear you (MORE → MIC again to turn it off)' : '🎙 Mic off');
       return;
     case 'testRide': setTimeout(openRidePicker, 250); return;   // after the tap that asked for it has ended
     case 'map':
@@ -4115,7 +4120,7 @@ addEventListener('wheel', (e) => {
   const i = Math.max(0, slots.indexOf(me.active));
   send({ t: 'weapon', slot: slots[(i + (e.deltaY > 0 ? 1 : slots.length - 1)) % slots.length] });
 });
-// ---- text chat: to your crew (anywhere) or to whoever's nearby. Enter (or ⋯ → CHAT) to type, Tab or
+// ---- text chat: to your crew (anywhere) or to whoever's nearby. Enter (or MORE → CHAT) to type, Tab or
 // the channel button to switch, Enter to send, Esc to close. Lines fade after a while; open, the last
 // dozen show. Someone you've muted (voice chips) is muted here too.
 const chat = { open: false, ch: 'crew', lines: [] };
@@ -5066,7 +5071,7 @@ function airHud() {
   return `${a.mode === 'suit' ? '🐿 Squirrel suit' : 'Freefall'} · ${height} · hold <kbd>${sprint}</kbd> to fly the suit · <kbd>${glyph('E')}</kbd> pull chute (opens by itself at ${feet(SKY.autoChute, 10)})`;
 }
 // On a phone: the on-screen button (or where to find it) instead of a key it hasn't got.
-const TOUCH_NAMES = { E: 'USE', M: 'the minimap', Tab: '⋯', P: '⋯ → CREW', V: '⋯ → CAMO', X: '⋯ → BUILD', Q: 'swap' };
+const TOUCH_NAMES = { E: 'USE', M: 'the minimap', Tab: 'BAG', P: 'MORE → CREW', V: 'MORE → CAMO', X: 'MORE → BUILD', Q: 'swap', G: 'MORE → GRENADE' };
 function glyph(k) { return state.inputMode === 'pad' ? (GLYPHS[k] || k) : state.touchUI ? (TOUCH_NAMES[k] || k) : k; }
 // Downed on a phone: Patch up, or Give up (tapped twice, so a panicked thumb doesn't end it).
 $('downtouch').addEventListener('pointerdown', (e) => {
@@ -6473,6 +6478,7 @@ if (!tset.lf2) { tset.leftFire = false; tset.lf2 = 1; try { localStorage.setItem
 // The buttons were laid out again (v3: the middle right kept clear for turning); positions moved by
 // hand on the old layout would land in the wrong places, so they start from the new one (once).
 if (!tset.lay3) { tset.pos = {}; tset.lay3 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }
+document.body.classList.toggle('lookbtn', !!tset.lookBtn);   // (the LOOK button: off the screen unless chosen in MORE)
 if (!tset.af2) { if (!tset.autoFire || tset.autoFire === 'off') tset.autoFire = 'always'; tset.af2 = 1; try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } }
 const saveTset = () => { try { localStorage.setItem('dz_touch', JSON.stringify(tset)); } catch { /* private mode */ } markAutoFire(); };
 /** The FIRE buttons wear an AUTO badge while auto-fire is on. */
@@ -6503,18 +6509,20 @@ const TOUCH_BTNS = [
   ['RELOAD', 'reload', 'sm r1', 'reload'], ['CROUCH', 'crouch', 'sm r2', 'crouch'],   // tap: crouch · hold: prone (one button for both)
   ['NADE', 'sensor', 'sm r4', 'nade'],
   ['JUMP', 'jump', 'mid jump', 'jump'], ['HEAL', 'heal', 'sm r6', 'heal'],
-  // (Tag, the stun gun and the mic are in the ⋯ menu: kept off the screen, which they cluttered.)
+  // (Tag, the stun gun, the mic and the grenade are in the MORE menu: kept off the screen, which they cluttered.)
   // Hold the eye and drag to look around without turning (you keep running the way you were going).
   ['LOOK', 'look', 'sm look', 'look'],
   // Only while looking through a sight with two zoom levels: flip between them.
   ['ZOOM', 'zoom', 'sm zoom', 'zoom'],
 ];
 const TICON_OF = { fire: 'fire', lfire: 'fire', aim: 'aim', use: 'use', reload: 'reload', crouch: 'crouch', prone: 'prone', nade: 'nade', jump: 'jump', tag: 'tag', heal: 'heal', look: 'look', zoom: 'zoom', stun: 'stun', talk: 'talk' };
-// Top left: the bag, and ⋯ for the rest (the map: tap the minimap).
-const TOUCH_TOP = [['BAG', 'inventory'], ['⋯', 'touchMore']];   // the map: tap the minimap
+// Top left: the bag, and MORE for everything used less often (the map: tap the minimap).
+const TOUCH_TOP = [['BAG', 'inventory'], ['MORE ▾', 'touchMore']];   // the map: tap the minimap
 // Tag marks whoever is under your crosshair; the stun gun is pulled (FIRE shoots it; again to put it
 // away); MIC turns your microphone on for crew chat, or off.
-const TOUCH_MORE = [['⚙ SETTINGS', 'settings'], ['💬 CHAT', 'chat'], ['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['⇄ GRENADE', 'switchGrenade'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
+// (The grenade and the look-around button live here too, off the screen; the look button can be put
+// back on the screen from here.)
+const TOUCH_MORE = [['💣 GRENADE', 'nadeOut'], ['⇄ GRENADE TYPE', 'switchGrenade'], ['👁 LOOK BUTTON', 'lookBtn'], ['⚙ SETTINGS', 'settings'], ['💬 CHAT', 'chat'], ['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +
@@ -6962,6 +6970,7 @@ setInterval(() => {
     show('reload', !!w && !full && reserveFor(me) > 0);
     show('heal', (me.hp < me.maxHp && me.inv?.pack?.some((i) => i.kind === 'medkit')) || ((me.food ?? 100) < 60 && Object.keys(GOODS).some((g) => GOODS[g].food && me[g] > 0)));
   }
+  document.body.classList.toggle('nadeaim', !!state.nadeAim);   // (phones: the NADE button shows while a grenade is out, to put it away)
   $('touch').querySelector('[data-key=crouch]')?.classList.toggle('on', !!state.crouch);
   $('touch').querySelector('[data-key=prone]')?.classList.toggle('on', !!state.prone);
   if (touch.autoRun && (state.me?.dead || state.me?.downed)) { touch.autoRun = false; touch.moveY = 0; touch.sprintOn = false; $('tlock').style.display = 'none'; }

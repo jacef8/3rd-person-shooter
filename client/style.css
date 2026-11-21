@@ -1110,3 +1110,8 @@ body.touchui #prompt { max-width: 50vw; overflow: hidden; text-overflow: ellipsi
   body.touchui #toasts { max-width: 46vw; }
 }
 @media (prefers-reduced-motion: reduce) { body.touchui #where { transition: none; } }
+
+/* Phones: the grenade lives in MORE; the LOOK button too, unless put back on the screen from there. */
+body.touchui:not(.nadeaim) #touch .tbtn.r4 { display: none; }
+body.touchui:not(.lookbtn) #touch .tbtn.look { display: none; }
+body.touchui .ttop .tbtn.tiny[data-act=touchMore] { min-width: 74px; font-weight: 800; letter-spacing: 0.04em; }

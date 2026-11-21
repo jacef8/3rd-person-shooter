@@ -109,6 +109,17 @@ test('intro mission: a new player is walked through the first steps, paid for ea
   assert.equal(c.you.tut.target?.label, 'Your stash house', 'next: build at home');
   assert.ok(map.contacts.every((q) => Math.hypot(q.x - h.x, q.z - h.z) >= 80), 'the home it pointed at is away from the traders');
 
+  // Its door opens and closes from right beside it (standing at the door used to count as blocking it).
+  const doorOpen = () => c.snap?.houses?.find((q) => q.id === hm.house)?.open;
+  { const alongX = Math.abs(dx - h.x) > Math.abs(dz - h.z);   // which way the door faces: stand 0.7 m out from it, square on
+    await c.tp(dx + (alongX ? ox * 0.7 : 0), dz + (alongX ? 0 : (oz || 1) * 0.7)); }
+  await until(() => doorOpen() === false);
+  c.send({ t: 'interact' });
+  await until(() => doorOpen() === true, 4000);
+  await sleep(300);
+  c.send({ t: 'interact' });
+  await until(() => doorOpen() === false, 4000);
+
   // Nobody sets up house right by a trader: a home next to a Contact can't be claimed.
   const byTrader = map.houses.find((q) => map.contacts.some((k) => Math.hypot(k.x - q.x, k.z - q.z) < 60) && q.door);
   if (byTrader) {

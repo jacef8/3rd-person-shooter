@@ -4772,15 +4772,19 @@ function interact(p) {
       else toast(p, `Rebuilding door… ${h.rebuild}/4`);
     } else {
       if (h.doorOpen) {
+        // Blocked only by someone standing in the doorway itself (the door's own box, whichever way it
+        // faces), not by whoever's closing it from beside it: that made doors seem not to work.
         const d = map.houses[it.ref.id].door;
-        const blocked = [...players.values(), ...bots.values()].some((c) => !c.dead && Math.abs(c.x - (d.minX + d.maxX) / 2) < 1.4 && Math.abs(c.z - (d.minZ + d.maxZ) / 2) < 0.8);
-        if (blocked) return toast(p, 'Doorway blocked');
+        const blocked = [...players.values(), ...bots.values()].some((c) => !c.dead && boxDist(d, c.x, c.z) < DOOR_CLEAR);
+        if (blocked) return toast(p, 'Someone is standing in the doorway');
       }
       h.doorOpen = !h.doorOpen;
     }
   }
 }
 
+/** How far into a closing door's path someone has to be to stop it (their body actually in the way). */
+const DOOR_CLEAR = 0.22;
 function structInteract(p, st) {
   const def = PIECES[st.type];
   const stage = stageDef(st);
@@ -4795,7 +4799,7 @@ function structInteract(p, st) {
       return send(p.ws, containerView(p, 'crate', st.id));
     }
     if (def.door && stage.material !== 'frame' && !msg_upgradeIntent(p)) {
-      if (st.open && [...players.values(), ...bots.values()].some((c) => !c.dead && boxDist(doorLeaf(st), c.x, c.z) < 0.5)) return toast(p, 'Gateway blocked');
+      if (st.open && [...players.values(), ...bots.values()].some((c) => !c.dead && boxDist(doorLeaf(st), c.x, c.z) < DOOR_CLEAR)) return toast(p, 'Someone is standing in the doorway');
       st.open = !st.open;
       return;
     }
