@@ -1,0 +1,66 @@
+{
+  "_about": "The Annex files: twelve documents that tell what happened the night of the Breach (docs/STORY.md). One unlocks each time a character's total of BANKED intel (uploaded at their stash) reaches the next number in unlockAt. The twelfth holds the way into the Annex. All of it is fiction: no real agency, company or site is meant.",
+  "unlockAt": [1, 3, 6, 10, 14, 19, 25, 31, 38, 45, 52, 60],
+  "docs": [
+    {
+      "title": "Work order, Forestry Station 9",
+      "from": "County road crew foreman, two years before the Breach",
+      "text": "Graded the old forest road south of Bristol again. Third time this year for a station that's supposed to count pine trees. Trucks in and out all night, no plates, no logos. Gate guard said if anybody asks, it's soil testing. Nobody asked. Fella from the fire tower says the lights out there never go off."
+    },
+    {
+      "title": "Site memo: program security",
+      "from": "Halyard Security Group, internal, Annex staff only",
+      "text": "Staff are reminded that the program has no name outside this building. In writing it is LANTERN. On the phone it is nothing. Field units testing camo, sensor nets or stun charges in the national forest will log every civilian contact. Power draw on Level B is not to be discussed with the utility, the county, or anyone else."
+    },
+    {
+      "title": "Deputy's notes, the night of the Breach",
+      "from": "Liberty County deputy, handwritten, found in a patrol car",
+      "text": "11:52 pm. Light over the trees south of town, white, no sound. Radio dead. Car dead. Watch stopped. Walked to the highway. Every porch light in sight went out at once. 12:40 am: Halyard trucks at the creek crossing, running fine somehow, men in masks. Told me go home and stay home. Asked what happened. He said a chemical leak. He wasn't wearing a respirator."
+    },
+    {
+      "title": "Shelter-in-place script",
+      "from": "Halyard Security Group, for checkpoint staff",
+      "text": "Say: A chemical release has occurred at a research facility. For your safety, remain indoors. Roads are closed until the area is cleared. Do not say: power, pulse, Level B, LANTERN. If a resident reports electronics damage, say it was the storm. There was no storm. If they say so, write down their name and address."
+    },
+    {
+      "title": "Clinic logbook, the week after",
+      "from": "Nurse, Hosford clinic",
+      "text": "Forty-one people in four days. Not one chemical burn, not one cough that wasn't already a cough. What I saw: a man whose hearing aid melted, a girl with a burn the shape of a phone on her hip, a pacemaker patient we lost because the ambulance wouldn't start. A chemical leak doesn't stop trucks. Whatever this was, it went through metal."
+    },
+    {
+      "title": "Freight manifest, outbound",
+      "from": "Halyard logistics, eight days after the Breach",
+      "text": "Removed from Annex Level A by air: 214 crates, optical camouflage units, sensor net stock, stun charge stock, field HUD sets. Level B: nothing removed. Level B entry sealed pending cool-down. Note from the loadmaster: 'Pilots won't fly closer than two miles to B. Compasses spin.'"
+    },
+    {
+      "title": "Unsent message",
+      "from": "Halyard engineer, on a dead phone",
+      "text": "Can't tell you where I am. Can tell you what LANTERN is, because nobody here will. It's a power core the size of a truck engine that runs for years. The camo, the nets, all of it runs off cells charged from it. It isn't supposed to put out what it put out that night. They shut the reactor housing and sealed B and it's still running down there. I can feel it in my teeth."
+    },
+    {
+      "title": "Hearing transcript, excerpt",
+      "from": "Committee hearing, Washington, one year after",
+      "text": "Q: Has the material at the Liberty site been recovered? A: Not in full. Q: Then why is the contract being ended? A: The cost, Senator. Q: So the zone stays closed, with whatever is in it, and the people still in it, and no one guarding it but the company you're no longer paying? A: The Line will be held from outside. Q: That isn't what I asked."
+    },
+    {
+      "title": "Radio log, Rogue channel",
+      "from": "Intercepted by a ham operator in Telogia",
+      "text": "'Pay's done, flights are done. You can go home and be a mall cop, or you can stay. B is still hot. Whoever walks LANTERN out of that forest names their price, and there's three governments that'll pay it.' Second voice: 'And the locals?' First: 'Locals are in the way or on the payroll. Pick for them.'"
+    },
+    {
+      "title": "Contact's field report",
+      "from": "The Authority's liaison, Bristol",
+      "text": "The Reopening isn't coming while LANTERN sits under that forest. Nobody official will say it, so I will: whoever brings the core out, or proves it's safe where it lies, opens this county. Until then my office pays for every page of proof, every Halyard terminal you crack, every Rogue camp you clear. Keep bringing me paper."
+    },
+    {
+      "title": "Annex floor plan",
+      "from": "Halyard facilities, recovered from a Rogue courier",
+      "text": "Perimeter: chain-link and concrete barrier, one vehicle gate on the old forest road. Level A, above ground: offices, armory, test bays. Level B, below: the core, behind blast doors. Backup power for the gate and doors runs on its own circuit from the core, not the grid. Note in pen: 'The gate opens itself when that circuit cycles. Don't be standing in it.'"
+    },
+    {
+      "title": "Gate circuit, access notes",
+      "from": "The engineer's notebook, last page",
+      "text": "The backup circuit can't hold a full charge with the core this unstable. Every few days it drops and reboots, and for about twenty minutes every lock on the site releases: gate, armory, the first set of blast doors. The Rogues know. They'll be waiting at the gate. If you're reading this, so do you. Bring friends. Get out before it locks again."
+    }
+  ]
+}

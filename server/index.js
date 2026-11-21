@@ -45,6 +45,7 @@ import GADGET_DATA from '../shared/data/gadgets.json' with { type: 'json' };
 import ACTIVITIES from '../shared/data/activities.json' with { type: 'json' };
 import HOMESTEAD from '../shared/data/homestead.json' with { type: 'json' };
 import ECONOMY from '../shared/data/economy.json' with { type: 'json' };
+import ANNEX from '../shared/data/annex.json' with { type: 'json' };
 import LIVING from '../shared/data/world.json' with { type: 'json' };
 import RIVER_DATA from '../shared/data/river.json' with { type: 'json' };
 import PAWN from '../shared/data/pawn.json' with { type: 'json' };
@@ -587,7 +588,7 @@ function award(p, amount, reason, share = false) {
   dirty(p);
 }
 
-const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', 'secured', 'buildXpWin', 'tut', ...RESOURCES];
+const PERSIST = ['deaths', 'diedAt', 'deathSpot', 'crewDropAt', 'shieldOff', 'selfReviveAt', 'name', 'x', 'z', 'yaw', 'hp', 'armor', 'inv', 'ammo', 'mags', 'active', 'dead', 'kills', 'xp', 'comms', 'field', 'discovered', 'contracts', 'needsDeploy', 'food', 'hotLoose', 'look', 'secured', 'buildXpWin', 'tut', 'annexIntel', ...RESOURCES];
 function persistCharacter(p) { db.characters[p.token] = { ...Object.fromEntries(PERSIST.map((k) => [k, p[k]])), awayLog: db.characters[p.token]?.awayLog || [] }; }
 
 // ---------------------------------------------------------------- networking helpers
@@ -610,6 +611,7 @@ function privateState(p) {
     field: p.field, discovered: p.discovered, atStash: atOwnStash(p),
     unstashed: (() => { const u = unstashed(p); return { ids: u.items.map((i) => i.id), res: u.res }; })(),   // lost if you die before you stash it
     hideouts: hideoutsOf(p).map((st, i) => ({ id: st.id, n: i + 1, x: Math.round(st.x), z: Math.round(st.z) })), hideoutsAllowed: hideoutAllowance(p).allowed, hideoutNext: hideoutAllowance(p).next,
+    annex: { docs: annexDocs(p), banked: p.annexIntel || 0, next: ANNEX.unlockAt[annexDocs(p)] ?? null },
     tut: p.tut ? { step: p.tut.step, done: !!p.tut.done, skipped: !!p.tut.skipped, shots: p.tut.shots || 0, reloaded: !!p.tut.reloaded, target: p.tut.target || null, contact: map.contacts[p.tut.contact]?.name || '', town: map.towns[map.contacts[p.tut.contact]?.townId]?.name || '' } : null,
     reloading: p.reloadUntil > Date.now(), houseId: claimOf(p)?.kind === 'home' ? claimOf(p).id : null, claim: claimSummary(p),
     taserOut: !!p.taserOut, taserReadyAt: p.taserReadyAt || 0, camoOn: !!p.camoOn, camoActive: camoActive(p), camoUntil: p.camoOn ? p.camoUntil || 0 : 0, camoReadyAt: p.camoReadyAt || 0, sensorReadyAt: p.sensorReadyAt || 0, rallyReadyAt: p.rallyReadyAt || 0,
@@ -4318,6 +4320,22 @@ function tutTick(p, now) {
   if (now - (p.tutAimAt || 0) > 3000) { p.tutAimAt = now; tutAim(p); }
 }
 
+// ---------------------------------------------------------------- the Annex files (shared/data/annex.json)
+// Banked intel pieces together what happened the night of the Breach: a document unlocks each time
+// your total banked intel reaches the next mark. The last one is the way into the Annex.
+const annexDocs = (p) => ANNEX.unlockAt.filter((n) => (p.annexIntel || 0) >= n).length;
+const annexKey = (p) => annexDocs(p) >= ANNEX.docs.length;
+function annexProgress(p, n) {
+  const before = annexDocs(p);
+  p.annexIntel = (p.annexIntel || 0) + n;
+  const after = annexDocs(p);
+  for (let i = before; i < after; i++) {
+    send(p.ws, { t: 'annexDoc', n: i + 1, of: ANNEX.docs.length, title: ANNEX.docs[i].title });
+    award(p, 75, `Annex file ${i + 1}: ${ANNEX.docs[i].title}`);
+  }
+  if (after > before && after >= ANNEX.docs.length) feed(`${p.name} has pieced together the way into the Annex`);
+}
+
 function contactView(p, contactId) {
   refreshHauls(Date.now());
   const ct = map.contacts[contactId];
@@ -4884,6 +4902,7 @@ function containerAction(p, msg) {
     award(p, n * XP.intelBanked, `Banked ${n} intel`, true);
     addHomeXp(claimOf(p), n * HOME_XP.intel, `Uploaded ${n} intel`);
     feed(`${p.name} uploaded ${n} intel`);
+    annexProgress(p, n);
   }
   if (kind === 'bag' && !store.items.length && !RESOURCES.some((r) => store[r])) db.bags = db.bags.filter((b) => b !== store);
   dirty(p);

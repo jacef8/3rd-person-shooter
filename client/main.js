@@ -32,6 +32,7 @@ import { EXTRACT } from '/shared/extraction.js';
 import { distText, feet } from '/shared/units.js';
 import HELI from '/shared/data/activities.json' with { type: 'json' };
 import SITES from '/shared/data/sites.json' with { type: 'json' };
+import ANNEX from '/shared/data/annex.json' with { type: 'json' };
 import { SKY, airRates, nextMode, stepAir } from '/shared/skydive.js';
 import { BOATS, BOAT_RULES, RIDE_RULES, stepBoat, seatPos, riderFeet, rideSolids } from '/shared/boats.js';
 import { parseElevation, parseLandcover, biomeName } from '/shared/terrain.js';
@@ -2211,6 +2212,11 @@ function handle(m) {
       syncCharges(m.charges || []);
       break;
     }
+    case 'annexDoc':
+      toast(`📁 Annex file ${m.n} of ${m.of}: ${m.title}. Read it in your bag (Annex files)`);
+      sfx.levelUp?.();
+      if (!$('annexpanel').hidden) openAnnex(m.n - 1);
+      break;
     case 'tutDone': toast('Intro done. The county is yours to work out from here. Good luck in the Zone.'); sfx.levelUp?.(); break;
     case 'you': {
       const wasDead = state.me?.dead;
@@ -4009,6 +4015,7 @@ function doAction(a) {
     case 'squadPanel': if (state.panelOpen) closeSquadPanel(); else openSquadPanel(); return;
     case 'settings': openSettings(); return;
     case 'chat': openChat(); return;
+    case 'annex': if ($('annexpanel').hidden) openAnnex(); else closeAnnex(); return;
     case 'nadeOut': toggleNadeAim(); return;   // phones: the grenade, from the MORE menu
     case 'lookBtn':   // phones: the hold-to-look-around button on the screen, or not
       tset.lookBtn = !tset.lookBtn; saveTset(); document.body.classList.toggle('lookbtn', !!tset.lookBtn);
@@ -4289,6 +4296,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyP') { doAction('squadPanel'); return; }
   if (e.code === 'KeyO') { if (state.panelOpen) closeSquadPanel(); else openSettings(); return; }
   if (e.code === 'KeyM') { doAction('map'); return; }
+  if (e.code === 'KeyJ') { doAction('annex'); return; }
+  if (e.code === 'Escape' && !$('annexpanel').hidden) { closeAnnex(); return; }
   if (e.code === 'Escape' && state.contactOpen) { closeContact(); return; }
   if (e.code === 'Escape' && state.mapOpen && (state.mapMode === 'view' || state.mapMode === 'travel')) { closeMapScreen(); return; }
   if (e.code === 'Escape' && state.panelOpen) { closeSquadPanel(); return; }
@@ -5158,7 +5167,7 @@ function readPad() {
 const deadzone = (v, d = 0.16) => (Math.abs(v) < d ? 0 : Math.sign(v) * (Math.abs(v) - d) / (1 - d));
 
 function topPanel() {
-  for (const id of ['story', 'osk', 'quickchat', 'ridepanel', 'tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
+  for (const id of ['story', 'osk', 'quickchat', 'annexpanel', 'ridepanel', 'tradepanel', 'mapscreen', 'contactpanel', 'gunsmith', 'squadpanel', 'inventory', 'login']) if (!$(id).hidden) return $(id);
   return null;
 }
 function focusables(root) {
@@ -5255,6 +5264,7 @@ function panelJump(panel, step) {
   padFocus(focusables(next)[0]);
 }
 function padBack() {
+  if (!$('annexpanel').hidden) return closeAnnex();
   if (!$('story').hidden) return closeStory();
   if (osk.input) return closeOsk(false);
   if (!$('quickchat').hidden) return closeQuickChat();
@@ -5505,6 +5515,35 @@ new MutationObserver(() => {
 
 $('openSquadBtn').onclick = () => { closeInventory(); openSquadPanel(); };
 $('openMapBtn').onclick = () => { closeInventory(); openMapScreen('view'); };
+$('openAnnexBtn').onclick = () => { closeInventory(); openAnnex(); };
+
+// ------------------------------------------------------------------ the Annex files (shared/data/annex.json)
+// What happened the night of the Breach, a document at a time: one unlocks each time your total of
+// banked intel reaches the next mark (the server counts it). The last one is the way into the Annex.
+let annexPick = 0;
+function openAnnex(pick = null) {
+  const have = state.me?.annex?.docs || 0;
+  annexPick = pick ?? Math.max(0, have - 1);
+  renderAnnex();
+  $('annexpanel').hidden = false;
+}
+function closeAnnex() { $('annexpanel').hidden = true; }
+function renderAnnex() {
+  const a = state.me?.annex || { docs: 0, banked: 0, next: ANNEX.unlockAt[0] }, total = ANNEX.docs.length;
+  $('annexSub').textContent = a.docs >= total ? `All ${total} pieced together. You know the way into the Annex.`
+    : `${a.docs} of ${total} pieced together. Bank intel at your stash house: the next one comes at ${a.next} banked (you've banked ${a.banked}). Rogues, Halyard terminals and hot-zone lockboxes carry intel.`;
+  const list = $('annexList'); list.innerHTML = '';
+  ANNEX.docs.forEach((d, i) => {
+    const open = i < a.docs;
+    const b = btn(open ? `${i + 1}. ${d.title}` : `${i + 1}. Locked: ${ANNEX.unlockAt[i]} intel banked`, () => { annexPick = i; renderAnnex(); padFocus(b); }, `annexrow${i === annexPick ? ' on' : ''}`);
+    b.dataset.pad = `annex${i}`; b.disabled = !open;
+    list.append(b);
+  });
+  const d = ANNEX.docs[annexPick], el = $('annexDoc');
+  if (annexPick < a.docs && d) el.innerHTML = `<div class="from">${esc(d.from)}</div><h3>${esc(d.title)}</h3><p>${esc(d.text)}</p>`;
+  else el.innerHTML = '<p class="empty">Nothing pieced together yet. Bring intel home and bank it at your stash house.</p>';
+}
+$('annexClose').onclick = closeAnnex;
 // Testing: a ride of any kind, put right beside you (while the server allows it). Its own little
 // window; a pick answers on the release of the tap (and a click), once, and says so at once.
 function openRidePicker() {
@@ -6566,7 +6605,7 @@ const TOUCH_TOP = [['BAG', 'inventory'], ['MORE ▾', 'touchMore']];   // the ma
 // away); MIC turns your microphone on for crew chat, or off.
 // (The grenade and the look-around button live here too, off the screen; the look button can be put
 // back on the screen from here.)
-const TOUCH_MORE = [['💣 GRENADE', 'nadeOut'], ['⇄ GRENADE TYPE', 'switchGrenade'], ['👁 LOOK BUTTON', 'lookBtn'], ['⚙ SETTINGS', 'settings'], ['💬 CHAT', 'chat'], ['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
+const TOUCH_MORE = [['📁 ANNEX FILES', 'annex'], ['💣 GRENADE', 'nadeOut'], ['⇄ GRENADE TYPE', 'switchGrenade'], ['👁 LOOK BUTTON', 'lookBtn'], ['⚙ SETTINGS', 'settings'], ['💬 CHAT', 'chat'], ['TAG', 'tag'], ['STUN GUN', 'stungun'], ['🎙 MIC', 'micToggle'], ['CREW', 'squadPanel'], ['CAMO', 'camo'], ['PING', 'ping'], ['BUILD', 'build'], ['🚗 TEST RIDE', 'testRide']];
 function buildTouchUI() {
   const ui = $('touch');
   ui.innerHTML = '<div id="tstick"><div id="tknob"></div></div><div id="tlock">🔒 RUN</div>' +

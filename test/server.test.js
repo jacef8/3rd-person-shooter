@@ -268,7 +268,10 @@ test('squads, tagging, sensors, camo, terminal hacking, intel banking', async (t
   await grace.got((m) => m.t === 'container' && m.bank);
   grace.send({ t: 'container', action: 'bank' });
   await grace.got((m) => m.t === 'xp' && /Banked 5 intel/.test(m.reason));
-  await until(() => grace.you.intel === 0 && grace.you.xp === 5 * 40);
+  await until(() => grace.you.intel === 0 && grace.you.xp >= 5 * 40);
+  // Banked intel pieces the Annex files together: 5 banked opens the first two (at 1 and 3).
+  await grace.got((m) => m.t === 'annexDoc' && m.n === 2 && m.of === 12);
+  await until(() => grace.you.annex?.docs === 2 && grace.you.annex.banked === 5 && grace.you.annex.next === 6);
 
   // Leaderboard lists everyone, best first.
   grace.send({ t: 'leaderboard' });

@@ -1129,3 +1129,19 @@ body.touchui .ttop .tbtn.tiny[data-act=touchMore] { min-width: 74px; font-weight
 body.lowhp #hud::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 2; background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 50%, rgba(60, 0, 0, 0.55) 100%); animation: lowpulse 1.4s ease-in-out infinite; }
 @keyframes lowpulse { 50% { opacity: 0.6; } }
 @media (prefers-reduced-motion: reduce) { body.lowhp #hud::before { animation: none; } }
+
+/* ==== The Annex files: a list of the twelve documents, and the one you're reading. ==== */
+#annexpanel { top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(920px, 95vw); max-height: 92vh; overflow: auto; z-index: 46; padding: 18px 20px; }
+#annexpanel h2 { margin: 0 0 4px; }
+#annexpanel .sub { margin: 0 0 12px; color: var(--ink-2); font-size: 15px; }
+.annexcols { display: grid; grid-template-columns: minmax(220px, 0.9fr) 1.4fr; gap: 14px; margin-bottom: 12px; }
+#annexList { display: flex; flex-direction: column; gap: 6px; }
+#annexList button { text-align: left; min-height: 44px; padding: 8px 12px; font-size: 14px; font-weight: 600; background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+#annexList button.on { border-color: var(--accent); background: var(--surface-3); }
+#annexList button:disabled { color: var(--ink-3); opacity: 1; }
+#annexDoc { padding: 16px 18px; background: #e9e4d6; color: #1c1a16; border-radius: 10px; font-family: 'IBM Plex Mono', 'Courier New', monospace; min-height: 200px; }
+#annexDoc .from { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #5a5448; }
+#annexDoc h3 { margin: 6px 0 10px; font: 700 19px/1.25 'IBM Plex Mono', 'Courier New', monospace; }
+#annexDoc p { margin: 0; font-size: 15px; line-height: 1.6; }
+#annexDoc .empty { color: #5a5448; }
+@media (max-width: 700px), (max-height: 420px) { .annexcols { grid-template-columns: 1fr; } }
