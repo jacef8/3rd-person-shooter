@@ -1084,3 +1084,29 @@ body.touchui #tut h3 { font-size: 15px; }
 #story .strow .ghost { order: -1; }   /* Skip shows first, but Next is first in line: a controller starts on Next */
 #story .strow button { min-height: 48px; min-width: 110px; font-size: 16px; }
 @media (prefers-reduced-motion: reduce) { #tut .tutbar i { transition: none; } }
+
+/* ==== Phones: less on the screen, so you can see to play. ==== */
+#tut .tutn { display: none; }
+#tut.brief { padding: 6px 12px; }
+#tut.brief .tutbar, #tut.brief p, #tut.brief .tutfoot, #tut.brief .tuthead span:not(.tutn) { display: none; }
+#tut.brief .tuthead { display: inline; }
+#tut.brief .tutn { display: inline; color: var(--accent); }
+#tut.brief h3 { display: inline; margin: 0 0 0 8px; font-size: 15px; }
+body.touchui #tut { top: calc(6px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: max-content; max-width: min(420px, 50vw); }
+body.touchui #tut.brief { border-radius: 999px; }
+body.touchui #tut.brief h3 { font-size: 13px; }
+/* The place and time: only for a few seconds when you get somewhere new. */
+body.touchui #where { top: calc(46px + env(safe-area-inset-top)); opacity: 0; pointer-events: none; transition: opacity 400ms ease-out; }
+body.touchui #where.flash { opacity: 1; }
+body.touchui #prompt { max-width: 50vw; overflow: hidden; text-overflow: ellipsis; }
+/* A phone on its side with the browser's bars showing (~280 px tall): a smaller minimap, and the
+   grenade beside the jump button instead of up over the minimap. */
+@media (max-height: 380px) {
+  body.touchui #minimap { width: 84px; height: 84px; }
+  body.touchui .tbtn.r4 { right: calc(72px + env(safe-area-inset-right)); bottom: 100px; }
+  body.touchui .tbtn.jump { bottom: 140px; }
+  body.touchui .tbtn.look { right: calc(100px + env(safe-area-inset-right)); top: 8px; }
+  body.touchui #weapon { transform: translateX(-50%) scale(0.78); transform-origin: bottom center; }   /* the gun bar a size smaller */
+  body.touchui #toasts { max-width: 46vw; }
+}
+@media (prefers-reduced-motion: reduce) { body.touchui #where { transition: none; } }

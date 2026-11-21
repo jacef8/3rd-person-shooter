@@ -2001,8 +2001,11 @@ function updateWhere(now) {
   // itself if you're in one, else what kind of country this is.
   let town = !t ? '' : inTown ? t.name : `${distText(d)} from ${t.name}`;
   if (!place) { place = inTown ? t.name : AREA[biomeName(map.terrain.biome(x, z))] || 'Open country'; if (inTown) town = `${t.county} County`; }
-  if (place !== where.place) { where.place = place; $('wherePlace').textContent = place; }
-  if (town !== where.town) { where.town = town; $('whereTown').textContent = town; }
+  let changed = false;
+  if (place !== where.place) { where.place = place; $('wherePlace').textContent = place; changed = true; }
+  if (town !== where.town) { where.town = town; $('whereTown').textContent = town; changed = true; }
+  // (On a phone the box only shows for a few seconds when you get somewhere new.)
+  if (changed) { $('where').classList.add('flash'); clearTimeout(where.flashT); where.flashT = setTimeout(() => $('where').classList.remove('flash'), 4000); }
 }
 
 // ------------------------------------------------------------------ networking
@@ -2478,15 +2481,21 @@ function tutText(t) {
 }
 function renderTut() {
   const t = state.me?.tut;
-  const show = !!t && !t.done && !state.me?.dead && !!state.map;
+  const show = !!t && !t.done && !state.me?.dead && !state.me?.downed && !!state.map;
   tutEl.hidden = !show;
   if (!show) { tutEl.dataset.sig = ''; return; }
   const txt = tutText(t);
   if (!txt) { tutEl.hidden = true; return; }
   const sig = `${t.step}|${t.shots}|${t.reloaded}|${state.inputMode}|${state.touchUI}`;
   if (tutEl.dataset.sig === sig) return;
+  // A step starting or moving on shows the whole card; after a few seconds it shrinks to its title
+  // (7 s on a phone, where the screen is small; 15 s elsewhere), so it doesn't sit over the game.
+  if (tutEl.dataset.sig.split('|').slice(0, 3).join('|') !== sig.split('|').slice(0, 3).join('|')) {
+    tutEl.classList.remove('brief'); clearTimeout(tutEl._t);
+    tutEl._t = setTimeout(() => tutEl.classList.add('brief'), state.touchUI ? 7000 : 15000);
+  }
   tutEl.dataset.sig = sig;
-  tutEl.innerHTML = `<div class="tuthead"><span>Welcome to the Zone</span><span>Step ${t.step + 1} of ${TUT_TOTAL}</span></div><div class="tutbar"><i style="width:${Math.round((t.step / TUT_TOTAL) * 100)}%"></i></div><h3>${txt[0]}</h3><p>${txt[1]}</p><div class="tutfoot">Skip or replay it in Settings</div>`;
+  tutEl.innerHTML = `<div class="tuthead"><span>Welcome to the Zone</span><span>Step ${t.step + 1} of ${TUT_TOTAL}</span><span class="tutn">${t.step + 1}/${TUT_TOTAL}</span></div><div class="tutbar"><i style="width:${Math.round((t.step / TUT_TOTAL) * 100)}%"></i></div><h3>${txt[0]}</h3><p>${txt[1]}</p><div class="tutfoot">Skip or replay it in Settings</div>`;
 }
 // Settings: start the intro again, or skip it; and the story.
 function renderIntroSettings(box) {
@@ -6425,7 +6434,7 @@ function frame(now) {
   state.promptText = prompt;
   // On a phone the prompt names the button to tap (the same word and hand as the USE button, lit up).
   const pkey = state.touchUI && state.inputMode !== 'pad' ? `<kbd class="tk">${ticon('use')}${useVerb(prompt)}</kbd>` : `<kbd>${glyph('E')}</kbd>`;
-  { const html = state.air && alive ? airHud() : prompt && !(alive && me?.boat) ? `${pkey}${prompt}` : ''; if (html !== state.promptHtml) { state.promptHtml = html; $('prompt').innerHTML = html; } }
+  { const html = state.air && alive ? airHud() : prompt && !(alive && me?.boat) ? `${pkey}${state.touchUI && state.inputMode !== 'pad' ? prompt.split(/: | — /)[0] : prompt}` : ''; if (html !== state.promptHtml) { state.promptHtml = html; $('prompt').innerHTML = html; } }   // (a phone: just the prompt's first part, on one line)
   updateRideHud(now, alive);
   if (now - (state.miniAt || 0) > 100) { state.miniAt = now; const t0 = performance.now(); drawMinimap(); PT.add('minimap', t0); }   // ten times a second is plenty
   drawVoiceBar();
