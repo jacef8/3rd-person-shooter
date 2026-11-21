@@ -3335,7 +3335,7 @@ function startHack(p, kind, id, extra = {}) {
     if (!st || raidMul(baseOf(st), p) <= 0) return;
     if (kind === 'gatehack') { const bp = bypassOf('gate', id); extra = { ...extra, ms: bp.ms, tech: bp.tech }; }
   }
-  if (kind === 'rebuild' || kind === 'selfrevive' || kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire' || kind === 'hotcrate' || kind === 'breakbox' || kind === 'disarm') {
+  if (kind === 'rebuild' || kind === 'selfrevive' || kind === 'harvest' || kind === 'upgrade' || kind === 'raid' || kind === 'gatehack' || kind === 'claim' || kind === 'revive' || kind === 'claimBuilding' || kind === 'datahack' || kind === 'cook' || kind === 'fish' || kind === 'hotwire' || kind === 'hotcrate' || kind === 'annexcrate' || kind === 'breakbox' || kind === 'disarm') {
     const ms = extra.ms ? extra.ms : kind === 'rebuild' ? RAIDS.ruin.rebuildMs : kind === 'selfrevive' ? DOWNED.selfReviveMs : kind === 'hotwire' ? RV.rules.hotwireMs : kind === 'cook' ? HOMESTEAD.cooking.ms : kind === 'fish' ? HOMESTEAD.fishing.ms : kind === 'datahack' ? DATAHACK.ms : kind === 'revive' ? DOWNED.reviveMs : kind === 'claim' || kind === 'claimBuilding' ? CLAIM.plantMs : kind === 'harvest' ? BUILD.harvest.channelMs : kind === 'upgrade' ? BUILD.upgradeMs : BUILD.raid[extra.tool].ms;
     p.hack = { kind, id, start: now, until: now + ms, total: ms, x: p.x, z: p.z, ...extra };
     send(p.ws, { t: 'hack', kind, until: p.hack.until, total: ms });
@@ -3447,6 +3447,7 @@ function tickHacks(now) {
     if (h.kind === 'fish') { finishFishing(p); continue; }
     if (h.kind === 'hotwire') { finishHotwire(p, h.id); continue; }
     if (h.kind === 'hotcrate') { finishHotCrate(p, h.id); continue; }
+    if (h.kind === 'annexcrate') { finishAnnexCrate(p, h.id); continue; }
     if (h.kind === 'breakbox') { finishBreakBox(p, h.id); continue; }
     if (h.kind === 'disarm') {
       const st = structs.get(h.id);
@@ -4334,6 +4335,229 @@ function annexProgress(p, n) {
     award(p, 75, `Annex file ${i + 1}: ${ANNEX.docs[i].title}`);
   }
   if (after > before && after >= ANNEX.docs.length) feed(`${p.name} has pieced together the way into the Annex`);
+  if (after > before && after >= ANNEX.docs.length) for (const tok of teamTokensOf(p.token)) { const o = onlineByToken(tok); if (o) send(o.ws, annexView(o)); }   // the crates open for the whole crew now
+}
+
+// ---------------------------------------------------------------- the Annex compound (shared/data/annex.json)
+// Halyard's walled yard deep in the forest south of Bristol: stone walls and a vehicle gate, with Level A
+// (a stone block behind a blast door) at the back. Built from the game's own wall and gate pieces so it
+// draws and blocks like any building, but it's placed here each start, never saved, and nothing breaks
+// it. On the clock (Eastern time) the gate circuit cycles: a warning, then every lock releases for a
+// while and elite guards hold the site. Its crates open only for a crew holding the access codes (all
+// twelve files); what comes out is hot until it's home.
+const AXS = ANNEX.site, AXO = ANNEX.openings, HOUR_MS = 3_600_000;
+const AX_OPEN_MS = Number(process.env.ANNEX_OPEN_MS || AXO.openMs), AX_WARN_MS = Number(process.env.ANNEX_WARN_MS ?? AXO.warnMs);
+const AX_CRATE_MS = Number(process.env.ANNEX_CRATE_MS || ANNEX.crateMs), AX_GUARDS = Number(process.env.ANNEX_GUARDS ?? ANNEX.guards);
+// Tests run it on their own clock: the first opening a few seconds after start, then every so often.
+const AX_TEST = process.env.ANNEX_FIRST_MS ? { first: Date.now() + Number(process.env.ANNEX_FIRST_MS), every: Number(process.env.ANNEX_EVERY_MS || 3 * HOUR_MS) } : null;
+const axHourFmt = new Intl.DateTimeFormat('en-US', { timeZone: AXO.timeZone, hour: 'numeric', hourCycle: 'h23' });
+const axTimeFmt = new Intl.DateTimeFormat('en-US', { timeZone: AXO.timeZone, hour: 'numeric', minute: '2-digit' });
+/** When the gate next opens (or the opening it's in now). */
+function nextAnnexOpen(now) {
+  if (AX_TEST) { let t = AX_TEST.first; while (t + AX_OPEN_MS <= now) t += AX_TEST.every; return t; }
+  for (let t = Math.floor(now / HOUR_MS) * HOUR_MS - HOUR_MS; t < now + 30 * HOUR_MS; t += HOUR_MS) {
+    if ((Number(axHourFmt.format(t)) - AXO.atHour + 48) % AXO.everyHours === 0 && t + AX_OPEN_MS > now) return t;
+  }
+  return now + AXO.everyHours * HOUR_MS;
+}
+const annexClock = (t) => axTimeFmt.format(t).toLowerCase().replace(' ', ' ');
+/** Dry, level forest ground south of Bristol, well clear of roads, buildings and traders: the same spot every start. */
+function findAnnexSite() {
+  const town = map.towns.find((t) => t.name === AXS.from) || map.towns[0];
+  if (!town) return null;
+  const tx = (town.rect.minX + town.rect.maxX) / 2, tz = (town.rect.minZ + town.rect.maxZ) / 2;
+  const gx = tx + AXS.goal[0], gz = tz + AXS.goal[1], H = AXS.yard / 2 + 4;
+  const cands = [];
+  for (let dx = -AXS.searchM; dx <= AXS.searchM; dx += AXS.stepM) for (let dz = -AXS.searchM; dz <= AXS.searchM; dz += AXS.stepM) {
+    const x = gx + dx, z = gz + dz;
+    if (Math.abs(x) < map.half - 1200 && Math.abs(z) < map.half - 1200) cands.push({ x, z, d: Math.hypot(dx, dz) });
+  }
+  cands.sort((a, b) => a.d - b.d);
+  for (const c of cands) {
+    let lo = Infinity, hi = -Infinity, ok = true;
+    for (let i = -2; i <= 2 && ok; i++) for (let j = -2; j <= 2; j++) {
+      const x = c.x + i * H / 2, z = c.z + j * H / 2, h = terrain.height(x, z);
+      if (h < 2 || terrain.channel?.(x, z)) { ok = false; break; }
+      lo = Math.min(lo, h); hi = Math.max(hi, h);
+    }
+    if (!ok || hi - lo > AXS.maxRise) continue;
+    if (map.roadsNear(c.x, c.z, AXS.clearRoadM).length) continue;
+    if (map.towns.some((t) => c.x > t.rect.minX - 600 && c.x < t.rect.maxX + 600 && c.z > t.rect.minZ - 600 && c.z < t.rect.maxZ + 600)) continue;
+    if (map.contacts.some((q) => Math.hypot(q.x - c.x, q.z - c.z) < AXS.awayFromTradersM) || traderNear(c.x, c.z)) continue;
+    if (map.buildings.some((b) => boxDist(b, c.x, c.z) < AXS.clearBuildingM)) continue;
+    // The gate faces the nearest road: the old forest road runs up to it.
+    let best = null;
+    for (let r = 400; r <= 3200 && !best; r *= 2) for (const rd of map.roadsNear(c.x, c.z, r)) {
+      const vx = rd.x2 - rd.x1, vz = rd.z2 - rd.z1, L = vx * vx + vz * vz || 1, f = Math.max(0, Math.min(1, ((c.x - rd.x1) * vx + (c.z - rd.z1) * vz) / L));
+      const px = rd.x1 + vx * f, pz = rd.z1 + vz * f, d = Math.hypot(px - c.x, pz - c.z);
+      if (!best || d < best.d) best = { d, x: px, z: pz };
+    }
+    const ax = best ? best.x - c.x : 0, az = best ? best.z - c.z : 1;
+    const f = Math.abs(ax) > Math.abs(az) ? [Math.sign(ax), 0] : [0, Math.sign(az) || 1];
+    return { x: Math.round(c.x), z: Math.round(c.z), fx: f[0], fz: f[1], ground: lo, fromTown: town.name, miles: Math.hypot(c.x - tx, c.z - tz) / 1609.344 };
+  }
+  return null;
+}
+const annex = { site: process.env.ANNEX === '0' ? null : findAnnexSite(), pieces: [], gate: null, door: null, open: false, warned: false, opensAt: 0, closesAt: 0, crates: [], guards: [], opened: new Map(), reinforceAt: 0 };
+const AXH = AXS.yard / 2;
+/** Compound space to the world: u runs along the gate wall, v out through the gate. */
+function axWorld(u, v) { const s = annex.site; return { x: s.x + u * -s.fz + v * s.fx, z: s.z + u * s.fx + v * s.fz }; }
+function axLocal(x, z) { const s = annex.site, dx = x - s.x, dz = z - s.z; return { u: dx * -s.fz + dz * s.fx, v: dx * s.fx + dz * s.fz }; }
+const inAnnexYard = (x, z) => { if (!annex.site) return false; const q = axLocal(x, z); return Math.abs(q.u) < AXH && Math.abs(q.v) < AXH; };
+const inLevelA = (x, z) => { if (!annex.site) return false; const q = axLocal(x, z); return Math.abs(q.u) < 10 && q.v > -AXH + 4 && q.v < -AXH + 16; };
+const nearAnnex = (x, z) => !!annex.site && Math.hypot(x - annex.site.x, z - annex.site.z) < AXS.noBuildM;
+function buildAnnex() {
+  const s = annex.site;
+  if (!s) return;
+  // Clear the trees and rocks off the footprint (they don't grow back here).
+  for (const b of map.grid.near(s.x, s.z, AXH + 6)) {
+    if (!b.nature || b.gone || !['tree', 'pine', 'rock', 'boulder'].includes(b.type)) continue;
+    const q = axLocal((b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2);
+    if (Math.abs(q.u) < AXH + 3 && Math.abs(q.v) < AXH + 3) { b.gone = 1; map.felled.add(b.id); }
+  }
+  const alongU = s.fz !== 0 ? 0 : 1;   // rot for a piece lying along u
+  const piece = (type, stage, u, v, along, y0) => {
+    const w = axWorld(u, v), def = PIECES[type];
+    const st = { id: `ax${annex.pieces.length}`, type, x: w.x, z: w.z, rot: along === 'u' ? alongU : 1 - alongU, stage, hp: def.stages[stage].hp, owner: 'annex', ownerName: 'Halyard', open: false, annex: 1, builtAt: 0 };
+    if (y0 == null) {   // a wall on its own footing: sunk to the lowest ground under it
+      const e = along === 'u' ? [axWorld(u - 2, v), axWorld(u + 2, v)] : [axWorld(u, v - 2), axWorld(u, v + 2)];
+      y0 = Math.min(terrain.height(w.x, w.z), ...e.map((p) => terrain.height(p.x, p.z))) - 0.15;
+    }
+    st.y0 = +y0.toFixed(2);
+    indexStruct(st, true);
+    annex.pieces.push(st);
+    return st;
+  };
+  const wallTop = PIECES.wall.stages.length - 1, gateTop = PIECES.gate.stages.length - 1;
+  // The perimeter: 13 stone wall sections a side, the gate in the middle of the side facing the road.
+  for (let i = 0; i < 13; i++) {
+    const c = -AXH + 2 + i * 4;
+    if (i === 6) annex.gate = piece('gate', gateTop, c, AXH, 'u'); else piece('wall', wallTop, c, AXH, 'u');
+    piece('wall', wallTop, c, -AXH, 'u');
+    piece('wall', wallTop, AXH, c, 'v');
+    piece('wall', wallTop, -AXH, c, 'v');
+  }
+  // Level A at the back: 20 m by 12 m of stone on one footing, a blast door facing the gate.
+  let lo = Infinity;
+  for (let u = -10; u <= 10; u += 2) for (let v = -AXH + 4; v <= -AXH + 16; v += 2) { const w = axWorld(u, v); lo = Math.min(lo, terrain.height(w.x, w.z)); }
+  const base = lo - 0.15, back = -AXH + 4, front = -AXH + 16;
+  // Two storeys of wall (so it stands well above the yard wall), the roof on top.
+  const storey = PIECES.wall.size[2];
+  for (const u of [-8, -4, 0, 4, 8]) {
+    for (const k of [0, 1]) {
+      piece('wall', wallTop, u, back, 'u', base + k * storey);
+      if (u === 0 && k === 0) annex.door = piece('gate', gateTop, u, front, 'u', base); else piece('wall', wallTop, u, front, 'u', base + k * storey);
+    }
+    for (const v of [back + 2, back + 6, back + 10]) piece('floor', PIECES.floor.stages.length - 1, u, v, 'u', base + 2 * storey);
+  }
+  for (const u of [-10, 10]) for (const v of [back + 2, back + 6, back + 10]) for (const k of [0, 1]) piece('wall', wallTop, u, v, 'v', base + k * storey);
+  annex.base = base;
+  annex.opensAt = nextAnnexOpen(Date.now());
+  console.log(`The Annex: ${annex.pieces.length} pieces at (${s.x}, ${s.z}), ${s.miles.toFixed(1)} mi from ${s.fromTown}, gate facing ${s.fx ? (s.fx > 0 ? 'east' : 'west') : s.fz > 0 ? 'south' : 'north'}; next opening ${new Date(annex.opensAt).toISOString()}`);
+}
+buildAnnex();
+/** Does your crew hold the access codes? You, or anyone on your crew, with all twelve files. */
+const crewHasKey = (p) => annexKey(p) || teamTokensOf(p.token).some((t) => { const o = onlineByToken(t); return annexKey(o || db.characters[t] || {}); });
+function annexView(p) {
+  const s = annex.site;
+  if (!s) return { t: 'annex', site: null };
+  const g = axWorld(0, AXH + 1);
+  return { t: 'annex', site: { x: s.x, z: s.z, fx: s.fx, fz: s.fz, h: AXH, gx: Math.round(g.x), gz: Math.round(g.z) }, open: annex.open, opensAt: annex.opensAt, closesAt: annex.closesAt, warnMs: AX_WARN_MS,
+    at: annexClock(annex.opensAt), key: p ? crewHasKey(p) : false, mine: p ? annex.opened.get(p.token) || 0 : 0, perPlayer: ANNEX.cratesPerPlayer, crateMs: AX_CRATE_MS,
+    crates: annex.crates.map((c) => ({ id: c.id, x: +c.x.toFixed(1), z: +c.z.toFixed(1), opened: c.opened ? 1 : 0 })) };
+}
+const sendAnnex = () => { for (const o of players.values()) send(o.ws, annexView(o)); };
+function annexGuard(u, v) {
+  const w = axWorld(u + (Math.random() - 0.5) * 3, v + (Math.random() - 0.5) * 3);
+  annex.guards.push(spawnBot(w.x, w.z, 'guard', { annex: 1 }).id);
+}
+const AX_GUARD_POSTS = [[-6, AXH - 6], [6, AXH - 6], [-18, 6], [18, 6], [0, 2], [-16, -6], [16, -6], [-5, -AXH + 9], [5, -AXH + 9], [0, -AXH + 7]];
+function openAnnex(now) {
+  annex.open = true;
+  annex.closesAt = annex.opensAt + AX_OPEN_MS;
+  annex.gate.open = annex.door.open = true;
+  annex.opened = new Map();
+  // The armory crates: four in Level A, two in the yard.
+  annex.crates = [[-7, -AXH + 6], [7, -AXH + 6], [-7, -AXH + 13], [7, -AXH + 13], [-18, AXH - 8], [18, AXH - 8]].map(([u, v], i) => { const w = axWorld(u, v); return { id: `axc${i}`, x: w.x, z: w.z, opened: null }; });
+  for (let i = 0; i < AX_GUARDS; i++) annexGuard(...AX_GUARD_POSTS[i % AX_GUARD_POSTS.length]);
+  annex.reinforceAt = now + ANNEX.reinforceMs;
+  const mins = Math.round((annex.closesAt - now) / 60000);
+  for (const o of players.values()) toast(o, `⚡ The Annex gate circuit has dropped: every lock on the site is open for ${mins} min. Elite Halyard guards hold it. ${crewHasKey(o) ? 'Your crew has the access codes: the crates will open for you.' : 'Only a crew with the access codes (all 12 Annex files) can open its crates.'}`);
+  feed('⚡ The Annex is open');
+  sendAnnex();
+}
+function closeAnnex(now) {
+  annex.open = false; annex.warned = false;
+  annex.gate.open = annex.door.open = false;
+  for (const id of annex.guards) bots.delete(id);
+  annex.guards = []; annex.crates = [];
+  annex.opensAt = nextAnnexOpen(now);
+  feed(`🔒 The Annex has locked again. Next opening ${annexClock(annex.opensAt)} (Eastern)`);
+  sendAnnex();
+}
+function tickAnnex(now) {
+  if (!annex.site) return;
+  if (!annex.open) {
+    if (!annex.warned && now >= annex.opensAt - AX_WARN_MS) {
+      annex.warned = true;
+      const mins = Math.max(1, Math.round((annex.opensAt - now) / 60000));
+      for (const o of players.values()) toast(o, `⚡ The Annex gate circuit is failing: its locks release in ${mins} min (${annexClock(annex.opensAt)}), for ${Math.round(AX_OPEN_MS / 60000)} min. It's in the forest ${annex.site.miles.toFixed(1)} mi from ${annex.site.fromTown}: it's on your map.`);
+      feed(`⚡ The Annex opens in ${mins} min`);
+      sendAnnex();
+    }
+    if (now >= annex.opensAt) openAnnex(now);
+  } else if (now >= annex.closesAt) closeAnnex(now);
+  else if (now >= annex.reinforceAt) {   // reinforcements: back up to full strength every few minutes
+    annex.guards = annex.guards.filter((id) => bots.has(id) && !bots.get(id).dead);
+    for (let i = annex.guards.length; i < AX_GUARDS; i++) annexGuard(...AX_GUARD_POSTS[i % AX_GUARD_POSTS.length]);
+    annex.reinforceAt = now + ANNEX.reinforceMs;
+  }
+}
+/** A gun from the Annex armory: the best part that fits in every slot. */
+function annexWeapon() {
+  const arche = pick(['carbine', 'dmr', 'lmg', 'smg', 'shotgun']);
+  const w = makeWeapon(arche, {}, 'factory', 'random');
+  w.parts = { ...(w.parts || {}) };
+  for (const slot of SLOTS) {
+    const best = Object.entries(PARTS).filter(([id, pt]) => pt.slot === slot && partFits(id, arche)).sort((a, b) => b[1].level - a[1].level)[0];
+    if (best) w.parts[slot] = best[0];
+  }
+  w.name = `${w.name} (Annex armory)`;
+  return w;
+}
+function finishAnnexCrate(p, id) {
+  const c = annex.crates.find((q) => q.id === id);
+  if (!annex.open || !c) return send(p.ws, { t: 'hack', done: true, text: 'The Annex has locked' });
+  if (c.opened) return send(p.ws, { t: 'hack', done: true, text: `${c.opened} got to that crate first` });
+  if (!crewHasKey(p)) return send(p.ws, { t: 'hack', done: true, text: 'The keypad wants the access codes' });
+  const C = ANNEX.crate;
+  const got = [annexWeapon(), makeArmor('heavy'), { id: uid('lb'), kind: 'lockbox', name: 'Annex strongbox', contents: { cash: rnd(C.cash), tech: rnd(C.tech), intel: rnd(C.intel), parts: rnd(C.parts) } }];
+  if (p.inv.pack.length + got.length > packSize(p)) return send(p.ws, { t: 'hack', done: true, text: `Make room: the crate holds ${got.length} things` });
+  c.opened = p.name;
+  annex.opened.set(p.token, (annex.opened.get(p.token) || 0) + 1);
+  for (const it of got) { it.hot = 'annex'; it.hotTier = 'crate'; p.inv.pack.push(it); }
+  send(p.ws, { t: 'hack', done: true, text: `⚡ Annex crate open: ${got.map((i) => i.name).join(', ')}. It's hot: everyone sees you on the map until you get it home.` });
+  award(p, 150, 'Annex crate');
+  feed(`⚡ ${p.name} cracked an Annex crate`);
+  pingHot(p, true);
+  dirty(p);
+  sendAnnex();
+}
+/** Halyard's walls and doors: nothing breaks them. Shut, they open only when the circuit cycles, though anyone caught inside can let themselves out. */
+function annexStructInteract(p, st) {
+  if (!PIECES[st.type].door) return toast(p, 'Halyard\'s wall: poured stone over steel. Nothing you carry will dent it.');
+  if (st.open) return toast(p, 'The locks are released: it\'s open');
+  const out = (u, v, text) => {
+    cancelHack(p, '');
+    const w = axWorld(u, v);
+    p.x = w.x; p.z = w.z; p.tp = (p.tp || 0) + 1;
+    send(p.ws, { t: 'correct', x: p.x, z: p.z, force: true, tp: p.tp });
+    toast(p, text);
+  };
+  if (st === annex.door && inLevelA(p.x, p.z)) return out(0, -AXH + 18, 'You hit the emergency bar and shoulder out into the yard. The blast door seals behind you.');
+  if (st === annex.gate && inAnnexYard(p.x, p.z) && !inLevelA(p.x, p.z)) return out(0, AXH + 3, 'You find the gate\'s emergency release and slip out. It locks behind you.');
+  const left = annex.opensAt - Date.now(), h = Math.floor(left / HOUR_MS), m = Math.max(1, Math.round((left % HOUR_MS) / 60000));
+  return toast(p, `${st === annex.gate ? 'The Annex gate' : 'Level A\'s blast door'} is sealed. Its locks release when the gate circuit cycles: next at ${annexClock(annex.opensAt)} Eastern (in ${h ? `${h} h ` : ''}${m} min).`);
 }
 
 function contactView(p, contactId) {
@@ -4413,6 +4637,7 @@ function handleBuild(p, msg) {
     return;
   }
   if (!hasTool(p, 'hammer')) return toast(p, 'You need a hammer to build');
+  if (nearAnnex(x, z)) return toast(p, `Halyard ground: nobody builds within ${Math.round(AXS.noBuildM * 3.28084)} ft of the Annex`);
   const myClaim = claimOf(p);
   if ((def.claim || def.hideout) && tooNearTrader(p, x, z, def.claim ? 'plant a claim' : 'set up a hideout')) return;
   if (def.claim) {
@@ -4482,7 +4707,7 @@ function markRaid(ownerToken, by, x, z) {
   for (const tok of teamTokensOf(ownerToken)) { const o = onlineByToken(tok); if (o) o.defending = { t: now, x, z }; }
 }
 function damageStruct(st, dmg, by) {
-  if (!structs.has(st.id) || st.ruined || st.broken) return;
+  if (!structs.has(st.id) || st.ruined || st.broken || st.annex) return;
   dmg *= raidMul(baseOf(st), by);
   if (dmg <= 0) return;
   markRaid(st.owner, by, st.x, st.z);
@@ -4636,6 +4861,7 @@ function nearestInteractable(p) {
   for (const c of map.contacts) if (Math.abs(c.x - p.x) < 5 && Math.abs(c.z - p.z) < 5) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.8, { kind: 'contact', ref: c });
   for (const d of drops.values()) consider(Math.hypot(d.x - p.x, d.z - p.z) - 0.6, { kind: 'drop', ref: d });
   if (hotZone?.open) for (const c of hotZone.crates) if (!c.opened) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.6, { kind: 'hotcrate', ref: c });
+  if (annex.open) for (const c of annex.crates) if (!c.opened) consider(Math.hypot(c.x - p.x, c.z - p.z) - 0.6, { kind: 'annexcrate', ref: c });
   for (const o of objectives.values()) if (o.owner === p.token) consider(Math.hypot(o.x - p.x, o.z - p.z) - 0.5, { kind: 'crate', ref: o });
   { const fy = standing(p);
     for (const st of structsNear(p.x, p.z, 4)) {
@@ -4735,6 +4961,14 @@ function interact(p) {
   }
   if (it.kind === 'terminal') return startHack(p, 'terminal', it.ref.id);
   if (it.kind === 'drop') return startHack(p, 'drop', it.ref.id);
+  if (it.kind === 'annexcrate') {
+    if (!crewHasKey(p)) return toast(p, `Locked: a Halyard keypad. The access codes are in the last of the Annex files (you have ${annexDocs(p)} of ${ANNEX.docs.length}). Bank intel at your stash to piece them together, or bring a crewmate who has them.`);
+    if ((annex.opened.get(p.token) || 0) >= ANNEX.cratesPerPlayer) return toast(p, 'You\'ve opened your Annex crate this time: leave the rest for your crew');
+    if (p.inv.pack.length + 3 > packSize(p)) return toast(p, 'Make room in your backpack first (an Annex crate holds 3 things)');
+    startHack(p, 'annexcrate', it.ref.id, { ms: AX_CRATE_MS });
+    for (const o of players.values()) if (o !== p && !o.dead && !sameSquad(o, p) && Math.hypot(o.x - it.ref.x, o.z - it.ref.z) < 400) send(o.ws, { t: 'alert', x: Math.round(it.ref.x), z: Math.round(it.ref.z), text: 'Annex crate alarm' });
+    return toast(p, `⚡ Keying in the codes (${Math.round(AX_CRATE_MS / 1000)}s). The site alarm is going: everyone near knows where you are.`);
+  }
   if (it.kind === 'hotcrate') {
     if ((hotZone.opened.get(p.token) || 0) >= HZ.cratesPerPlayer) return toast(p, `You've opened ${HZ.cratesPerPlayer} crates in this zone: leave the rest for someone else`);
     if (p.inv.pack.length + 3 > packSize(p)) return toast(p, 'Make room in your backpack first (a crate holds up to 3 things)');
@@ -4809,6 +5043,7 @@ function interact(p) {
 /** How far into a closing door's path someone has to be to stop it (their body actually in the way). */
 const DOOR_CLEAR = 0.22;
 function structInteract(p, st) {
+  if (st.annex) return annexStructInteract(p, st);
   const def = PIECES[st.type];
   const stage = stageDef(st);
   if (def.farm && !msg_upgradeIntent(p)) return farmInteract(p, st);
@@ -5618,6 +5853,7 @@ function handleJoin(ws, msg) {
   });
   send(ws, { t: 'events', drops: dropList(), extracts: extractList() });
   send(ws, { t: 'hotzone', zone: hotZoneView() });
+  send(ws, annexView(p));
   sendSites(ws);
   send(ws, { t: 'worldEvents', list: [...worldEvents.values()].map(eventView) });
   if (db.characters[token]?.awayLog?.length) { send(ws, { t: 'awayLog', entries: db.characters[token].awayLog }); db.characters[token].awayLog = []; }
@@ -5990,6 +6226,7 @@ wss.on('connection', (ws) => {
         if (msg.event) { const e = startEvent(msg.event); if (e && Number.isFinite(msg.x)) { e.x = msg.x; e.z = msg.z; } return; }
         if (msg.endEvent) { const e = [...worldEvents.values()].find((x) => x.type === msg.endEvent); if (e) endEvent(e, 'expired'); return; }
         if (typeof msg.giveGun === 'string' && ARCHETYPE_KEYS.includes(msg.giveGun)) { const w = makeWeapon(msg.giveGun); p.inv.pack.push(w); p.mags[w.id] = weaponStats(w).mag; dirty(p); return; }
+        if (Number.isFinite(msg.annexIntel)) { annexProgress(p, msg.annexIntel); dirty(p); return; }
         if (msg.give && typeof msg.give === 'object') { for (const [k, v] of Object.entries(msg.give)) if (RESOURCES.includes(k) && Number.isFinite(v)) p[k] = (p[k] || 0) + v; dirty(p); return; }
         if (Number.isInteger(msg.boatTo) && p.boat && map.docks[msg.boatTo]) { const b = boatById(p.boat), d = map.docks[msg.boatTo]; b.x = d.wx; b.z = d.wz; placeOccupants(b); return send(p.ws, { t: 'boatFix', x: b.x, z: b.z, yaw: b.yaw }); }
         if (Number.isFinite(msg.boatDamage) && msg.boatId) { const b = boatById(msg.boatId); if (b) damageBoat(b, msg.boatDamage, p); return; }
@@ -6061,7 +6298,7 @@ function snapshotFor(r, views, now) {
       houses: map.houses.filter((h) => near(h)).map((h) => { const s = db.houses[h.id]; const rs = s.owner && !livesAt(r, s) ? cachedRaidState(s) : null; return { id: h.id, hp: Math.round(s.doorHp), max: Math.round(doorMax(h.id)), open: s.doorOpen, owner: s.owner ? s.ownerName : null, upg: s.upg, hl: s.owner ? homeLevel(s.hxp) : 0, ...(rs ? { rs: RS_CODE[rs.mode], rw: rs.start } : {}) }; }),
       terminals: map.terminals.filter((t) => near(t)).map((t) => [t.id, (terminalReadyAt.get(t.id) || 0) <= now ? 1 : 0]),
       objectives: [...objectives.values()].filter((o) => near(o) && tokenInSquadWith(r, o.owner)).map((o) => ({ id: o.id, x: o.x, z: o.z })),
-      structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), ...(st.h ? { h: st.h } : {}), ...(st.rise ? { base: st.base, rise: st.rise } : {}), ...(st.hole ? { hole: st.hole } : {}), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...structRaidView(r, st), ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
+      structs: structsNear(r.x, r.z, INTEREST).map((st) => ({ id: st.id, type: st.type, x: st.x, z: st.z, rot: st.rot, y0: +st.y0.toFixed(2), ...(st.h ? { h: st.h } : {}), ...(st.rise ? { base: st.base, rise: st.rise } : {}), ...(st.hole ? { hole: st.hole } : {}), stage: st.stage, hp: Math.round(st.hp), max: Math.round(PIECES[st.type].claim ? flagMax(st) : stageDef(st).hp), hl: PIECES[st.type].claim ? homeLevel(st.hxp) : undefined, open: !!st.open, owner: st.ownerName, mine: canManage(r, st) ? 1 : 0, ...(st.annex ? { ax: 1 } : {}), ...structRaidView(r, st), ...(PIECES[st.type].defense && canManage(r, st) ? { ammo: st.ammo || 0, meat: st.meat || 0, fed: (st.fedUntil || 0) > now ? 1 : 0 } : {}), ...(st.type === 'plot' ? { crop: st.crop || null, grow: +cropState(st, now).grow.toFixed(2), rotten: cropState(st, now).phase === 'rotten' ? 1 : 0 } : {}) })),
     }).slice(1, -1) };
   }
   const fast = JSON.stringify({
@@ -6103,7 +6340,7 @@ function worldTick() {
   }
   updateBots(dt, now);
   tickHacks(now);
-  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickSites(now); tickRides(now); }
+  if (tick % 5 === 0) { tickExtractions(now); tickTaxis(now); tickDowned(now); tickHotZone(now); tickAnnex(now); tickSites(now); tickRides(now); }
   tickStuns(now);
   tickLingering(now);
   if (tick % Math.max(1, Math.round(TICK_HZ / 2)) === 0) tickStashing(now);

@@ -293,6 +293,7 @@ feet/miles scale bar.
 | **Scavenging** | Industrial zones, farms, forests, roads, towns | Salvage (mostly outside town centres), parts, tech, ammo, medkits |
 | **Rogues / Lieutenants** | Everywhere / contract sites | Parts, tech, salvage, intel |
 | **Discovering Contacts** | Every town | XP, a new contract board, a new redeploy and fast-travel point |
+| **The Annex** (the end game: every 3 hours on the clock, Eastern, open 20 min, warned 15 min ahead) | Halyard's walled compound in the forest 5.6 mi south of Bristol | Six armory crates (a fully fitted gun, heavy armor, a strongbox of cash, tech, intel and parts), one per player per opening, only for a crew holding the access codes (all 12 Annex files). Elite guards hold it; what comes out is hot until it's home |
 
 ## Three layers
 

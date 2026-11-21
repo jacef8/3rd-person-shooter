@@ -560,6 +560,50 @@ function hotZoneLine() {
   const now = Date.now(), d = distText(Math.hypot(z.x - state.x, z.z - state.z)), left = z.crates.filter((c) => !c.opened).length;
   return z.open ? `🔥 Hot zone: ${z.name} · ${d} · closes in ${mmss(z.closesAt - now)} · ${left} crate${left === 1 ? '' : 's'} left` : `🔥 Hot zone: ${z.name} · ${d} · opens in ${mmss(z.opensAt - now)}`;
 }
+// ---- the Annex: Halyard's compound south of Bristol. Its walls and gates come in as ordinary built pieces;
+// this is its armory crates (cold blue, with a beam) while it's open, and the line that says when it opens.
+const axVis = { group: null, crates: new Map() };
+const axCrateMat = new THREE.MeshStandardMaterial({ color: 0x1d2a36, emissive: 0x58c8ff, emissiveIntensity: 0.55 });
+function syncAnnexVis() {
+  const a = state.annex;
+  if (!axVis.group) { axVis.group = new THREE.Group(); scene.add(axVis.group); }
+  const seen = new Set();
+  for (const c of a?.open ? a.crates : []) {
+    seen.add(c.id);
+    let m = axVis.crates.get(c.id);
+    if (!m) {
+      m = new THREE.Group();
+      const box = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.95, 0.95), axCrateMat);
+      box.position.y = 0.48;
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.35, 30, 8, 1, true), new THREE.MeshBasicMaterial({ color: 0x58c8ff, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }));
+      beam.position.y = 15;
+      m.add(box, beam);
+      m.position.set(c.x, ground(c.x, c.z), c.z);
+      axVis.group.add(m);
+      axVis.crates.set(c.id, m);
+    }
+    m.visible = !c.opened;
+  }
+  for (const [id, m] of axVis.crates) if (!seen.has(id)) { axVis.group.remove(m); axVis.crates.delete(id); }
+}
+/** Warned or open: worth showing on the HUD and pinning to the minimap's rim. */
+const annexLive = () => { const a = state.annex; return !!a && (a.open || Date.now() >= a.opensAt - a.warnMs); };
+function annexLine(short = false) {
+  const a = state.annex;
+  if (!a) return '';
+  const now = Date.now(), d = distText(Math.hypot(a.site.x - state.x, a.site.z - state.z)), left = a.crates.filter((c) => !c.opened).length;
+  if (a.open) return `⚡ The Annex · ${d} · open, locks in ${mmss(a.closesAt - now)}${short ? '' : ` · ${left} crate${left === 1 ? '' : 's'} left`}`;
+  const ms = a.opensAt - now;
+  return `⚡ The Annex · ${d} · ${ms < 3600000 ? `opens in ${mmss(ms)}` : `opens ${a.at}`}`;
+}
+/** Where you are in the compound: inside the yard, inside Level A, or neither. */
+function annexWhere(x, z) {
+  const s = state.annex?.site;
+  if (!s) return '';
+  const dx = x - s.x, dz = z - s.z, u = dx * -s.fz + dz * s.fx, v = dx * s.fx + dz * s.fz;
+  if (Math.abs(u) >= s.h || Math.abs(v) >= s.h) return '';
+  return Math.abs(u) < 10 && v > -s.h + 4 && v < -s.h + 16 ? 'levelA' : 'yard';
+}
 const carryingHot = () => { const me = state.me; return !!me && (!!me.hotLoose || ['primary', 'primary2', 'secondary', 'armor'].some((s) => me.inv[s]?.hot) || me.inv.pack.some((i) => i.hot)); };
 
 // ---- helicopter extraction: red flare smoke at the pickup, then a helicopter that comes down to it
@@ -1859,6 +1903,8 @@ function drawMinimap() {
   for (const p of state.pings) if (p.until > now) icon(p.x, p.z, p.objective ? 'objective' : 'ping', null, IS * 0.85);
   for (const a of state.alerts) if (a.until > now && Math.floor(now / 250) % 2) icon(a.x, a.z, 'alert');
   for (const ct of state.contracts) edge(ct.x, ct.z, 'contract');
+  if (state.annex) { const s = state.annex.site; if (annexLive()) edge(s.x, s.z, 'annex'); else if (Math.hypot(s.x - state.x, s.z - state.z) * k < R - 8) icon(s.x, s.z, 'annex'); }
+  if (state.annex?.open) for (const c of state.annex.crates) if (!c.opened && Math.hypot(c.x - state.x, c.z - state.z) * k < R - 4) { g.fillStyle = '#58c8ff'; g.beginPath(); g.arc(X(c.x), Z(c.z), 2.5, 0, Math.PI * 2); g.fill(); }
   for (const d of state.drops) edge(d.x, d.z, 'drop');
   for (const e of state.extracts) edge(e.x, e.z, 'extract');
   for (const e of state.worldEvents || []) edge(e.x, e.z, 'event');
@@ -2212,6 +2258,11 @@ function handle(m) {
       syncCharges(m.charges || []);
       break;
     }
+    case 'annex':
+      state.annex = m.site ? m : null;
+      syncAnnexVis();
+      if (!$('annexpanel').hidden) renderAnnexStatus();
+      break;
     case 'annexDoc':
       toast(`📁 Annex file ${m.n} of ${m.of}: ${m.title}. Read it in your bag (Annex files)`);
       sfx.levelUp?.();
@@ -3324,6 +3375,7 @@ function renderTracker() {
     const here = siteHere();
     el.innerHTML = carryingHot() ? '<div class="hotc carry">🔥 Hot loot: get it home</div>'
       : here ? `<div class="sitec ${here.state}">${SITES.kinds[here.kind].icon} ${here.name} · ${siteStatus(here)}</div>`
+      : annexLive() && (state.annex.open || !z) ? `<div class="hotc axc">${annexLine(true)}</div>`
       : z ? `<div class="hotc">🔥 ${z.name.replace(/ \(.*\)$/, '')} · ${distText(Math.hypot(z.x - state.x, z.z - state.z))} · ${z.open ? 'closes' : 'opens'} ${mmss((z.open ? z.closesAt : z.opensAt) - now)}</div>`
         : c ? `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>` : '';
     return;
@@ -3331,11 +3383,12 @@ function renderTracker() {
   const here = siteHere();
   el.innerHTML = (here ? `<div class="sitec ${here.state}">${SITES.kinds[here.kind].icon} ${here.name} <span>${siteStatus(here)}</span></div>` : '') +
     (state.hotZone ? `<div class="hotc">${hotZoneLine()}</div>` : '') +
+    (annexLive() ? `<div class="hotc axc">${annexLine()}</div>` : '') +
     (carryingHot() ? '<div class="hotc carry">🔥 You carry hot loot: everyone sees you every 30 s. Get it home or fly it out.</div>' : '') +
     state.contracts.map((c) => `<div>★ ${CONTRACT_TYPES[c.type].name} <span>${distText(Math.hypot(c.x - state.x, c.z - state.z))}</span></div>`).join('') +
     (state.worldEvents || []).map((e) => `<div class="eventc">📣 ${e.name} <span>${e.type === 'swing' ? '' : `${distText(Math.hypot(e.x - state.x, e.z - state.z))} · `}${Math.max(0, Math.ceil((e.endsAt - Date.now()) / 60000))} min left</span></div>`).join('');
 }
-setInterval(() => { if (state.map) renderTracker(); }, 1000);
+setInterval(() => { if (state.map) renderTracker(); if (!$('annexpanel').hidden) renderAnnexStatus(); }, 1000);
 
 // ------------------------------------------------------------------ map screen (M), deploy + fast travel
 const mapView = { cx: 0, cz: 0, zoom: 1 };
@@ -3553,6 +3606,10 @@ function drawMapCanvas() {
     markers.push({ x: hz.x, z: hz.z, icon: 'hotzone', size: 9, label: `🔥 ${hotZoneLine().replace(/^🔥 Hot zone: /, 'Hot zone: ')}`, labelMin: 0 });
     for (const c of hz.crates) if (!c.opened) markers.push({ x: c.x, z: c.z, color: '#ff5a1f', size: 5 });
     if (hz.extract) markers.push({ x: hz.extract.x, z: hz.extract.z, icon: 'pickup', size: 7, label: 'Hot-zone pickup', labelMin: 0 });
+  }
+  if (state.annex) {
+    markers.push({ x: state.annex.site.x, z: state.annex.site.z, icon: 'annex', size: 9, label: annexLine(true), labelMin: 0 });
+    if (state.annex.open) for (const c of state.annex.crates) if (!c.opened) markers.push({ x: c.x, z: c.z, color: '#58c8ff', size: 5 });
   }
   for (const a of state.alerts) if (a.hot && a.until > performance.now()) markers.push({ x: a.x, z: a.z, icon: 'hotloot', size: 7, label: 'Hot loot' });
   for (const d of map.docks) markers.push({ x: d.x, z: d.z, icon: 'dock', size: 4, label: d.campId != null ? '' : d.name });
@@ -4608,15 +4665,26 @@ function nearestInteractable() {
   }
   if (!best && state.me?.claim && !state.extracts.length) for (const lz of state.map.landingZones) if (Math.hypot(lz.x - state.x, lz.z - state.z) < EXTRACT.callRange) best = `Call extraction — fire a flare, hold ${feet(EXTRACT.radius)} for ${EXTRACT.holdMs / 1000}s, fly home with your loot`;
   for (const o of state.objectives) consider(Math.hypot(o.x - state.x, o.z - state.z) - 0.5, 'Recover contract crate (3s)');
+  if (state.annex?.open) for (const c of state.annex.crates) if (!c.opened) consider(Math.hypot(c.x - state.x, c.z - state.z) - 0.6,
+    !state.annex.key ? '🔒 Annex crate: a Halyard keypad. It needs the access codes (all 12 Annex files, yours or a crewmate\'s)'
+      : state.annex.mine >= state.annex.perPlayer ? 'Annex crate: you\'ve had yours this time, leave it for your crew'
+        : `⚡ Open Annex crate (${state.annex.crateMs / 1000}s): sets off the site alarm`);
   const me = state.me;
   const has = (t) => me?.inv.pack.some((i) => i.kind === 'tool' && i.tool === t);
   for (const sv of structVis.values()) {
     const st = sv.data, def = PIECES[st.type], stage = def.stages[st.stage];
     if (def.explosive || !sameStorey(st)) continue;
+    if (st.ax && (!def.door || st.open)) continue;   // the Annex's walls and open gates: nothing to do
     const d = Math.hypot(Math.max(structBoxOf(st).minX - state.x, 0, state.x - structBoxOf(st).maxX), Math.max(structBoxOf(st).minZ - state.z, 0, state.z - structBoxOf(st).maxZ)) + 0.3;
     let text;
     const next = def.stages[st.stage + 1];
     const hp = ` <small>${st.hp}/${st.max} HP</small>${raidTag(st)}`;
+    if (st.ax) {   // the gate (on the wall line) or Level A's blast door (inside the yard)
+      const where = annexWhere(state.x, state.z), isGate = annexWhere(st.x, st.z) === '';
+      const canOut = isGate ? where === 'yard' : where === 'levelA';
+      consider(d, canOut ? '🚪 Emergency release: let yourself out' : `🔒 Sealed. The locks release when the gate circuit cycles: ${state.annex ? state.annex.at : 'soon'} Eastern`);
+      continue;
+    }
     if (st.ru) {
       text = st.mine ? (def.door ? `🔨 Rebuild door (${costText(RAIDS.ruin.doorRebuildCost)}, hammer)` : '🔨 Your stash is a ruin: open it to rebuild')
         : def.door ? `${st.owner}'s door (broken down)` : `Search ${st.owner}'s ruined stash${raidTag(st)}`;
@@ -5539,9 +5607,24 @@ function renderAnnex() {
     b.dataset.pad = `annex${i}`; b.disabled = !open;
     list.append(b);
   });
+  renderAnnexStatus();
   const d = ANNEX.docs[annexPick], el = $('annexDoc');
   if (annexPick < a.docs && d) el.innerHTML = `<div class="from">${esc(d.from)}</div><h3>${esc(d.title)}</h3><p>${esc(d.text)}</p>`;
   else el.innerHTML = '<p class="empty">Nothing pieced together yet. Bring intel home and bank it at your stash house.</p>';
+}
+/** The compound itself: open or when it next opens, how far, and whether your crew can open its crates. */
+function renderAnnexStatus() {
+  const el = $('annexStatus'), a = state.annex;
+  if (!el) return;
+  if (!a) { el.hidden = true; return; }
+  el.hidden = false;
+  const now = Date.now(), d = distText(Math.hypot(a.site.x - state.x, a.site.z - state.z));
+  const when = a.open ? `<b>Open now.</b> The locks hold again in ${mmss(a.closesAt - now)}.`
+    : `<b>Next opening: ${a.at} Eastern</b> (in ${a.opensAt - now < 3600000 ? mmss(a.opensAt - now) : `${Math.floor((a.opensAt - now) / 3600000)} h ${Math.round(((a.opensAt - now) % 3600000) / 60000)} min`}). The gate circuit cycles every 3 hours; it stays open 20 minutes.`;
+  const key = a.key ? '<span class="ok">Your crew holds the access codes: its crates will open for you.</span>'
+    : '<span class="no">Its crates need the access codes: all 12 files, yours or a crewmate\'s. You can still go and fight for what others carry out.</span>';
+  el.className = a.open ? 'open' : '';
+  el.innerHTML = `<div class="axhead">⚡ The Annex <span>${d} away · marked on your map</span></div><p>${when}</p><p>${key}</p>`;
 }
 $('annexClose').onclick = closeAnnex;
 // Testing: a ride of any kind, put right beside you (while the server allows it). Its own little

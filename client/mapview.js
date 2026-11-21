@@ -135,6 +135,7 @@ export const ICONS = {
   extract: { color: '#ff2a2a', glyph: 'H', label: 'Extraction' },
   pickup: { color: '#5dff8a', glyph: 'H', label: 'Hot-zone pickup' },
   hotzone: { color: '#ff5a1f', glyph: '!', label: 'Hot zone' },
+  annex: { color: '#58c8ff', glyph: 'A', label: 'The Annex' },
   hotloot: { color: '#ff5a1f', glyph: '$', label: 'Hot loot carrier' },
   event: { color: '#c77dff', glyph: '★', label: 'World event' },
   trader: { color: '#7fd6ff', glyph: '$', label: 'Contact (trader)' },

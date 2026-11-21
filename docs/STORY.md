@@ -104,8 +104,14 @@ Then the deploy screen: pick the town you made it to.
 
 - **Intel** pickups are Annex and Halyard documents. Collected together, they tell what really
   happened the night of the Breach, and what the program nobody named was.
-- **The Annex itself:** a sealed compound deep in the national forest, the endgame. Crews that gather
-  enough intel learn the way in.
+- **The Annex itself (built):** Halyard's walled compound in the forest south of Bristol, the end game.
+  It's on everyone's map. Its gate runs on a backup circuit off the core that can't hold a charge:
+  every three hours (1, 4, 7 and 10 o'clock, Eastern) every lock on the site releases for twenty
+  minutes, with a warning fifteen minutes ahead. Elite Halyard guards hold it while it's open. Level A,
+  the stone block at the back, is the armory. Its crates open only for a crew holding the access codes,
+  the last of the twelve Annex files, banked from intel; anyone else can still go and fight for what
+  the key-holders carry out, because Annex gear is hot until it's home. Level B, the core, stays
+  sealed: that's the next chapter.
 - **The Torreya depot:** Halyard's sealed bunker on the bluffs. What's still inside, and who's guarding it?
 - **The Reopening date:** a long-running server event. The Authority announces a date and crews race
   to hold the most land. A natural "season" ending.

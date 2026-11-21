@@ -1,6 +1,36 @@
 {
   "_about": "The Annex files: twelve documents that tell what happened the night of the Breach (docs/STORY.md). One unlocks each time a character's total of BANKED intel (uploaded at their stash) reaches the next number in unlockAt. The twelfth holds the way into the Annex. All of it is fiction: no real agency, company or site is meant.",
   "unlockAt": [1, 3, 6, 10, 14, 19, 25, 31, 38, 45, 52, 60],
+  "_compound": "The compound itself (server/index.js, 'the Annex'): a walled yard on dry, level forest ground south of Bristol, well away from roads, buildings and traders, with Level A (a stone block with a blast door) at the back. The walls are Halyard's: nothing breaks them and nobody builds near them. The gate circuit cycles on the clock (Eastern time): every everyHours hours from atHour, the locks release for openMs, with a warning warnMs ahead. Elite guards hold it while it's open. Only a crew with the full set of files (the twelfth is the access codes) can open its crates.",
+  "site": {
+    "from": "Bristol",
+    "goal": [1500, 9000],
+    "searchM": 8000,
+    "stepM": 100,
+    "yard": 52,
+    "maxRise": 1.5,
+    "clearBuildingM": 350,
+    "clearRoadM": 140,
+    "awayFromTradersM": 800,
+    "noBuildM": 180
+  },
+  "openings": {
+    "timeZone": "America/New_York",
+    "everyHours": 3,
+    "atHour": 1,
+    "warnMs": 900000,
+    "openMs": 1200000
+  },
+  "guards": 10,
+  "reinforceMs": 240000,
+  "crateMs": 10000,
+  "cratesPerPlayer": 1,
+  "crate": {
+    "cash": [700, 1400],
+    "tech": [20, 40],
+    "intel": [3, 6],
+    "parts": [15, 30]
+  },
   "docs": [
     {
       "title": "Work order, Forestry Station 9",

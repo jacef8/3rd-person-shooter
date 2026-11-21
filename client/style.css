@@ -1145,3 +1145,15 @@ body.lowhp #hud::before { content: ''; position: fixed; inset: 0; pointer-events
 #annexDoc p { margin: 0; font-size: 15px; line-height: 1.6; }
 #annexDoc .empty { color: #5a5448; }
 @media (max-width: 700px), (max-height: 420px) { .annexcols { grid-template-columns: 1fr; } }
+
+/* ==== The Annex: the compound's line on the HUD and its status in the files panel. ==== */
+#tracker .hotc.axc { color: #9fdcff; }
+#annexStatus { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-left: 4px solid #58c8ff; border-radius: 12px; background: var(--surface-2); }
+#annexStatus[hidden] { display: none; }
+#annexStatus.open { border-left-color: #ffc53d; }
+#annexStatus .axhead { font: 800 16px/1.2 var(--font-display); color: var(--ink); }
+#annexStatus .axhead span { margin-left: 8px; font: 600 14px/1.2 var(--font-text); color: var(--ink-3); }
+#annexStatus p { margin: 6px 0 0; font-size: 15px; line-height: 1.45; color: var(--ink-2); }
+#annexStatus b { color: var(--ink); }
+#annexStatus .ok { color: #7dff9a; font-weight: 700; }
+#annexStatus .no { color: var(--ink-2); }

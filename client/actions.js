@@ -16,7 +16,7 @@ import { poseAction } from '/people.js';
 
 /** Which pose each timed action uses (the server's hack kinds, plus the flare gesture). */
 export const ACT_POSE = {
-  breakbox: 'pry', crate: 'pry', drop: 'pry', hotcrate: 'pry', raid: 'pry', disarm: 'pry',
+  breakbox: 'pry', crate: 'pry', drop: 'pry', hotcrate: 'pry', annexcrate: 'pry', raid: 'pry', disarm: 'pry',
   claim: 'plant', claimBuilding: 'plant',
   flare: 'flare', hotflare: 'flare',
   terminal: 'tablet', door: 'tablet', gatehack: 'tablet', datahack: 'tablet', hotwire: 'tablet',
