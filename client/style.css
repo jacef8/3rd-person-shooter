@@ -1115,3 +1115,17 @@ body.touchui #prompt { max-width: 50vw; overflow: hidden; text-overflow: ellipsi
 body.touchui:not(.nadeaim) #touch .tbtn.r4 { display: none; }
 body.touchui:not(.lookbtn) #touch .tbtn.look { display: none; }
 body.touchui .ttop .tbtn.tiny[data-act=touchMore] { min-width: 74px; font-weight: 800; letter-spacing: 0.04em; }
+
+/* ==== The weight of a fight: a kill confirmed on the crosshair, which way a hit came from, being low. ==== */
+#killx { position: fixed; left: calc(50% - 11px); top: calc(50% - 11px); width: 22px; height: 22px; opacity: 0; pointer-events: none; z-index: 4; }
+#killx i { position: absolute; left: 10px; top: -3px; width: 3px; height: 28px; border-radius: 2px; background: #ff3b30; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); }
+#killx i:first-child { transform: rotate(45deg); }
+#killx i:last-child { transform: rotate(-45deg); }
+#killx.down i { background: #ffb020; }
+#hurtfx { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, rgba(160, 0, 0, 0) 55%, rgba(170, 10, 10, 0.75) 100%); z-index: 3; }
+#hurtdir { position: fixed; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; z-index: 4; }
+#hurtdir i { position: absolute; left: -34px; top: -34px; width: 68px; height: 68px; transform-origin: 50% 50%; }
+#hurtdir i::before { content: ''; position: absolute; left: 50%; top: -86px; width: 70px; height: 22px; transform: translateX(-50%); border-radius: 50% 50% 0 0 / 100% 100% 0 0; border-top: 6px solid rgba(230, 30, 30, 0.95); }
+body.lowhp #hud::before { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 2; background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 50%, rgba(60, 0, 0, 0.55) 100%); animation: lowpulse 1.4s ease-in-out infinite; }
+@keyframes lowpulse { 50% { opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) { body.lowhp #hud::before { animation: none; } }

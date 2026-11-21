@@ -67,6 +67,9 @@ test('quitting mid-fight leaves you standing for a while; quitting otherwise is 
     const hp = b.you.hp;
     a.send({ t: 'shoot', dir: [0, -0.05, 1] });
     await until(() => b.you.hp < hp);
+    // Eli's screen is told which way it came from (Jace's spot), and how hard.
+    const hurt = await until(() => b.msgs.find((m) => m.t === 'hurt'));
+    assert.ok(Math.hypot(hurt.x - at.x, hurt.z - at.z) < 3 && hurt.dmg > 0, 'the hit says where it came from');
     await b.close();
     await until(() => a.msgs.some((m) => m.t === 'feed' && /Eli quit mid-fight/.test(m.text)));
     await sleep(800);
@@ -89,6 +92,7 @@ test('quitting mid-fight leaves you standing for a while; quitting otherwise is 
       a.send({ t: 'shoot', dir: [0, -0.05, 1] }); await sleep(180);
     }
     await until(() => a.msgs.some((m) => m.t === 'feed' && /Jace ➜ Eli/.test(m.text)));
+    assert.ok(a.msgs.some((m) => m.t === 'hitmark' && (m.kill || m.down)), 'the shot that finished (or downed) him is confirmed to Jace');
     await until(() => !sees('Eli'), 10000);
     const b3 = await conn('Eli', tokB);
     await until(() => b3.you && b3.msgs.some((m) => m.t === 'awayLog'));

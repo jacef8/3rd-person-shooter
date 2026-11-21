@@ -315,6 +315,22 @@ export function hit(head = false) {
   tone(d, { dur: head ? 0.09 : 0.05, from: head ? 2400 : 1500, to: head ? 1800 : 1200, type: 'triangle', gain: 0.6 });
   if (head) metal(d, { t: 0.01, base: 3800, ring: 0.06, gain: 0.15 });
 }
+/** Your shot finished someone: a deep thump under a bright double tick (a down: the same, lighter). */
+export function kill(down = false) {
+  if (!audio()) return;
+  const d = out(down ? 0.4 : 0.5);
+  tone(d, { dur: 0.16, from: 180, to: 90, type: 'sine', gain: 0.8 });
+  tone(d, { t: 0.02, dur: 0.07, from: down ? 1500 : 1900, to: down ? 1300 : 1700, type: 'triangle', gain: 0.55 });
+  tone(d, { t: 0.1, dur: 0.1, from: down ? 1100 : 2500, to: down ? 1000 : 2200, type: 'triangle', gain: 0.45 });
+  if (!down) metal(d, { t: 0.1, base: 3600, ring: 0.08, gain: 0.12 });
+}
+/** Low on health: a heartbeat, two soft thumps. */
+export function heartbeat() {
+  if (!audio()) return;
+  const d = out(0.45);
+  tone(d, { dur: 0.09, from: 75, to: 48, type: 'sine', gain: 0.7 });
+  tone(d, { t: 0.2, dur: 0.08, from: 65, to: 45, type: 'sine', gain: 0.5 });
+}
 /** You took a hit. */
 export function hurt() {
   if (!audio()) return;

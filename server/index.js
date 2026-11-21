@@ -3636,6 +3636,8 @@ function applyDamage(target, amount, attacker, isBot, headshot = false, ammo = n
   if (!isBot && target.armor > 0) { const absorbed = Math.min(target.armor, dmg * vsArmor); target.armor -= absorbed; dmg -= absorbed / vsArmor; }
   target.hp -= dmg * vsFlesh;
   target.lastHit = Date.now();
+  // The one hit: which way it came from (their screen marks the direction; a blast with nobody behind it has none).
+  if (!isBot && target.ws && attacker && attacker !== target && Number.isFinite(attacker.x)) send(target.ws, { t: 'hurt', x: Math.round(attacker.x), z: Math.round(attacker.z), dmg: Math.round(dmg) });
   if (target.animal) { target.hurtUntil = Date.now() + 6000; target.lastAttacker = attacker; }
   if (target.eventId && attacker && !attacker.isBot) worldEvents.get(target.eventId)?.hitters.add(attacker.token);
   if (!isBot) { breakCamo(target, 3000); dirty(target); }
@@ -3874,8 +3876,11 @@ function fire(shooter, dir, isBot = false, botAccuracy = 1, opts = {}) {
     if (hit.kind === 'door') {
       damageHouseDoor(hit.target, dmg, shooter);
     } else {
+      const wasDown = !!hit.target.downed, wasDead = !!hit.target.dead;
       applyDamage(hit.target, dmg, shooter, hit.kind === 'bot', hit.headshot, isBot ? null : s);
-      if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2] });
+      // (kill: this shot finished them; down: it put them on the ground. The shooter's screen confirms it.)
+      const out = !wasDead && hit.target.dead ? { kill: 1 } : !wasDown && hit.target.downed ? { down: 1 } : {};
+      if (!isBot) send(shooter.ws, { t: 'hitmark', dmg: Math.round(dmg), crit: hit.headshot, x: tracers.at(-1)[0], y: tracers.at(-1)[1], z: tracers.at(-1)[2], ...out });
     }
   }
   if (!isBot) { breakCamo(shooter, 2000); shooter.protectedUntil = 0; botsHear(shooter, s.suppressed ? (s.subsonic ? 8 : 22) : 70); }

@@ -1664,6 +1664,43 @@ function addTracer(o, p, hit) {
   }
 }
 
+// ---- the weight of a fight: a kill confirmed, which way a hit came from, and being low on health
+const killX = Object.assign(document.createElement('div'), { id: 'killx', innerHTML: '<i></i><i></i>' });
+const hurtFx = Object.assign(document.createElement('div'), { id: 'hurtfx' });
+const hurtDir = Object.assign(document.createElement('div'), { id: 'hurtdir' });
+$('hud').append(hurtFx, hurtDir, killX);   // (the X on its own at the middle: the crosshair hides when the gun's down)
+/** Your shot finished someone (red X) or put them down (amber X), on the crosshair. */
+function killMark(down) {
+  killX.className = down ? 'down' : 'kill';
+  killX.getAnimations().forEach((a) => a.cancel());
+  killX.animate([{ opacity: 1, transform: 'scale(1.35)' }, { opacity: 1, transform: 'scale(1)', offset: 0.25 }, { opacity: 0, transform: 'scale(1)' }], { duration: 650, easing: 'ease-out' });
+}
+/** Hit: a red mark round the middle of the screen pointing where it came from, the edges flash red,
+ *  and the view jolts, by how hard it was. */
+function hurtFrom(x, z, dmg = 10) {
+  const k = Math.min(1, 0.35 + dmg / 45);
+  state.shake = Math.max(state.shake || 0, 0.08 + 0.18 * k);
+  hurtFx.getAnimations().forEach((a) => a.cancel());
+  hurtFx.animate([{ opacity: 0.35 + 0.45 * k }, { opacity: 0 }], { duration: 700, easing: 'ease-out' });
+  if (!Number.isFinite(x) || Math.hypot(x - state.x, z - state.z) < 1) return;
+  // (yaw 0 faces +z; a bearing to the right of where you look turns the mark clockwise)
+  const rel = Math.atan2(x - state.x, z - state.z) - state.yaw;
+  const el = document.createElement('i');
+  el.style.transform = `rotate(${-rel}rad)`;
+  hurtDir.append(el);
+  while (hurtDir.children.length > 6) hurtDir.firstChild.remove();
+  el.animate([{ opacity: 0.95 }, { opacity: 0.95, offset: 0.4 }, { opacity: 0 }], { duration: 1400, easing: 'ease-in' }).onfinish = () => el.remove();
+}
+/** Low on health: the edges darken and a heartbeat, quicker the lower you are. Called a few times a second. */
+function lowHealth(now) {
+  const me = state.me, frac = me && !me.dead && !me.downed ? me.hp / (me.maxHp || 100) : 1;
+  const low = frac < 0.3;
+  document.body.classList.toggle('lowhp', low);
+  if (low && now > (state.beatAt || 0)) { sfx.heartbeat(); state.beatAt = now + 650 + frac * 2000; }
+}
+
+setInterval(() => lowHealth(performance.now()), 200);   // (every device: the touch-screen loop stops early elsewhere)
+
 function damageNumber(n, crit, pos) {
   const v = new THREE.Vector3(...pos).project(camera);
   if (v.z > 1) return;
@@ -2252,7 +2289,9 @@ function handle(m) {
     case 'hitmark':
       sfx.hit(m.crit);
       damageNumber(m.dmg, m.crit, [m.x, m.y, m.z]);
+      if (m.kill || m.down) { sfx.kill(!m.kill); killMark(!m.kill); }
       break;
+    case 'hurt': hurtFrom(m.x, m.z, m.dmg); break;
     case 'feed': feedLine(m.text); break;
     case 'squad':
       if (m.id) state.invite = null;
@@ -4488,6 +4527,11 @@ function tryFire(now) {
   $('mag').textContent = me.mag;
   // Recoil comes from the gunsmith build: stocks, grips, muzzles and bipods all change it.
   state.recoil += s.recoil * (state.prone ? 0.6 : state.crouch ? s.crouchRecoil : 1) * (state.aiming ? 0.85 : 1) * (0.8 + Math.random() * 0.4);
+  // The shot's weight: the view punches out a touch and jolts, more for a big gun (a shotgun or a
+  // rifle round more than a submachine gun), less braced or aiming. The field of view eases back by itself.
+  const brace = (state.prone ? 0.5 : state.crouch ? 0.75 : 1) * (state.aiming ? 0.7 : 1);
+  camera.fov += Math.min(3.5, 0.4 + s.recoil * 25) * brace;
+  state.shake = Math.max(state.shake || 0, (0.02 + s.recoil * 0.6) * brace);
 }
 
 /** "· 🔒 sealed until 7 pm" on other people's bases while everyone who lives there is offline. */
@@ -6928,7 +6972,7 @@ async function setGyro(mode) {
   if (mode !== 'off') addEventListener('devicemotion', onGyro);
 }
 if (tset.gyro !== 'off') addEventListener('devicemotion', onGyro);
-Object.assign(window.__dz, { voice, perf, touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, renderer, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction, mapView });   // debug/test hook
+Object.assign(window.__dz, { voice, perf, touch, tset, editTouch, aimPoint, eyeHeight, camera, scene, renderer, tracers, boomFx, ground, toast, gunFx, selfMesh, doAction, mapView, hurtFrom, killMark });   // debug/test hook
 function closeTopPanel() {
   if (state.rideOpen) return closeRidePicker();
   if (ptrade.open) return send({ t: 'ptrade', action: 'cancel' });
