@@ -24,7 +24,7 @@ import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom
 import { ACT_POSE, updateAction, disposeActionProps } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
-import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox, drawIcon } from '/mapview.js';
+import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox, drawIcon, prepareMapColors, setMapDetail } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, structureBoxes, planPiece, isKitPiece } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS, hourLabel, windowText } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
@@ -295,8 +295,14 @@ function initWorld(m) {
   applyGfx();
   state.view.setOwnHouse(m.houseId);
   state.mapBase = buildMapBase(map, MOBILE ? 1400 : 2000, land);
-  // A sharper county picture (30 m samples), worked out a slice at a time once you're in.
-  setTimeout(() => sampleLandAsync(map, 30).then((fine) => { if (state.map !== map) return; state.mapBase = buildMapBase(map, 2400, fine); if (state.mapOpen) drawMapCanvas(); }), 3000);
+  // The map's soft colours, then a sharper county picture (30 m samples; 50 m on phones and TV boxes),
+  // each worked out a slice at a time once you're in.
+  setMapDetail(LOW_POWER ? 3 : 2, LOW_POWER ? 12 : 30, () => { if (state.mapOpen) drawMapCanvas(); });
+  setTimeout(() => prepareMapColors(map).then(() => { mmTerrain.canvas = null; return sampleLandAsync(map, LOW_POWER ? 50 : 30); }).then((fine) => {
+    if (state.map !== map) return;
+    state.mapBase = buildMapBase(map, LOW_POWER ? 1800 : 2400, fine);
+    if (state.mapOpen) drawMapCanvas();
+  }), 1500);
   state.landmarks = map.buildings.filter((b) => b.name);
   buildLandingPads();
   // Contacts: friendly NPCs standing in each town square.
@@ -5861,7 +5867,18 @@ function gpuCheck(slow) {
   const chrome = /Edg\//.test(navigator.userAgent) ? 'Edge: Settings → System and performance → turn on "Use graphics acceleration when available", then restart Edge.' : 'Chrome: Settings → System → turn on "Use graphics acceleration when available", then restart Chrome.';
   let text = '';
   if (GPU_SOFTWARE) text = `Your browser is drawing the game without your graphics card (hardware acceleration is off), so it runs slowly. ${chrome}`;
-  else if (slow && GPU_BUILTIN) text = `Your browser is using the computer's built-in graphics (${GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 50)}), not the graphics card. Windows: Settings → System → Display → Graphics → add your browser → High performance, then restart the browser.`;
+  else if (slow && LOW_POWER) {
+    // A phone or TV box: no settings to send anyone to. Step the graphics setting down instead (once a
+    // visit; Low is as far as it goes).
+    const steps = ['ultra', 'full', 'balanced', 'fast'], i = steps.indexOf(gfxMode);
+    if (i >= 0 && i < steps.length - 1) {
+      Object.assign(perf, { cap: 2, ratioCap: 0, grassCut: false, noShadows: false, eased: false });
+      applyGfx(steps[i + 1]);
+      perf.since = performance.now();
+      toast(`Running slow: graphics set to ${GFX[steps[i + 1]].label} (Settings → Graphics to change)`);
+    }
+    return;
+  } else if (slow && GPU_BUILTIN) text = `Your browser is using the computer's built-in graphics (${GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 50)}), not the graphics card. Windows: Settings → System → Display → Graphics → add your browser → High performance, then restart the browser.`;
   else if (slow) text = 'Still running slowly. Turn on Settings → Frame rate on screen and send what it says.';
   if (!text) return;
   perf.gpuSaid = true;
@@ -5878,6 +5895,8 @@ function perfWatch(now, ms) {
     const mid = (a) => { const v = [...(a || [])].sort((x, y) => x - y); return v[v.length >> 1] || 0; };
     fpsEl.textContent = `${Math.round(1000 / md)} fps · ${md.toFixed(0)} ms (game ${mid(perf.cpu).toFixed(1)} · draw ${mid(perf.draw).toFixed(1)}) · worst ${worst.toFixed(0)} ms · ${GFX[gfxMode].label}${perf.eased ? ' (eased)' : ''} · ${GPU_NAME.replace(/^ANGLE \(|\)$/g, '').slice(0, 60) || 'unknown chip'}`;
   }
+  // (Not judged while the big map is up: drawing it is a one-off, not the game running slow.)
+  if (state.mapOpen) perf.since = now;
   if (document.hidden || now - perf.since < 5000 || /[?&]noease\b/.test(location.search)) { perf.frames.length = 0; perf.at = now; return; }   // (?noease: never ease, for testing a setting as it is)
   perf.frames.push(ms);
   if (now - perf.at < 3000 || perf.frames.length < 5) return;

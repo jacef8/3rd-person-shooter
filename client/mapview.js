@@ -58,20 +58,57 @@ export function landColor(terrain, x, z, h) {
 // (woods, open ground, fields, town, wetland, water) instead of a patchwork of every field and tree.
 const MAP_RGB = { 0: [76, 92, 60], 1: [60, 78, 51], 2: [70, 87, 57], 3: [80, 97, 62], 4: [88, 100, 64], 5: [76, 80, 84], 6: [140, 132, 102], 8: [45, 100, 130], 9: [62, 80, 63] };
 const MAP_SAND = [170, 158, 118], MAP_WATER = [45, 100, 130], MAP_DEEP = [36, 84, 114];
-// The blend's sample points (in units of the patch radius) and weights: the middle, a ring of eight.
-const MAP_TAPS = [[0, 0, 0.12], ...[0, 1, 2, 3, 4, 5].map((a) => [0.5 * Math.cos(a * Math.PI / 3), 0.5 * Math.sin(a * Math.PI / 3), 0.08]), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((a) => [Math.cos(a * Math.PI / 5 + 0.3), Math.sin(a * Math.PI / 5 + 0.3), 0.04])];
-/** The map's colour for dry land at a point: its land cover, blended across the nearest cells. */
+// The map's colours, worked out once per world: the land cover on a 25 m grid, softened twice (about a
+// 75 m blur), so a wood reads as a soft-edged shape, not a stack of 10 m blocks. Built a slice at a time
+// in the background (a TV box or phone never stalls on it); a single look-up per point until it's done.
+const mapCover = { terrain: null, n: 0, step: 25, half: 0, rgb: null };
+export function prepareMapColors(map, step = 25) {
+  const t = map.terrain;
+  if (!t.hasCover) return Promise.resolve();
+  if (mapCover.terrain === t && mapCover.rgb) return Promise.resolve();
+  const n = Math.ceil(map.size / step) + 1, half = map.half;
+  const a = new Uint8Array(n * n * 3), b = new Uint8Array(n * n * 3);
+  const sliced = (rows, fn) => new Promise((done) => {
+    let j = 0;
+    const go = () => {
+      const until = performance.now() + 10;
+      while (j < rows && performance.now() < until) fn(j++);
+      if (j < rows) setTimeout(go, 0); else done();
+    };
+    go();
+  });
+  // Soften along one direction: each cell becomes ¼ ½ ¼ of itself and its neighbours.
+  const blur = (src, dst, dx, dy) => (j) => {
+    for (let i = 0; i < n; i++) {
+      const i0 = Math.max(0, i - dx), i1 = Math.min(n - 1, i + dx), j0 = Math.max(0, j - dy), j1 = Math.min(n - 1, j + dy);
+      const o = (j * n + i) * 3, p = (j0 * n + i0) * 3, q = (j1 * n + i1) * 3;
+      for (let c = 0; c < 3; c++) dst[o + c] = (src[p + c] + 2 * src[o + c] + src[q + c] + 2) >> 2;
+    }
+  };
+  return sliced(n, (j) => {
+    for (let i = 0; i < n; i++) {
+      const c = MAP_RGB[t.cover(-half + i * step, -half + j * step)] || MAP_RGB[0], o = (j * n + i) * 3;
+      a[o] = c[0]; a[o + 1] = c[1]; a[o + 2] = c[2];
+    }
+  }).then(() => sliced(n, blur(a, b, 1, 0))).then(() => sliced(n, blur(b, a, 0, 1)))
+    .then(() => sliced(n, blur(a, b, 1, 0))).then(() => sliced(n, blur(b, a, 0, 1)))
+    .then(() => { if (map.terrain === t) Object.assign(mapCover, { terrain: t, n, step, half, rgb: a }); });
+}
+/** The map's colour for dry land at a point: its land cover, softened (see prepareMapColors). */
 function mapLandRgb(terrain, x, z, h) {
   if (h < 0.7) return MAP_SAND;
   if (!terrain.hasCover) return landColor(terrain, x, z, h);
-  // Averaged over a 50 m patch (the land cover comes in 10 m squares: blended, a wood reads as a
-  // soft-edged shape, not a stack of blocks).
-  const r = (terrain.coverStep || 10) * 2.5, out = [0, 0, 0];
-  for (const [ox, oz, wt] of MAP_TAPS) {
-    const c = MAP_RGB[terrain.cover(x + ox * r, z + oz * r)] || MAP_RGB[0];
-    out[0] += c[0] * wt; out[1] += c[1] * wt; out[2] += c[2] * wt;
-  }
-  return out;
+  const m = mapCover;
+  if (m.terrain !== terrain || !m.rgb) return MAP_RGB[terrain.cover(x, z)] || MAP_RGB[0];
+  const fx = Math.max(0, Math.min(m.n - 1.001, (x + m.half) / m.step)), fz = Math.max(0, Math.min(m.n - 1.001, (z + m.half) / m.step));
+  const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, d = m.rgb, n = m.n;
+  const o00 = (j * n + i) * 3, o10 = o00 + 3, o01 = o00 + n * 3, o11 = o01 + 3;
+  const w00 = (1 - u) * (1 - v), w10 = u * (1 - v), w01 = (1 - u) * v, w11 = u * v;
+  return [
+    d[o00] * w00 + d[o10] * w10 + d[o01] * w01 + d[o11] * w11,
+    d[o00 + 1] * w00 + d[o10 + 1] * w10 + d[o01 + 1] * w01 + d[o11 + 1] * w11,
+    d[o00 + 2] * w00 + d[o10 + 2] * w10 + d[o01 + 2] * w01 + d[o11 + 2] * w11,
+  ];
 }
 /** Map colour (0-255 RGB) for a point: land colour, water, gently shaded by slope. */
 export function mapGroundColor(map, x, z, H = map.terrain.height) {
@@ -222,7 +259,7 @@ export function buildMapBase(map, px = 1400, land = sampleLand(map, map.size / M
  *   main roads > public places > every street and named building (zoomed in close).
  * `extra` holds the markers' names: [{ text, x, y (screen), highlight, color, min }].
  */
-function drawNames(g, map, roads, v, extra = []) {
+function drawNames(g, map, roads, v, extra = [], avoid = []) {
   const taken = [];
   const mx0 = Math.max(4, v.sx(-map.half)), mx1 = Math.min(v.W - 4, v.sx(map.half)), my0 = Math.max(4, v.sz(-map.half)), my1 = Math.min(v.H - 4, v.sz(map.half));
   const chip = (text, x, y, color, style = '') => {
@@ -231,6 +268,8 @@ function drawNames(g, map, roads, v, extra = []) {
     const w = Math.ceil(g.measureText(text).width) + (town ? 18 : 14), h = town ? 26 : route ? 22 : 20, x0 = Math.round(x - w / 2), y0 = Math.round(y - h / 2);
     if (x0 < mx0 || y0 < my0 || x0 + w > mx1 || y0 + h > my1) return false;   // on the county, not the margins
     if (taken.some((t) => x0 < t[0] + t[2] + 6 && x0 + w + 6 > t[0] && y0 < t[1] + t[3] + 4 && y0 + h + 4 > t[1])) return false;
+    // Nor over the key, the scale or another place's icon (the picked one and your road always show).
+    if (color !== '#ffc53d' && avoid.some((t) => x0 < t[0] + t[2] && x0 + w > t[0] && y0 < t[1] + t[3] && y0 + h > t[1])) return false;
     taken.push([x0, y0, w, h]);
     g.fillStyle = route ? CHIP.routeBg : CHIP.bg; g.strokeStyle = route ? CHIP.routeLine : town ? '#ff7a1a' : CHIP.line; g.lineWidth = route || town ? 1.5 : 1;
     g.beginPath(); g.roundRect(x0 + 0.5, y0 + 0.5, w, h, route ? 4 : 6); g.fill(); g.stroke();
@@ -285,7 +324,10 @@ function drawNames(g, map, roads, v, extra = []) {
  * Draw the map with live markers. `view` = { cx, cz, zoom } (zoom 1 = whole map).
  * markers: [{ x, z, kind, label, color, size, highlight }]
  */
-const detail = { k: 0, minX: 0, maxX: 0, minZ: 0, maxZ: 0, canvas: null };
+const detail = { k: 0, minX: 0, maxX: 0, minZ: 0, maxZ: 0, canvas: null, px: 2, budget: 30, colors: null, job: null, more: null, asked: false };
+/** The close-up map's ground: screen pixels per sample (3 on phones and TV boxes: under half the work),
+ *  milliseconds of work per redraw, and how to ask for the next redraw while it's filling in. */
+export function setMapDetail(px, budget, more) { Object.assign(detail, { px, budget, more, k: 0, job: null }); }
 export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
   const g = canvas.getContext('2d');
   // Drawn in screen points, at the screen's own pixel density (sharp on phones).
@@ -313,19 +355,31 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
     // Sharper ground for the area on screen and a margin round it, one sample per 2 screen pixels,
     // kept while you pan inside it (redone only on a zoom or past the margin).
     const d = detail;
-    if (d.k !== k || minX < d.minX || maxX > d.maxX || minZ < d.minZ || maxZ > d.maxZ) {
-      const padX = (maxX - minX) * 0.3, padZ = (maxZ - minZ) * 0.3;
-      Object.assign(d, { k, minX: minX - padX, maxX: maxX + padX, minZ: minZ - padZ, maxZ: maxZ + padZ });
-      const cw = Math.ceil((d.maxX - d.minX) * k / 2), ch = Math.ceil((d.maxZ - d.minZ) * k / 2);
+    // (Kept through small zoom steps - holding a trigger to zoom changes it every frame - and redone
+    // once it's a third sharper or blurrier than the screen, or when the map's colours come in.)
+    if (!d.k || Math.abs(Math.log(k / d.k)) > 0.3 || d.colors !== mapCover.rgb || minX < d.minX || maxX > d.maxX || minZ < d.minZ || maxZ > d.maxZ) {
+      const padX = (maxX - minX) * 0.25, padZ = (maxZ - minZ) * 0.25;
+      Object.assign(d, { k, colors: mapCover.rgb, minX: minX - padX, maxX: maxX + padX, minZ: minZ - padZ, maxZ: maxZ + padZ });
+      const cw = Math.ceil((d.maxX - d.minX) * k / d.px), ch = Math.ceil((d.maxZ - d.minZ) * k / d.px);
       const c = d.canvas || (d.canvas = document.createElement('canvas'));
       c.width = cw; c.height = ch;
-      const dg = c.getContext('2d'), img = dg.createImageData(cw, ch);
-      for (let i = 0; i < cw; i++) for (let j = 0; j < ch; j++) {
-        const col = mapGroundColor(map, d.minX + ((i + 0.5) / cw) * (d.maxX - d.minX), d.minZ + ((j + 0.5) / ch) * (d.maxZ - d.minZ));
-        const o = (j * cw + i) * 4;
-        img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
+      d.job = { img: c.getContext('2d').createImageData(cw, ch), cw, ch, i: 0 };
+    }
+    // Filled in a strip at a time (the base picture shows through until it's done): zooming never stalls.
+    const job = d.job;
+    if (job) {
+      const until = performance.now() + d.budget, { cw, ch, img } = job;
+      while (job.i < cw && performance.now() < until) {
+        const i = job.i++;
+        for (let j = 0; j < ch; j++) {
+          const col = mapGroundColor(map, d.minX + ((i + 0.5) / cw) * (d.maxX - d.minX), d.minZ + ((j + 0.5) / ch) * (d.maxZ - d.minZ));
+          const o = (j * cw + i) * 4;
+          img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
+        }
       }
-      dg.putImageData(img, 0, 0);
+      d.canvas.getContext('2d').putImageData(img, 0, 0);
+      if (job.i >= cw) d.job = null;
+      else if (d.more && !d.asked) { d.asked = true; requestAnimationFrame(() => { d.asked = false; d.more(); }); }
     }
     g.imageSmoothingEnabled = true;
     g.drawImage(d.canvas, sx(d.minX), sz(d.minZ), (d.maxX - d.minX) * k, (d.maxZ - d.minZ) * k);
@@ -337,7 +391,7 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
       fillBox(g, b, sx, sz);
     }
   }
-  const names = [], used = new Set();
+  const names = [], used = new Set(), avoid = [];
   g.textAlign = 'center';
   for (const m of markers) {
     const x = sx(m.x), y = sz(m.z);
@@ -360,14 +414,17 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
     }
     if (m.highlight) { g.beginPath(); g.arc(x, y, s + 6, 0, Math.PI * 2); g.strokeStyle = '#ffc53d'; g.lineWidth = 3; g.stroke(); }
     if (m.label) names.push({ text: m.label, x, y: y - s - 13, highlight: !!m.highlight, min: m.labelMin });
+    if (m.kind !== 'ring') avoid.push([x - s - 1, y - s - 1, 2 * s + 2, 2 * s + 2]);
   }
-  drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H, hereRoad }, names);
-  // The key: what each icon on screen means (bottom right).
+  // The key (what each icon on screen means, top right) and the scale (bottom left): names keep clear.
   const keys = Object.keys(ICONS).filter((kk) => used.has(kk));
+  g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif";
+  const rowH = 22, kw = keys.length ? Math.max(...keys.map((kk) => g.measureText(ICONS[kk].label).width)) + 44 : 0, kh = keys.length * rowH + 30;
+  const kx = W - kw - 12, ky = 12;   // top right (the zoom buttons are bottom right)
+  if (keys.length) avoid.push([kx - 4, ky - 4, kw + 8, kh + 8]);
+  avoid.push([0, H - 46, 200, 46], [W - 66, H - 116, 66, 116]);   // (and the zoom buttons, bottom right)
+  drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H, hereRoad }, names, avoid);
   if (keys.length) {
-    g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif";
-    const rowH = 22, kw = Math.max(...keys.map((kk) => g.measureText(ICONS[kk].label).width)) + 44, kh = keys.length * rowH + 30;
-    const kx = W - kw - 12, ky = 12;   // top right (the zoom buttons are bottom right)
     g.fillStyle = 'rgba(15,18,24,0.94)'; g.strokeStyle = '#2a2f3a'; g.lineWidth = 1;
     g.beginPath(); g.roundRect(kx, ky, kw, kh, 10); g.fill(); g.stroke();
     g.fillStyle = '#b9c0cc'; g.font = "800 12px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'left'; g.textBaseline = 'middle';
