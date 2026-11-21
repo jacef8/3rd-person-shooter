@@ -24,7 +24,7 @@ import { attachPerson, animatePerson, handsOnGun, handsOnBars, chestAt, hangFrom
 import { ACT_POSE, updateAction, disposeActionProps } from '/actions.js';
 import { startLobbyFx } from '/lobbyfx.js';
 import { createWorldView, SKY_HORIZON } from '/worldview.js';
-import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox, drawIcon, prepareMapColors, setMapDetail } from '/mapview.js';
+import { buildMapBase, drawMap, mapGroundColor, sampleLand, sampleLandAsync, fillBox, drawIcon, prepareMapColors, setMapDetail, ICONS } from '/mapview.js';
 import { PIECES, BUILD, TOOLS, CRAFTS, pieceBox, structureBox, structureBoxes, planPiece, isKitPiece } from '/shared/building.js';
 import { CLAIM, HOME_LEVEL_XP, MAX_HOME_LEVEL, HOME_LEVEL_TEXT, homePerks, RAIDS, hourLabel, windowText } from '/shared/claims.js';
 import { VEHICLE_TYPES, HOME_KINDS } from '/shared/world.js';
@@ -1768,6 +1768,44 @@ function drawMinimap() {
     g.fillStyle = b.type === 'housewall' && b.houseId === state.houseId ? '#4fbf6a' : MM_COLORS[b.type] || '#3a3f44';
     fillBox(g, b, X, Z, 1.5);
   }
+  // Street names, inside the roads themselves (the road you're on first, then the longest; up to four,
+  // none over another): a strip of the road's own colour along it, the name in dark letters, never
+  // upside down.
+  {
+    const roadInk = (r) => (r.dirt ? '#b08d58' : r.hw ? '#f0b54a' : (r.width || 12) >= 8 ? '#e4ddcc' : '#c9c2b0');
+    const short = (n) => n.replace(/\bCounty Road\b/i, 'CR').replace(/\bState Road\b/i, 'SR').replace(/\bHighway\b/i, 'Hwy').replace(/\bStreet$/i, 'St').replace(/\bAvenue$/i, 'Ave').replace(/\bDrive$/i, 'Dr').replace(/\bRoad$/i, 'Rd').replace(/\bLane$/i, 'Ln');
+    const best = new Map();
+    let mine = null, md = 14;
+    for (const r of mmRoads) {
+      if (!r.name) continue;
+      const x1 = X(r.x1), y1 = Z(r.z1), x2 = X(r.x2), y2 = Z(r.z2), len = Math.hypot(x2 - x1, y2 - y1);
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      if (len < 14 || Math.hypot(mx - R, my - R) > R - 16) continue;
+      const e = best.get(r.name);
+      if (!e || len > e.len) best.set(r.name, { r, len, mx, my, a: Math.atan2(y2 - y1, x2 - x1) });
+      const dx = r.x2 - r.x1, dz = r.z2 - r.z1, l2 = dx * dx + dz * dz || 1, t = Math.max(0, Math.min(1, ((state.x - r.x1) * dx + (state.z - r.z1) * dz) / l2));
+      const d = Math.hypot(r.x1 + dx * t - state.x, r.z1 + dz * t - state.z) - (r.width || 8) / 2;
+      if (d < md) { md = d; mine = r.name; }
+    }
+    const order = [...best.entries()].sort((p, q) => (q[0] === mine) - (p[0] === mine) || q[1].len - p[1].len);
+    const fsz = Math.round(9.5 * Math.min(fs, 1.5) * 10) / 10, taken = [];
+    g.font = `700 ${fsz}px 'Atkinson Hyperlegible', Segoe UI, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const [name, e] of order) {
+      if (taken.length >= 4) break;
+      const text = short(name), w = g.measureText(text).width + 8, h = Math.max(fsz + 4, (e.r.width || 8) * k);
+      if (w > e.len * 1.6) continue;   // (a short piece of road: the name would hang well off it)
+      let a = e.a; if (a > Math.PI / 2) a -= Math.PI; else if (a < -Math.PI / 2) a += Math.PI;
+      const ca = Math.abs(Math.cos(a)), sa = Math.abs(Math.sin(a)), bw = w * ca + h * sa, bh = w * sa + h * ca;
+      const box = [e.mx - bw / 2, e.my - bh / 2, bw, bh];
+      if (Math.hypot(e.mx - R, e.my - R) + Math.max(bw, bh) / 2 > R - 2) continue;   // kept inside the circle
+      if (taken.some((t) => box[0] < t[0] + t[2] && box[0] + box[2] > t[0] && box[1] < t[1] + t[3] && box[1] + box[3] > t[1])) continue;
+      taken.push(box);
+      g.save(); g.translate(e.mx, e.my); g.rotate(a);
+      g.fillStyle = roadInk(e.r); g.beginPath(); g.roundRect(-w / 2, -h / 2, w, h, h / 2); g.fill();
+      g.fillStyle = '#15181d'; g.fillText(text, 0, 0.5);
+      g.restore();
+    }
+  }
   // Icons (mapview.js ICONS: the big map's key says what each one is). In view, where they are;
   // off the edge, pinned to the rim in their direction.
   const IS = 5.5 * Math.min(fs, 1.6), now = performance.now();
@@ -1937,7 +1975,7 @@ function updateWhere(now) {
   // A landmark you're in or right beside comes first, then the road underfoot.
   let place = state.places?.placeAt(x, z) || '';
   if (!place) for (const b of state.landmarks || []) if (x > b.minX - 12 && x < b.maxX + 12 && z > b.minZ - 12 && z < b.maxZ + 12) { place = b.name; break; }
-  if (!place) {
+  if (false) {   // (street names are on the minimap now, inside the roads)
     let best = null, bd = 5;
     for (const r of map.roadsNear(x, z, 18)) {
       if (!r.name) continue;
@@ -3303,13 +3341,7 @@ function renderMapScreen() {
   };
   $('mapTitle').textContent = titles[state.mapMode];
   $('mapNote').textContent = notes[state.mapMode];
-  if (state.mapMode === 'view') {
-    $('mapNote').textContent = '';
-    const key = document.createElement('details');
-    key.className = 'mapkey';
-    key.innerHTML = `<summary>Map key</summary><div>${notes.view}</div>`;
-    $('mapNote').append(key);
-  }
+  if (state.mapMode === 'view') $('mapNote').textContent = '';   // (what's on the map: the key below the list)
   if (state.mapMode === 'first' || state.mapMode === 'redeploy') $('mapNote').textContent += ' Tap a spot on the map to pick it.';
   if (state.mapMode === 'redeploy') {
     const rs = respawnLeft();
@@ -3418,12 +3450,36 @@ function drawMapCanvas() {
   // The road you're on is always named on the map, whatever the zoom.
   const here = state.me && !state.me.dead ? state.map.roadsNear(state.x, state.z, 25).filter((r) => r.name).sort((a, b) => distToSeg(state.x, state.z, a) - distToSeg(state.x, state.z, b))[0] : null;
   state.mapProj = drawMap(cv, map, state.mapBase, mapView, markers, here ? here.name : null);
+  renderMapKey(state.mapProj.keys);
   if (state.mapMode === 'view') {
     // The pointer for the controller: waypoints and pings go where the cross is.
     const g = cv.getContext('2d'), cx = cv.clientWidth / 2, cy = cv.clientHeight / 2;
     g.strokeStyle = '#000'; g.lineWidth = 4; g.beginPath(); g.moveTo(cx - 12, cy); g.lineTo(cx + 12, cy); g.moveTo(cx, cy - 12); g.lineTo(cx, cy + 12); g.stroke();
     g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath(); g.moveTo(cx - 11, cy); g.lineTo(cx + 11, cy); g.moveTo(cx, cy - 11); g.lineTo(cx, cy + 11); g.stroke();
   }
+}
+/** The map key, beside the map (not over it): each icon and ring that's on screen right now, and what it is. */
+function renderMapKey(keys) {
+  const el = $('mapKey');
+  const rings = [];
+  if (state.hotZone) rings.push(['#ff5a1f', 'Hot zone (faint outer ring: no drops or respawns inside)']);
+  if (state.mapMode === 'redeploy' && respawnLeft().away > 0) rings.push(['#ff4d4d', 'Where you died: no respawn inside for 5 min']);
+  if ((state.worldEvents || []).some((e) => e.radius)) rings.push(['#c77dff', 'World event area']);
+  const sig = `${keys.join(',')}|${rings.map((r) => r[1]).join(',')}`;
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig; el.innerHTML = '';
+  if (!keys.length && !rings.length) return;
+  el.append(Object.assign(document.createElement('h3'), { textContent: 'On the map' }));
+  const dpr = Math.min(3, devicePixelRatio || 1);
+  const row = (draw, label) => {
+    const r = document.createElement('div'); r.className = 'mkrow';
+    const c = Object.assign(document.createElement('canvas'), { width: 24 * dpr, height: 24 * dpr });
+    const g = c.getContext('2d'); g.scale(dpr, dpr); draw(g);
+    r.append(c, Object.assign(document.createElement('span'), { textContent: label }));
+    el.append(r);
+  };
+  for (const kk of keys) row((g) => drawIcon(g, 12, 12, kk, 8), ICONS[kk].label);
+  for (const [color, label] of rings) row((g) => { g.strokeStyle = color; g.lineWidth = 2.5; g.beginPath(); g.arc(12, 12, 8, 0, Math.PI * 2); g.stroke(); }, label);
 }
 $('mapcanvas').addEventListener('click', (e) => {
   if (!state.mapProj) return;

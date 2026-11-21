@@ -12,7 +12,7 @@ const roadColor = (r) => (r.dirt ? COL.dirt : r.hw ? COL.route : (r.width || 12)
 const HIDDEN = new Set(['furn', 'deckslab', 'border', 'cover', 'rock', 'car', 'terminal', 'boulder', 'cactus', 'canopy', 'caveroof', 'jetty', 'scrub', 'tree', 'pine', 'rail', 'tower', 'beacon', 'pole', 'fence', 'equipment', 'marker', 'windsock', 'plane']);
 const boxColor = (b) => (b.type === 'solar' ? '#2b3a5c' : b.type === 'tank' ? '#d8dde2' : b.type === 'housewall' || b.type === 'crate' ? COL.house : b.type === 'farmhouse' || b.type === 'barn' ? COL.farm : b.type === 'home' ? COL.home : b.type === 'civic' ? COL.civic : COL.building);
 // Label chips: solid panels with sharp text (no outlines or glows).
-const PLACE_INK = { pawn: '#ffd27a', airstrip: '#ffffff', sheriff: '#9cc3ff', 'fire station': '#ff9f8a', hospital: '#ff9f8a', 'gas station': '#ffd27a', prison: '#c9b8ff', overlook: '#9fe39f', park: '#9fe39f', campground: '#9fe39f', 'post office': '#e8e8e8' };
+const PLACE_INK = { pawn: '#ffd27a', airstrip: '#ffffff', sheriff: '#9cc3ff', 'fire station': '#ff9f8a', hospital: '#ff9f8a', 'gas station': '#ffd27a', prison: '#c9b8ff', overlook: '#9fe39f', park: '#9fe39f', campground: '#9fe39f', 'post office': '#e8e8e8', school: '#ffe08a' };
 const CHIP = { bg: '#171a21', line: '#2a2f3a', ink: '#ffffff', road: '#ffd27a', place: '#9fe39f', routeBg: '#1d3f73', routeLine: '#5d8fd6' };
 
 const GC = { plains: [104, 124, 68], forest: [58, 86, 44], desert: [214, 206, 170], mountain: [128, 104, 66], swamp: [52, 68, 40], sand: [204, 189, 140], water: [47, 107, 138], deep: [30, 72, 100] };
@@ -269,7 +269,8 @@ function drawNames(g, map, roads, v, extra = [], avoid = []) {
     if (x0 < mx0 || y0 < my0 || x0 + w > mx1 || y0 + h > my1) return false;   // on the county, not the margins
     if (taken.some((t) => x0 < t[0] + t[2] + 6 && x0 + w + 6 > t[0] && y0 < t[1] + t[3] + 4 && y0 + h + 4 > t[1])) return false;
     // Nor over the key, the scale or another place's icon (the picked one and your road always show).
-    if (color !== '#ffc53d' && avoid.some((t) => x0 < t[0] + t[2] && x0 + w > t[0] && y0 < t[1] + t[3] && y0 + h > t[1])) return false;
+    // (Town names only keep off the scale and zoom buttons: an icon doesn't hide a town.)
+    if (color !== '#ffc53d' && avoid.some((t) => (!town || t.ui) && x0 < t[0] + t[2] && x0 + w > t[0] && y0 < t[1] + t[3] && y0 + h > t[1])) return false;
     taken.push([x0, y0, w, h]);
     g.fillStyle = route ? CHIP.routeBg : CHIP.bg; g.strokeStyle = route ? CHIP.routeLine : town ? '#ff7a1a' : CHIP.line; g.lineWidth = route || town ? 1.5 : 1;
     g.beginPath(); g.roundRect(x0 + 0.5, y0 + 0.5, w, h, route ? 4 : 6); g.fill(); g.stroke();
@@ -307,6 +308,8 @@ function drawNames(g, map, roads, v, extra = [], avoid = []) {
   for (const e of roadsBy(-1)) chip(e.name, e.x, e.y, '#ffc53d');
   // 2. Towns.
   for (const l of labels) if (l.kind === 'town' && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), '#ffffff', 'town');
+  // 2b. Schools (before the shops and streets crowding round them in a small town).
+  if (v.k > 0.03) for (const l of labels) if (l.kind === 'place' && l.place === 'school' && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), PLACE_INK.school);
   // 3. State routes.
   for (const e of roadsBy(0)) chip(e.name, e.x, e.y, '#ffffff', 'route');
   // 4. Landings, camps, landing zones and other marked places (their dots always show).
@@ -315,7 +318,7 @@ function drawNames(g, map, roads, v, extra = [], avoid = []) {
   if (v.k > 0.035) for (const l of labels) if (l.kind === 'water' && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), '#a9d7f2', 'water');
   // 6. Main roads, public places, parks and landmarks, then every street and named building.
   for (const e of roadsBy(1)) chip(e.name, e.x, e.y, CHIP.road);
-  if (v.k > 0.05) for (const l of labels) if ((l.kind === 'place' || l.kind === 'landmark') && !l.hidden && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), PLACE_INK[l.place] || CHIP.place);
+  if (v.k > 0.05) for (const l of labels) if ((l.kind === 'place' || l.kind === 'landmark') && l.place !== 'school' && !l.hidden && onScreen(l.x, l.z)) chip(l.text, v.sx(l.x), v.sz(l.z), PLACE_INK[l.place] || CHIP.place);
   for (const e of roadsBy(2)) chip(e.name, e.x, e.y, CHIP.ink);
   if (v.k > 0.12) for (const b of map.buildings) if (b.name && b.maxX > v.minX && b.minX < v.maxX && b.maxZ > v.minZ && b.minZ < v.maxZ) chip(b.name, v.sx((b.minX + b.maxX) / 2), v.sz(b.minZ) - 12, CHIP.place);
 }
@@ -416,27 +419,11 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
     if (m.label) names.push({ text: m.label, x, y: y - s - 13, highlight: !!m.highlight, min: m.labelMin });
     if (m.kind !== 'ring') avoid.push([x - s - 1, y - s - 1, 2 * s + 2, 2 * s + 2]);
   }
-  // The key (what each icon on screen means, top right) and the scale (bottom left): names keep clear.
+  // The scale (bottom left) and the zoom buttons (bottom right): names keep clear. (The key, what each
+  // icon on screen means, is beside the map: `keys` in the result.)
   const keys = Object.keys(ICONS).filter((kk) => used.has(kk));
-  g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif";
-  const rowH = 22, kw = keys.length ? Math.max(...keys.map((kk) => g.measureText(ICONS[kk].label).width)) + 44 : 0, kh = keys.length * rowH + 30;
-  const kx = W - kw - 12, ky = 12;   // top right (the zoom buttons are bottom right)
-  if (keys.length) avoid.push([kx - 4, ky - 4, kw + 8, kh + 8]);
-  avoid.push([0, H - 46, 200, 46], [W - 66, H - 116, 66, 116]);   // (and the zoom buttons, bottom right)
+  avoid.push(Object.assign([0, H - 46, 200, 46], { ui: true }), Object.assign([W - 66, H - 116, 66, 116], { ui: true }));
   drawNames(g, map, inView, { minX, minZ, maxX, maxZ, k, sx, sz, W, H, hereRoad }, names, avoid);
-  if (keys.length) {
-    g.fillStyle = 'rgba(15,18,24,0.94)'; g.strokeStyle = '#2a2f3a'; g.lineWidth = 1;
-    g.beginPath(); g.roundRect(kx, ky, kw, kh, 10); g.fill(); g.stroke();
-    g.fillStyle = '#b9c0cc'; g.font = "800 12px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.fillText('KEY', kx + 12, ky + 14);
-    keys.forEach((kk, i) => {
-      const yy = ky + 32 + i * rowH;
-      drawIcon(g, kx + 20, yy, kk, 7);
-      g.fillStyle = '#ffffff'; g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'left'; g.textBaseline = 'middle';
-      g.fillText(ICONS[kk].label, kx + 34, yy + 1);
-    });
-    g.textBaseline = 'alphabetic'; g.textAlign = 'center';
-  }
   // Scale bar in feet / miles.
   const STEPS = [[100, 'ft'], [250, 'ft'], [500, 'ft'], [1000, 'ft'], [0.25, 'mi'], [0.5, 'mi'], [1, 'mi'], [2, 'mi'], [5, 'mi']];
   const toM = ([v, u]) => (u === 'ft' ? v / 3.28084 : v * 1609.344);
@@ -447,5 +434,5 @@ export function drawMap(canvas, map, base, view, markers, hereRoad = null) {
   g.beginPath(); g.moveTo(bx, by - 5); g.lineTo(bx, by); g.lineTo(bx + bw, by); g.lineTo(bx + bw, by - 5); g.stroke();
   g.fillStyle = '#ffffff'; g.font = "700 13px 'Atkinson Hyperlegible', Segoe UI, sans-serif"; g.textAlign = 'center';
   g.fillText(`${step[0]} ${step[1]}`, bx + bw / 2, by - 7);
-  return { toWorld: (px, py) => ({ x: view.cx + (px - W / 2) / k, z: view.cz + (py - H / 2) / k }), k };
+  return { toWorld: (px, py) => ({ x: view.cx + (px - W / 2) / k, z: view.cz + (py - H / 2) / k }), k, keys };
 }

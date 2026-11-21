@@ -1056,3 +1056,9 @@ body.touchui #chatbox { bottom: auto; top: 10px; left: 50%; transform: translate
 .lb-namerow button { min-height: 48px; padding-top: 0; padding-bottom: 0; }
 /* A long card (signed in, with friends): the name stays at the top of the screen, not centred low. */
 @media (min-width: 641px) { .lb-brand { align-self: start; position: sticky; top: clamp(16px, 8vh, 96px); } }
+
+/* The map key: beside the map, a row per icon on screen. */
+#mapKey { margin-top: 14px; }
+#mapKey h3 { margin: 0 0 6px; font: 700 13px/1 var(--font-text); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+#mapKey .mkrow { display: flex; align-items: center; gap: 10px; min-height: 28px; font-size: 15px; color: var(--ink); }
+#mapKey .mkrow canvas { width: 24px; height: 24px; flex: none; }

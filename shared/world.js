@@ -1548,7 +1548,9 @@ export function generateMap(seed = 1337, size = DEFAULT_WORLD_SIZE, real = {}) {
     ...airstrips.map((a) => ({ text: a.name, x: (a.x1 + a.x2) / 2, z: (a.z1 + a.z2) / 2, kind: 'place', place: 'airstrip' })),
     ...shops.map((sh) => ({ text: sh.name, x: sh.x, z: sh.z, kind: 'place', place: sh.kind })),
     // Bristol's Veterans Memorial Park (behind the civic center, with its railroad: client/places.js).
-    ...(realStructs ? [{ text: 'Veterans Memorial Park', ...project(30.4214, -84.9789, size), kind: 'place', place: 'park' }].filter(onMap) : []),
+    ...(realStructs ? [{ text: 'Veterans Memorial Park', ...project(30.4214, -84.9789, size), kind: 'place', place: 'park' },
+      // Hosford Elementary & Junior High (16864 NE SR 65): its big building has no name in the source data.
+      { text: 'Hosford School', ...project(30.38895, -84.79764, size), kind: 'place', place: 'school' }].filter(onMap) : []),
   ];
   return {
     seed, size, half, boxes, buildings, grid, terrain, houses, towns, roads, roadGrid, highways, bridges: decks, landmarks, labels, contacts, terminals,
